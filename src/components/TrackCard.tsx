@@ -65,7 +65,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
             <button
               onClick={handlePlayClick}
               disabled={isCurrent && isLoading}
-              className={`p-3.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-white transition-all duration-300 glow-accent ${isCurrent && isLoading ? "translate-y-0" : "transform translate-y-3 group-hover:translate-y-0"}`}
+              className={`p-3.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black transition-all duration-300 glow-accent ${isCurrent && isLoading ? "translate-y-0" : "transform translate-y-3 group-hover:translate-y-0"}`}
             >
               {isCurrent && isLoading ? (
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -144,7 +144,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
           <button
             onClick={handlePlayClick}
             disabled={isCurrent && isLoading}
-            className={`flex items-center justify-center p-2 rounded-full bg-brand-accent text-white ${isCurrent && isLoading ? "" : "hidden group-hover:flex"}`}
+            className={`flex items-center justify-center p-2 rounded-full bg-brand-accent text-black ${isCurrent && isLoading ? "" : "hidden group-hover:flex"}`}
           >
             {isCurrent && isLoading ? (
               <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />

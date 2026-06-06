@@ -113,6 +113,8 @@ const MainLayout: React.FC = () => {
   const [albumResults, setAlbumResults] = useState<Album[]>([]);
   const [artistResults, setArtistResults] = useState<Artist[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
+
+
   const [favorites, setFavorites] = useState<Track[]>([]);
   const [showMobilePlayer, setShowMobilePlayer] = useState<boolean>(false);
 
@@ -668,10 +670,18 @@ const MainLayout: React.FC = () => {
   };
 
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false);
-  const [mobilePlayerOpen, setMobilePlayerOpen] = React.useState(false);
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-brand-darkBg relative">
+    <div
+      className="h-screen w-screen flex flex-col overflow-hidden relative"
+      style={{
+        backgroundColor: "var(--app-bg-color-val, #0f0f0f)",
+        backgroundImage: "var(--app-bg-image-val, none)",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundAttachment: "fixed",
+      }}
+    >
       <div className="flex-1 flex overflow-hidden relative w-full">
 
         {/* Navigation Sidebar */}
@@ -682,7 +692,7 @@ const MainLayout: React.FC = () => {
             setSelectedAlbum(null);
             setPreviousArtist(null);
             setActiveTab(tab);
-            setMobilePlayerOpen(false);
+            setShowMobilePlayer(false);
           }}
           playlists={playlists}
           followedArtists={followedArtists}
@@ -745,122 +755,8 @@ const MainLayout: React.FC = () => {
           )}
         </div>
 
-        {/* ═══ MOBILE EXPANDED PLAYER OVERLAY ═══ */}
-        {mobilePlayerOpen && currentTrack && (
-          <div className="md:hidden fixed inset-0 z-50 bg-brand-darkBg flex flex-col animate-[slideUp_0.35s_cubic-bezier(0.32,0.72,0,1)]">
-            {/* Handle bar */}
-            <div className="flex justify-center pt-3 pb-1">
-              <button
-                onClick={() => setMobilePlayerOpen(false)}
-                className="w-10 h-1 rounded-full bg-white/20"
-              />
-            </div>
 
-            {/* Expanded player content */}
-            <div className="flex-1 flex flex-col px-6 pb-8 overflow-y-auto">
-              {/* Album art */}
-              <div className="flex-1 flex items-center justify-center py-6">
-                <div className="w-full max-w-xs aspect-square rounded-2xl overflow-hidden shadow-2xl shadow-black">
-                  <img
-                    src={currentTrack.thumbnail}
-                    alt={currentTrack.title}
-                    className={`w-full h-full object-cover transition-transform duration-700 ${isPlaying ? "scale-105" : "scale-100"}`}
-                  />
-                </div>
-              </div>
-
-              {/* Track info */}
-              <div className="flex items-center justify-between mb-6">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-xl font-bold text-white truncate">{currentTrack.title}</h2>
-                  <p className="text-sm text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
-                </div>
-                <button
-                  onClick={() => handleToggleFavorite(currentTrack)}
-                  className={`p-2.5 rounded-full ml-4 shrink-0 ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-500 hover:text-white"}`}
-                >
-                  <Heart className="w-6 h-6" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
-                </button>
-              </div>
-
-              {/* Progress bar */}
-              <div className="flex items-center gap-3 mb-6">
-                <span className="text-xs text-gray-500 font-medium w-8 text-right tabular-nums">
-                  {Math.floor(currentTime / 60)}:{Math.floor(currentTime % 60).toString().padStart(2, "0")}
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 100}
-                  value={currentTime}
-                  onChange={(e) => seek(parseFloat(e.target.value))}
-                  className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-white"
-                />
-                <span className="text-xs text-gray-500 font-medium w-8 tabular-nums">
-                  {Math.floor(duration / 60)}:{Math.floor(duration % 60).toString().padStart(2, "0")}
-                </span>
-              </div>
-
-              {/* Controls */}
-              <div className="flex items-center justify-between mb-8">
-                <button
-                  onClick={toggleShuffle}
-                  className={`p-2 ${isShuffle ? "text-white" : "text-gray-600"}`}
-                >
-                  <Shuffle className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={prevTrack}
-                  className="p-2 text-gray-300 hover:text-white transition-all active:scale-90"
-                >
-                  <SkipBack className="w-8 h-8 fill-current" />
-                </button>
-                <button
-                  onClick={togglePlay}
-                  disabled={isLoading}
-                  className="w-16 h-16 rounded-full bg-white text-black flex items-center justify-center shadow-lg active:scale-95 disabled:opacity-60 transition-all"
-                >
-                  {isLoading ? (
-                    <div className="w-6 h-6 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                  ) : isPlaying ? (
-                    <Pause className="w-7 h-7 fill-current" />
-                  ) : (
-                    <Play className="w-7 h-7 fill-current ml-1" />
-                  )}
-                </button>
-                <button
-                  onClick={nextTrack}
-                  className="p-2 text-gray-300 hover:text-white transition-all active:scale-90"
-                >
-                  <SkipForward className="w-8 h-8 fill-current" />
-                </button>
-                <button
-                  onClick={toggleRepeat}
-                  className={`relative p-2 ${isRepeat !== "none" ? "text-white" : "text-gray-600"}`}
-                >
-                  <Repeat className="w-5 h-5" />
-                  {isRepeat === "one" && (
-                    <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 text-[7px] font-black bg-white text-black rounded-full flex items-center justify-center">1</span>
-                  )}
-                </button>
-              </div>
-
-              {/* Volume */}
-              <div className="flex items-center gap-3">
-                <button onClick={toggleMute} className="text-gray-500 hover:text-white">
-                  {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
-                </button>
-                <input
-                  type="range" min={0} max={1} step={0.01}
-                  value={isMuted ? 0 : volume}
-                  onChange={(e) => changeVolume(parseFloat(e.target.value))}
-                  className="flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-white"
-                />
-                <Volume2 className="w-4.5 h-4.5 text-gray-300" />
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Mobile expanded player is handled by the PlayerPanel overlay below */}
 
         {/* Main Panel Content */}
         <main className="flex-1 overflow-y-auto pt-[60px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
@@ -973,7 +869,7 @@ const MainLayout: React.FC = () => {
                       onClick={() => handleToggleFollowArtist(selectedArtist)}
                       className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-200 border uppercase tracking-wider active:scale-95 ${followedArtists.some(a => a.id === selectedArtist.id)
                           ? "bg-white/10 border-white/30 text-white hover:bg-red-500/10 hover:border-red-500 hover:text-red-400"
-                          : "bg-brand-accent border-transparent text-white hover:bg-brand-accent/90"
+                          : "bg-brand-accent border-transparent text-black hover:bg-brand-accent/90"
                         }`}
                     >
                       {followedArtists.some(a => a.id === selectedArtist.id) ? "Following" : "Follow"}
@@ -1104,7 +1000,7 @@ const MainLayout: React.FC = () => {
                           playTrack(albumTracks[0], albumTracks);
                         }
                       }}
-                      className="w-12 h-12 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
+                      className="w-12 h-12 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
                       title="Play album"
                     >
                       <Play className="w-5 h-5 fill-current ml-0.5" />
@@ -1155,7 +1051,7 @@ const MainLayout: React.FC = () => {
                   </button>
                   <button
                     onClick={() => setShowPlaylistCreateModal(true)}
-                    className="px-4 py-2 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-white transition-all active:scale-95 flex items-center gap-1.5 shadow-md shadow-brand-accent/25"
+                    className="px-4 py-2 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-black transition-all active:scale-95 flex items-center gap-1.5 shadow-md shadow-brand-accent/25"
                   >
                     <Plus className="w-3.5 h-3.5" /> Create Playlist
                   </button>
@@ -1208,7 +1104,7 @@ const MainLayout: React.FC = () => {
                           />
                           <button
                             onClick={() => handleRenamePlaylist(selectedPlaylist.id, editingPlaylistName)}
-                            className="px-3 py-1.5 bg-brand-accent text-white rounded-xl text-xs font-bold"
+                            className="px-3 py-1.5 bg-brand-accent text-black rounded-xl text-xs font-bold"
                           >
                             Save
                           </button>
@@ -1236,7 +1132,7 @@ const MainLayout: React.FC = () => {
                                 playTrack(filtered[0], filtered);
                               }
                             }}
-                            className="w-12 h-12 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
+                            className="w-12 h-12 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
                             title="Play playlist"
                           >
                             <Play className="w-5 h-5 fill-current ml-0.5" />
@@ -1592,7 +1488,7 @@ const MainLayout: React.FC = () => {
                           playTrack(filtered[0], filtered);
                         }
                       }}
-                      className="w-10 h-10 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
+                      className="w-10 h-10 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
                       title="Play favorites"
                     >
                       <Play className="w-4 h-4 fill-current ml-0.5" />
@@ -1897,7 +1793,7 @@ const MainLayout: React.FC = () => {
                         </div>
                         {/* Tiny hover play button on the right */}
                         <button
-                          className="absolute right-4 p-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-white shadow-lg shadow-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center scale-95 hover:scale-105 active:scale-95"
+                          className="absolute right-4 p-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black shadow-lg shadow-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center scale-95 hover:scale-105 active:scale-95"
                         >
                           <Play className="w-4 h-4 fill-current ml-0.5" />
                         </button>
@@ -1943,29 +1839,6 @@ const MainLayout: React.FC = () => {
                       key={`${track.id}-${idx}`}
                       track={track}
                       variant="square"
-                      tracksQueue={searchResults}
-                      onToggleFavorite={handleToggleFavorite}
-                      isFavorite={favorites.some((f) => f.id === track.id)}
-                      onOpenAlbum={handleOpenAlbum}
-                      onOpenArtist={handleOpenArtist}
-                      onAddToPlaylist={setTrackToAddToPlaylist}
-                      onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {/* Popular Songs Section */}
-              <div>
-                <h2 className="text-lg font-bold text-white tracking-wide mb-4 pl-1">
-                  Popular Songs
-                </h2>
-                <div className="flex flex-col gap-3">
-                  {searchResults.slice(0, 5).map((track, idx) => (
-                    <TrackCard
-                      key={`${track.id}-${idx}`}
-                      track={track}
-                      variant="row"
                       tracksQueue={searchResults}
                       onToggleFavorite={handleToggleFavorite}
                       isFavorite={favorites.some((f) => f.id === track.id)}
@@ -2147,35 +2020,9 @@ const MainLayout: React.FC = () => {
           )}
         </aside>
 
-        {/* Floating mini bar (for mobile viewports) */}
-        {currentTrack && (
-          <div
-            onClick={() => setShowMobilePlayer(true)}
-            className="lg:hidden fixed bottom-16 left-2 right-2 p-3 rounded-2xl glass-panel border border-white/10 flex items-center justify-between gap-3 shadow-lg shadow-black/80 z-30 select-none cursor-pointer"
-          >
-            <img
-              src={currentTrack.thumbnail}
-              alt={currentTrack.title}
-              className={`w-10 h-10 rounded-xl object-cover ${isPlaying ? "animate-[spin_10s_linear_infinite]" : ""}`}
-            />
-            <div className="flex-1 min-w-0">
-              <h4 className="text-xs font-bold text-white truncate">{currentTrack.title}</h4>
-              <p className="text-[10px] text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
-            </div>
-            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={togglePlay}
-                className="p-2 rounded-full bg-brand-accent text-white"
-              >
-                {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Mobile Full Screen Now Playing Overlay Drawer */}
+        {/* Mobile Full Screen Now Playing — PlayerPanel (has Lyrics, Overview, all controls) */}
         {showMobilePlayer && currentTrack && (
-          <div className="lg:hidden fixed inset-0 bg-brand-darkBg z-50 overflow-hidden flex flex-col">
+          <div className="lg:hidden fixed inset-0 bg-brand-darkBg z-50 overflow-hidden flex flex-col animate-[slideUp_0.35s_cubic-bezier(0.32,0.72,0,1)]">
             <PlayerPanel
               onToggleFavorite={handleToggleFavorite}
               isFavorite={favorites.some((f) => f.id === currentTrack.id)}
@@ -2284,7 +2131,7 @@ const MainLayout: React.FC = () => {
                 </button>
                 <button
                   onClick={() => handleCreatePlaylist(newPlaylistName)}
-                  className="flex-1 py-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-white transition-all shadow-md shadow-brand-accent/25"
+                  className="flex-1 py-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-black transition-all shadow-md shadow-brand-accent/25"
                 >
                   Create
                 </button>
@@ -2356,7 +2203,7 @@ const MainLayout: React.FC = () => {
                   onClick={() => setImportTab("spotify")}
                   disabled={isImportingSpotify}
                   className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${importTab === "spotify"
-                      ? "bg-brand-accent text-white shadow-md"
+                      ? "bg-brand-accent text-black shadow-md"
                       : "text-gray-400 hover:text-white"
                     }`}
                 >
@@ -2366,7 +2213,7 @@ const MainLayout: React.FC = () => {
                   onClick={() => setImportTab("m3u")}
                   disabled={isImportingSpotify}
                   className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${importTab === "m3u"
-                      ? "bg-brand-accent text-white shadow-md"
+                      ? "bg-brand-accent text-black shadow-md"
                       : "text-gray-400 hover:text-white"
                     }`}
                 >
@@ -2437,7 +2284,7 @@ const MainLayout: React.FC = () => {
                                 showToast(err.message, "error");
                               }
                             }}
-                            className="px-3 py-1.5 rounded-xl bg-brand-accent hover:bg-brand-accent/90 text-xs font-bold text-white transition-all shadow-md shadow-brand-accent/20"
+                            className="px-3 py-1.5 rounded-xl bg-brand-accent hover:bg-brand-accent/90 text-xs font-bold text-black transition-all shadow-md shadow-brand-accent/20"
                           >
                             Connect
                           </button>
@@ -2493,7 +2340,7 @@ const MainLayout: React.FC = () => {
                   <button
                     onClick={() => handleImportSpotify(spotifyLink)}
                     disabled={isImportingSpotify || !spotifyLink.trim()}
-                    className="flex-1 py-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-white transition-all shadow-md shadow-brand-accent/25 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    className="flex-1 py-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-black transition-all shadow-md shadow-brand-accent/25 disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
                     {isImportingSpotify ? (
                       <>
@@ -2516,7 +2363,7 @@ const MainLayout: React.FC = () => {
       {currentTrack && (
         <div className="md:hidden fixed bottom-16 left-0 right-0 z-40 px-3">
           <div
-            onClick={() => setMobilePlayerOpen(true)}
+            onClick={() => setShowMobilePlayer(true)}
             className="flex items-center gap-3 bg-[#1a1a1a] border border-white/8 rounded-2xl px-3 py-2.5 shadow-xl shadow-black/60 cursor-pointer select-none"
           >
             {/* Album thumb */}
