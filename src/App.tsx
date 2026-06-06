@@ -2298,16 +2298,56 @@ const MainLayout: React.FC = () => {
                   <div className="flex flex-col items-center justify-center border border-dashed border-white/10 rounded-2xl p-6 bg-white/5 hover:bg-white/10 transition-all cursor-pointer relative group min-h-[140px]">
                     <input
                       type="file"
-                      accept=".m3u,.m3u8,.txt,.csv"
+                      // Add .json and .playlist to the accepted types
+                      accept=".m3u,.m3u8,.txt,.csv,.json,.playlist"
                       disabled={isImportingSpotify}
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
                         const reader = new FileReader();
+                        
                         reader.onload = (event) => {
                           const content = event.target?.result as string;
+                          
+                          // 1. Try to parse it as JSON (like your extracted file)
+                          try {
+                            const parsedData = JSON.parse(content);
+                            
+                            // Check if it matches the structure you uploaded
+                            if (parsedData && Array.isArray(parsedData.songs)) {
+                              const mappedTracks: Track[] = parsedData.songs.map((song: any) => ({
+                                id: song.id || String(Math.random()),
+                                title: song.title || "Unknown Title",
+                                artist: song.artistName || "Unknown Artist",
+                                albumName: song.albumTitle,
+                                thumbnail: song.artwork || song.artistImage || "", // Use artwork, fallback to artist image
+                                duration: song.duration || 0,
+                                artistId: song.artistId,
+                                albumId: song.albumId
+                              }));
+
+                              const playlistName = parsedData.title || file.name.replace(/\.[^/.]+$/, "");
+
+                              const newPlaylist: Playlist = {
+                                id: String(Date.now()),
+                                name: playlistName,
+                                tracks: mappedTracks
+                              };
+
+                              const updated = [...playlists, newPlaylist];
+                              savePlaylists(updated);
+                              setShowSpotifyImportModal(false);
+                              showToast(`Imported "${playlistName}" successfully! (${mappedTracks.length} songs)`, "success");
+                              return; // Exit early if JSON parsing was successful
+                            }
+                          } catch (err) {
+                            // Not a JSON file, silently ignore and fall through to M3U logic
+                          }
+
+                          // 2. Fallback to standard M3U parsing
                           handleImportM3U(file.name, content);
                         };
+                        
                         reader.readAsText(file);
                       }}
                       className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
