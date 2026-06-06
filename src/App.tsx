@@ -40,7 +40,8 @@ const MainLayout: React.FC = () => {
     isLoading, currentTime, duration, volume, isMuted,
     isShuffle, isRepeat, nextTrack, prevTrack, seek,
     changeVolume, toggleMute, toggleShuffle, toggleRepeat,
-    playNext
+    playNext,
+    addToQueue
   } = useAudio();
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
 
@@ -164,7 +165,6 @@ const MainLayout: React.FC = () => {
   // Recommendation states
   const [homeRecommendations, setHomeRecommendations] = useState<Track[]>([]);
   const [searchRecommendations, setSearchRecommendations] = useState<Track[]>([]);
-  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState<boolean>(false);
 
   // Load Playlists on mount
   useEffect(() => {
@@ -290,7 +290,7 @@ const MainLayout: React.FC = () => {
           tracks = res.tracks;
         } catch (authErr: any) {
           console.warn("Spotify auth import failed, falling back to guest import...", authErr);
-          showToast(`Auth import failed: ${authErr.message || authErr}. Using guest mode (100 tracks max).`, "warning");
+          showToast(`Auth import failed: ${authErr.message || authErr}. Using guest mode (100 tracks max).`, "error");
           // If token expired/invalid, try guest mode
           const res = await importSpotifyPlaylist(link);
           name = res.name;
@@ -421,14 +421,11 @@ const MainLayout: React.FC = () => {
   // Fetch home recommendations when favorites list or currentTrack changes
   useEffect(() => {
     const loadHomeRecs = async () => {
-      setIsLoadingRecommendations(true);
       try {
         const recs = await getHomeRecommendations(favorites, currentTrack);
         setHomeRecommendations(recs);
       } catch (err) {
         console.error("Failed to load home recommendations", err);
-      } finally {
-        setIsLoadingRecommendations(false);
       }
     };
     loadHomeRecs();
@@ -661,12 +658,6 @@ const MainLayout: React.FC = () => {
     e.preventDefault();
     setActiveTab("search");
     handleSearch(searchQuery);
-  };
-
-  const handleQuickPlayHero = () => {
-    if (searchResults.length > 0) {
-      playTrack(searchResults[0], searchResults);
-    }
   };
 
   const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false);
