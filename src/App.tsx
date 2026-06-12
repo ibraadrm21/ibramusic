@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
-  SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock
+  SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
+  ChevronUp, ChevronDown, MoreVertical
 } from "lucide-react";
 import { AudioProvider, useAudio } from "./context/AudioContext";
 import Sidebar from "./components/Sidebar";
@@ -2281,6 +2282,52 @@ const MainLayout: React.FC = () => {
                           <div className="flex-1 min-w-0">
                             <p className={`text-xs font-semibold truncate ${isPlayingNow ? "text-brand-accent" : "text-white"}`}>{track.title}</p>
                             <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
+                          </div>
+                          {/* Reordering and Actions container */}
+                          <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            {/* Move Up */}
+                            {idx > 0 && (
+                              <button
+                                onClick={() => reorderQueue(idx, idx - 1)}
+                                className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                title="Move up"
+                              >
+                                <ChevronUp className="w-4 h-4" />
+                              </button>
+                            )}
+                            
+                            {/* Move Down */}
+                            {idx < queue.length - 1 && (
+                              <button
+                                onClick={() => reorderQueue(idx, idx + 1)}
+                                className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                title="Move down"
+                              >
+                                <ChevronDown className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {/* Context Menu Button */}
+                            <button
+                              onClick={(e) => {
+                                handleTrackContextMenu(e, track);
+                              }}
+                              className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                              title="Actions"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+
+                            {/* Remove Button */}
+                            {!isPlayingNow && (
+                              <button
+                                onClick={() => removeFromQueue(track.id)}
+                                className="p-1.5 rounded hover:bg-white/10 text-red-400 hover:text-red-300 transition-colors"
+                                title="Remove from queue"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       );

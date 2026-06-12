@@ -125,6 +125,10 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         onMouseLeave={handleMouseLeavePlaylist}
       >
         <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowPlaylistSubmenu(!showPlaylistSubmenu);
+          }}
           className={`w-full px-4 py-2.5 text-left flex items-center justify-between hover:bg-white/5 hover:text-white transition-all ${
             showPlaylistSubmenu ? "bg-white/5 text-white" : ""
           }`}

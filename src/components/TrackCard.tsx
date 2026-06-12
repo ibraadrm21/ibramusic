@@ -1,5 +1,5 @@
-import React from "react";
-import { Play, Pause, Heart, ListPlus, Plus } from "lucide-react";
+import React, { useRef } from "react";
+import { Play, Pause, Heart, ListPlus, Plus, MoreVertical } from "lucide-react";
 import type { Track } from "../services/musicApi";
 import { useAudio } from "../context/AudioContext";
 
@@ -34,6 +34,52 @@ export const TrackCard: React.FC<TrackCardProps> = ({
 
   const isCurrent = currentTrack?.id === track.id;
 
+  const longPressTimeoutRef = useRef<number | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+    
+    if (longPressTimeoutRef.current) {
+      window.clearTimeout(longPressTimeoutRef.current);
+    }
+    
+    longPressTimeoutRef.current = window.setTimeout(() => {
+      if (onContextMenu) {
+        const syntheticEvent = {
+          preventDefault: () => {},
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+        } as unknown as React.MouseEvent;
+        onContextMenu(syntheticEvent, track);
+        if (navigator.vibrate) {
+          navigator.vibrate(50);
+        }
+      }
+    }, 600);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartPosRef.current) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+    if (dx > 10 || dy > 10) {
+      if (longPressTimeoutRef.current) {
+        window.clearTimeout(longPressTimeoutRef.current);
+        longPressTimeoutRef.current = null;
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimeoutRef.current) {
+      window.clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+    }
+  };
+
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isCurrent) {
@@ -53,6 +99,9 @@ export const TrackCard: React.FC<TrackCardProps> = ({
             onContextMenu(e, track);
           }
         }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         className="group relative flex flex-col items-center gap-3 p-3.5 rounded-2xl glass-card cursor-pointer select-none"
       >
         {/* Cover Art Container */}
@@ -94,6 +143,20 @@ export const TrackCard: React.FC<TrackCardProps> = ({
               )}
             </div>
           )}
+
+          {/* 3-Dots actions button for mobile */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onContextMenu) {
+                onContextMenu(e, track);
+              }
+            }}
+            className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-gray-300 hover:text-white transition-all z-20"
+            title="Options"
+          >
+            <MoreVertical className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Metadata */}
@@ -150,6 +213,9 @@ export const TrackCard: React.FC<TrackCardProps> = ({
           onContextMenu(e, track);
         }
       }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
       className={`group flex items-center justify-between md:grid md:grid-cols-12 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
         isCurrent ? "bg-white/10 border-l-4 border-brand-accent" : "hover:bg-white/5 border-l-4 border-transparent"
       }`}
@@ -291,6 +357,20 @@ export const TrackCard: React.FC<TrackCardProps> = ({
             <Heart className="w-4 h-4" fill={isFavorite ? "currentColor" : "none"} />
           </button>
         )}
+
+        {/* 3-Dots actions button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onContextMenu) {
+              onContextMenu(e, track);
+            }
+          }}
+          className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors shrink-0"
+          title="More options"
+        >
+          <MoreVertical className="w-4 h-4" />
+        </button>
 
         <div className="hidden md:block text-[11px] text-gray-400 pr-1 select-none shrink-0 w-10 text-right ml-1">
           {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, "0")}
