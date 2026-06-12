@@ -3,6 +3,7 @@ export interface Track {
   title: string;
   artist: string;
   artistId?: string;
+  artists?: { id: string; name: string }[];
   albumName?: string;
   albumId?: string;
   duration: number; // in seconds
@@ -84,8 +85,13 @@ export async function searchTracks(query: string): Promise<Track[]> {
           coverUrl = `https://resources.tidal.com/images/${pathUuid}/640x640.jpg`;
         }
 
-        const artistName = item.artist?.name || item.artists?.[0]?.name || "Unknown Artist";
-
+        let artistName = item.artist?.name || item.artists?.[0]?.name || "Unknown Artist";
+        const artistsList = Array.isArray(item.artists)
+          ? item.artists.map((a: any) => ({ id: String(a.id), name: a.name }))
+          : [];
+        if (Array.isArray(item.artists) && item.artists.length > 0) {
+          artistName = item.artists.map((a: any) => a.name).join(", ");
+        }
         const artistId = String(item.artist?.id || item.artists?.[0]?.id || "");
         const albumName = item.album?.title || item.album?.name || "";
         const albumId = String(item.album?.id || "");
@@ -95,6 +101,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
           title: item.title || "Unknown Title",
           artist: artistName,
           artistId,
+          artists: artistsList,
           albumName,
           albumId,
           duration: item.duration || 180,
@@ -333,7 +340,13 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
           coverUrl = `https://resources.tidal.com/images/${pathUuid}/640x640.jpg`;
         }
 
-        const artistName = u.artist?.name || u.artists?.[0]?.name || "Unknown Artist";
+        let artistName = u.artist?.name || u.artists?.[0]?.name || "Unknown Artist";
+        const artistsList = Array.isArray(u.artists)
+          ? u.artists.map((a: any) => ({ id: String(a.id), name: a.name }))
+          : [];
+        if (Array.isArray(u.artists) && u.artists.length > 0) {
+          artistName = u.artists.map((a: any) => a.name).join(", ");
+        }
         const artistId = String(u.artist?.id || u.artists?.[0]?.id || "");
         const albumName = u.album?.title || u.album?.name || "";
         const albumIdVal = String(u.album?.id || albumId);
@@ -343,6 +356,7 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
           title: u.title || "Unknown Title",
           artist: artistName,
           artistId,
+          artists: artistsList,
           albumName,
           albumId: albumIdVal,
           duration: u.duration || 180,
@@ -379,7 +393,13 @@ export async function getArtistTracks(artistId: string): Promise<Track[]> {
           coverUrl = `https://resources.tidal.com/images/${pathUuid}/640x640.jpg`;
         }
 
-        const artistName = track.artist?.name || track.artists?.[0]?.name || "Unknown Artist";
+        let artistName = track.artist?.name || track.artists?.[0]?.name || "Unknown Artist";
+        const artistsList = Array.isArray(track.artists)
+          ? track.artists.map((a: any) => ({ id: String(a.id), name: a.name }))
+          : [];
+        if (Array.isArray(track.artists) && track.artists.length > 0) {
+          artistName = track.artists.map((a: any) => a.name).join(", ");
+        }
         const artistIdVal = String(track.artist?.id || track.artists?.[0]?.id || artistId);
         const albumName = track.album?.title || track.album?.name || "";
         const albumId = String(track.album?.id || "");
@@ -389,6 +409,7 @@ export async function getArtistTracks(artistId: string): Promise<Track[]> {
           title: track.title || "Unknown Title",
           artist: artistName,
           artistId: artistIdVal,
+          artists: artistsList,
           albumName,
           albumId,
           duration: track.duration || 180,

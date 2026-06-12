@@ -68,7 +68,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     toggleRepeat,
     queue,
     currentIndex,
-    playTrack
+    playTrack,
+    roomId,
+    isHost
   } = useAudio();
 
 
@@ -313,17 +315,38 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
           >
             {currentTrack.title}
           </h2>
-          <p 
-            onClick={() => {
-              if (onOpenArtist && currentTrack.artistId) {
-                onOpenArtist({ id: currentTrack.artistId, name: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-                if (onClose) onClose();
-              }
-            }}
-            className="text-sm text-gray-400 truncate mt-1 cursor-pointer hover:text-brand-accent hover:underline"
-          >
-            {currentTrack.artist}
-          </p>
+          <div className="text-sm text-gray-400 mt-1 flex flex-wrap gap-x-1 select-none">
+            {currentTrack.artists && currentTrack.artists.length > 0 ? (
+              currentTrack.artists.map((art, i) => (
+                <React.Fragment key={art.id}>
+                  <span
+                    onClick={() => {
+                      if (onOpenArtist) {
+                        onOpenArtist({ id: art.id, name: art.name, thumbnail: currentTrack.thumbnail });
+                        if (onClose) onClose();
+                      }
+                    }}
+                    className="cursor-pointer hover:text-brand-accent hover:underline transition-colors"
+                  >
+                    {art.name}
+                  </span>
+                  {i < currentTrack.artists!.length - 1 && <span>,</span>}
+                </React.Fragment>
+              ))
+            ) : (
+              <span
+                onClick={() => {
+                  if (onOpenArtist && currentTrack.artistId) {
+                    onOpenArtist({ id: currentTrack.artistId, name: currentTrack.artist, thumbnail: currentTrack.thumbnail });
+                    if (onClose) onClose();
+                  }
+                }}
+                className="cursor-pointer hover:text-brand-accent hover:underline transition-colors"
+              >
+                {currentTrack.artist}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -375,7 +398,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             onChange={handleSliderChange}
             onMouseUp={handleSliderMouseUp}
             onTouchEnd={handleSliderMouseUp}
-            className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent focus:outline-none"
+            disabled={roomId !== null && !isHost}
+            className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between text-[11px] text-gray-400 font-semibold tracking-wider">
             <span>{formatTime(currentTime)}</span>
@@ -387,9 +411,10 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         <div className="flex items-center justify-between px-4 mt-2">
           <button
             onClick={toggleShuffle}
+            disabled={roomId !== null && !isHost}
             className={`p-2 rounded-full transition-all ${
               isShuffle ? "text-brand-accent scale-110" : "text-gray-400 hover:text-white"
-            }`}
+            } disabled:opacity-30 disabled:cursor-not-allowed`}
             title="Shuffle"
           >
             <Shuffle className="w-5 h-5" />
@@ -397,7 +422,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
           <button
             onClick={prevTrack}
-            className="p-2 rounded-full text-white active:scale-90 transition-transform"
+            disabled={roomId !== null && !isHost}
+            className="p-2 rounded-full text-white active:scale-90 transition-transform disabled:opacity-30 disabled:cursor-not-allowed"
             title="Previous"
           >
             <SkipBack className="w-7 h-7 fill-current" />
@@ -405,8 +431,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
           <button
             onClick={togglePlay}
-            disabled={isLoading}
-            className="p-5 rounded-full bg-white text-black transition-transform active:scale-95 disabled:opacity-60 flex items-center justify-center shadow-lg shadow-black/40"
+            disabled={isLoading || (roomId !== null && !isHost)}
+            className="p-5 rounded-full bg-white text-black transition-transform active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-black/40"
             title={isPlaying ? "Pause" : "Play"}
           >
             {isLoading ? (
@@ -420,7 +446,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
           <button
             onClick={nextTrack}
-            className="p-2 rounded-full text-white active:scale-90 transition-transform"
+            disabled={roomId !== null && !isHost}
+            className="p-2 rounded-full text-white active:scale-90 transition-transform disabled:opacity-30 disabled:cursor-not-allowed"
             title="Next"
           >
             <SkipForward className="w-7 h-7 fill-current" />
@@ -428,9 +455,10 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
           <button
             onClick={toggleRepeat}
+            disabled={roomId !== null && !isHost}
             className={`p-2 rounded-full relative transition-all ${
               isRepeat !== "none" ? "text-brand-accent scale-110" : "text-gray-400 hover:text-white"
-            }`}
+            } disabled:opacity-30 disabled:cursor-not-allowed`}
             title="Repeat"
           >
             <Repeat className="w-5 h-5" />

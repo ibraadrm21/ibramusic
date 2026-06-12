@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">IbraStream</string>
+    <string name="title_activity_main">IbraStream</string>
+    <string name="package_name">com.ibrastream.app</string>
+    <string name="custom_url_scheme">com.ibrastream.app</string>
+</resources>

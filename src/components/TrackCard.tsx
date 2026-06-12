@@ -14,6 +14,7 @@ interface TrackCardProps {
   onAddToPlaylist?: (track: Track) => void;
   trackIndex?: number;
   onContextMenu?: (e: React.MouseEvent, track: Track) => void;
+  playlistId?: string;
 }
 
 export const TrackCard: React.FC<TrackCardProps> = ({
@@ -26,7 +27,8 @@ export const TrackCard: React.FC<TrackCardProps> = ({
   onOpenArtist,
   onAddToPlaylist,
   trackIndex,
-  onContextMenu
+  onContextMenu,
+  playlistId
 }) => {
   const { currentTrack, isPlaying, isLoading, playTrack, togglePlay, addToQueue } = useAudio();
 
@@ -37,7 +39,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
     if (isCurrent) {
       togglePlay();
     } else {
-      playTrack(track, tracksQueue.length > 0 ? tracksQueue : [track]);
+      playTrack(track, tracksQueue.length > 0 ? tracksQueue : [track], playlistId);
     }
   };
 
@@ -97,27 +99,42 @@ export const TrackCard: React.FC<TrackCardProps> = ({
         {/* Metadata */}
         <div className="w-full text-center min-w-0">
           <h3 
-            onClick={(e) => {
-              if (onOpenAlbum && track.albumId) {
-                e.stopPropagation();
-                onOpenAlbum({ id: track.albumId, title: track.albumName || "Album", artist: track.artist, thumbnail: track.thumbnail });
-              }
-            }}
-            className="font-semibold text-sm text-white truncate hover:text-brand-accent hover:underline cursor-pointer transition-colors duration-200"
+            className="font-semibold text-sm text-white truncate transition-colors duration-200"
           >
             {track.title}
           </h3>
-          <p 
-            onClick={(e) => {
-              if (onOpenArtist && track.artistId) {
-                e.stopPropagation();
-                onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
-              }
-            }}
-            className="text-[11px] text-gray-400 truncate mt-0.5 hover:text-brand-accent hover:underline cursor-pointer"
-          >
-            {track.artist}
-          </p>
+          <div className="text-[11px] text-gray-400 truncate mt-0.5 flex flex-wrap justify-center gap-x-1 select-none">
+            {track.artists && track.artists.length > 0 ? (
+              track.artists.map((art, i) => (
+                <React.Fragment key={art.id}>
+                  <span
+                    onClick={(e) => {
+                      if (onOpenArtist) {
+                        e.stopPropagation();
+                        onOpenArtist({ id: art.id, name: art.name, thumbnail: track.thumbnail });
+                      }
+                    }}
+                    className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+                  >
+                    {art.name}
+                  </span>
+                  {i < track.artists!.length - 1 && <span>,</span>}
+                </React.Fragment>
+              ))
+            ) : (
+              <span
+                onClick={(e) => {
+                  if (onOpenArtist && track.artistId) {
+                    e.stopPropagation();
+                    onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
+                  }
+                }}
+                className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+              >
+                {track.artist}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -177,27 +194,42 @@ export const TrackCard: React.FC<TrackCardProps> = ({
         {/* Title & Artist subtitle */}
         <div className="min-w-0 flex-1">
           <h4 
-            onClick={(e) => {
-              if (onOpenAlbum && track.albumId) {
-                e.stopPropagation();
-                onOpenAlbum({ id: track.albumId, title: track.albumName || "Album", artist: track.artist, thumbnail: track.thumbnail });
-              }
-            }}
-            className={`font-semibold text-sm truncate hover:underline cursor-pointer hover:text-brand-accent ${isCurrent ? "text-brand-accent" : "text-white"}`}
+            className={`font-semibold text-sm truncate ${isCurrent ? "text-brand-accent" : "text-white"}`}
           >
             {track.title}
           </h4>
-          <span 
-            onClick={(e) => {
-              if (onOpenArtist && track.artistId) {
-                e.stopPropagation();
-                onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
-              }
-            }}
-            className="text-xs text-gray-400 hover:text-brand-accent hover:underline mt-0.5 inline-block cursor-pointer"
-          >
-            {track.artist}
-          </span>
+          <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-1 select-none">
+            {track.artists && track.artists.length > 0 ? (
+              track.artists.map((art, i) => (
+                <React.Fragment key={art.id}>
+                  <span
+                    onClick={(e) => {
+                      if (onOpenArtist) {
+                        e.stopPropagation();
+                        onOpenArtist({ id: art.id, name: art.name, thumbnail: track.thumbnail });
+                      }
+                    }}
+                    className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+                  >
+                    {art.name}
+                  </span>
+                  {i < track.artists!.length - 1 && <span>,</span>}
+                </React.Fragment>
+              ))
+            ) : (
+              <span
+                onClick={(e) => {
+                  if (onOpenArtist && track.artistId) {
+                    e.stopPropagation();
+                    onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
+                  }
+                }}
+                className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+              >
+                {track.artist}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

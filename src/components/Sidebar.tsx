@@ -1,4 +1,6 @@
+import React from "react";
 import { Home, Search, Heart, Music, ListMusic, Sparkles } from "lucide-react";
+import { ListenTogether } from "./ListenTogether";
 
 interface SidebarProps {
   activeTab: string;
@@ -15,7 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   playlists,
   followedArtists,
   onSelectPlaylist,
-  onSelectArtist
+  onSelectArtist,
 }) => {
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
@@ -24,6 +26,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "playlists", label: "Playlists", icon: ListMusic },
     { id: "visuals", label: "Visuals", icon: Sparkles }
   ];
+
+  // Load library order from localStorage
+  const [libraryOrder, setLibraryOrder] = React.useState<{ id: string, type: 'playlist' | 'artist' }[]>(() => {
+    const saved = localStorage.getItem("ibrastream_library_order");
+    try { return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+
+  // Combine playlists and artists into a single array
+  const combinedLibrary = React.useMemo(() => {
+    const items = [
+      ...playlists.map(p => ({ ...p, type: 'playlist' as const })),
+      ...followedArtists.map(a => ({ ...a, type: 'artist' as const }))
+    ];
+
+    // Sort items according to libraryOrder
+    if (libraryOrder.length > 0) {
+      items.sort((a, b) => {
+        const idxA = libraryOrder.findIndex(item => item.id === a.id && item.type === a.type);
+        const idxB = libraryOrder.findIndex(item => item.id === b.id && item.type === b.type);
+        
+        // If both are in the order, sort by order
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        // If only one is in the order, put it first
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        // Otherwise keep original order
+        return 0;
+      });
+    }
+    return items;
+  }, [playlists, followedArtists, libraryOrder]);
+
+  // Drag and drop states
+  const [draggedIdx, setDraggedIdx] = React.useState<number | null>(null);
+
+  const handleDragStart = (index: number) => {
+    setDraggedIdx(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === index) return;
+    
+    // Reorder combinedLibrary
+    const updated = [...combinedLibrary];
+    const item = updated[draggedIdx];
+    updated.splice(draggedIdx, 1);
+    updated.splice(index, 0, item);
+    
+    setDraggedIdx(index);
+
+    // Save the new order as a list of { id, type }
+    const newOrder = updated.map(item => ({ id: item.id, type: item.type }));
+    setLibraryOrder(newOrder);
+    localStorage.setItem("ibrastream_library_order", JSON.stringify(newOrder));
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null);
+  };
 
   return (
     <>
@@ -80,48 +142,57 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Your Library
             </span>
             <div className="flex flex-col gap-1.5 pl-1.5">
-              {playlists.map((playlist) => (
-                <div
-                  key={playlist.id}
-                  onClick={() => onSelectPlaylist(playlist)}
-                  className="flex items-center gap-3.5 p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group"
-                >
-                  <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0">
-                    <ListMusic className="w-4.5 h-4.5 text-brand-accent group-hover:scale-105 transition-transform" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{playlist.name}</p>
-                    <p className="text-[10px] text-gray-400 truncate">Playlist • {playlist.tracks ? playlist.tracks.length : 0} Songs</p>
-                  </div>
-                </div>
-              ))}
+              {combinedLibrary.map((item, idx) => {
+                const isPlaylist = item.type === 'playlist';
+                return (
+                  <div
+                    key={`${item.type}-${item.id}`}
+                    onClick={() => isPlaylist ? onSelectPlaylist(item) : onSelectArtist(item)}
+                    draggable={true}
+                    onDragStart={() => handleDragStart(idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center gap-3.5 p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group ${
+                      draggedIdx === idx ? 'opacity-40 bg-white/10 scale-95' : ''
+                    }`}
+                  >
+                    {isPlaylist ? (
+                      <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                        {item.coverUrl ? (
+                          <img src={item.coverUrl} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                        ) : (
+                          <ListMusic className="w-4.5 h-4.5 text-brand-accent group-hover:scale-105 transition-transform" />
+                        )}
+                      </div>
+                    ) : (
+                      <img
+                        src={item.thumbnail}
+                        alt={item.name}
+                        className="w-8.5 h-8.5 rounded-full object-cover shrink-0"
+                      />
+                    )}
 
-              {followedArtists.map((artist) => (
-                <div
-                  key={artist.id}
-                  onClick={() => onSelectArtist(artist)}
-                  className="flex items-center gap-3.5 p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group"
-                >
-                  <img
-                    src={artist.thumbnail}
-                    alt={artist.name}
-                    className="w-8.5 h-8.5 rounded-full object-cover shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{artist.name}</p>
-                    <p className="text-[10px] text-gray-400 truncate">Artist</p>
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{item.name}</p>
+                      <p className="text-[10px] text-gray-400 truncate">
+                        {isPlaylist ? `Playlist • ${item.tracks ? item.tracks.length : 0} Songs` : "Artist"}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
-              {playlists.length === 0 && followedArtists.length === 0 && (
+              {combinedLibrary.length === 0 && (
                 <span className="text-[10px] text-gray-600 pl-3 italic">Empty Library</span>
               )}
             </div>
           </div>
         </div>
 
-
+        {/* Listen Together Section */}
+        <div className="mt-4 shrink-0">
+          <ListenTogether />
+        </div>
       </aside>
 
       {/* Mobile Bottom Navigation */}
