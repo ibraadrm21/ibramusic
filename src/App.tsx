@@ -2,13 +2,14 @@ import React, { useState, useEffect } from "react";
 import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
-  ChevronUp, ChevronDown, MoreVertical
+  ChevronUp, ChevronDown, MoreVertical, Radio
 } from "lucide-react";
 import { AudioProvider, useAudio } from "./context/AudioContext";
 import Sidebar from "./components/Sidebar";
 import PlayerPanel from "./components/PlayerPanel";
 import TrackCard from "./components/TrackCard";
 import TrackContextMenu from "./components/TrackContextMenu";
+import { ListenTogether } from "./components/ListenTogether";
 import { getHomeRecommendations, getSearchRecommendations } from "./services/recommendationEngine";
 import {
   searchTracks, MOCK_LIBRARY,
@@ -139,6 +140,7 @@ const MainLayout: React.FC = () => {
   const [visibleArtistTracksCount, setVisibleArtistTracksCount] = useState<number>(8);
 
   const [showQueueOverlay, setShowQueueOverlay] = useState<boolean>(false);
+  const [showListenTogetherOverlay, setShowListenTogetherOverlay] = useState<boolean>(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   // Playlists state
@@ -848,6 +850,14 @@ const MainLayout: React.FC = () => {
                   className="w-9 h-9 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white transition-all"
                 >
                   <Search className="w-4.5 h-4.5" />
+                </button>
+                <button
+                  onClick={() => setShowListenTogetherOverlay(true)}
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                    roomId ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-white/5 text-gray-400 hover:text-white"
+                  }`}
+                >
+                  <Radio className={`w-4.5 h-4.5 ${roomId ? "animate-pulse" : ""}`} />
                 </button>
                 <button
                   onClick={() => setShowQueueOverlay(true)}
@@ -2334,6 +2344,22 @@ const MainLayout: React.FC = () => {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Mobile Listen Together Overlay */}
+        {showListenTogetherOverlay && (
+          <div className="lg:hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex flex-col p-4 animate-[fadeIn_0.2s_ease]">
+            <div className="bg-brand-darkBg/95 border border-white/10 rounded-3xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl relative mt-12">
+              <button
+                onClick={() => setShowListenTogetherOverlay(false)}
+                className="absolute top-4 right-4 p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all z-10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <div className="p-6 overflow-y-auto">
+                <ListenTogether />
               </div>
             </div>
           </div>
