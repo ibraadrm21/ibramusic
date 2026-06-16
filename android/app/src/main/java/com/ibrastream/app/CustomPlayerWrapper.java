@@ -21,22 +21,21 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
 
     @Override
     public long getDuration() {
+        long dur = super.getDuration();
+        if (dur > 0) return dur;
         if (durationMs != C.TIME_UNSET && durationMs > 0) {
             return durationMs;
         }
-        return super.getDuration();
+        return dur;
     }
 
     @Override
     public long getCurrentPosition() {
-        if (durationMs == C.TIME_UNSET || durationMs <= 0) {
-            return super.getCurrentPosition();
-        }
-        if (isPlaying()) {
+        if (isPlaying() && super.getDuration() <= 0 && durationMs != C.TIME_UNSET) {
             long elapsed = System.currentTimeMillis() - lastUpdateMs;
             return Math.min(durationMs, positionMs + elapsed);
         }
-        return positionMs;
+        return super.getCurrentPosition();
     }
 
     @Override
@@ -51,8 +50,7 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
         intent.putExtra("position", positionMs / 1000.0);
         context.sendBroadcast(intent);
 
-        // Keep the underlying silent audio player at a safe position (0)
-        super.seekTo(mediaItemIndex, 0);
+        super.seekTo(mediaItemIndex, positionMs);
     }
 
     @Override
@@ -92,15 +90,11 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
     public void setMockDuration(long durationMs) {
         Log.e(TAG, "CustomPlayerWrapper: setMockDuration=" + durationMs);
         this.durationMs = durationMs;
-        // Trigger a seek to 0 on the underlying player to force a UI/timeline refresh
-        super.seekTo(0);
     }
 
     public void setMockPosition(long positionMs) {
         Log.e(TAG, "CustomPlayerWrapper: setMockPosition=" + positionMs);
         this.positionMs = positionMs;
         this.lastUpdateMs = System.currentTimeMillis();
-        // Trigger a seek to 0 on the underlying player to force a UI/timeline refresh
-        super.seekTo(0);
     }
 }

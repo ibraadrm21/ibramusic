@@ -1,6 +1,20 @@
 import React from "react";
-import { Home, Search, Heart, Music, ListMusic, Sparkles } from "lucide-react";
-import { ListenTogether } from "./ListenTogether";
+import { Home, Search, Heart, Music, ListMusic } from "lucide-react";
+
+const Github: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    {...props}
+  >
+    <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+    <path d="M9 18c-4.51 2-5-2-7-2" />
+  </svg>
+);
 
 interface SidebarProps {
   activeTab: string;
@@ -24,7 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "search", label: "Search", icon: Search },
     { id: "favorites", label: "Favorites", icon: Heart },
     { id: "playlists", label: "Playlists", icon: ListMusic },
-    { id: "visuals", label: "Visuals", icon: Sparkles }
+    { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
   ];
 
   // Load library order from localStorage
@@ -115,6 +129,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+              if (item.url) {
+                return (
+                  <a
+                    key={item.id}
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between px-3.5 py-2.5 rounded-lg transition-all duration-200 font-medium text-xs w-full text-gray-500 hover:text-gray-200 hover:bg-white/4"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <Icon className="w-4 h-4" />
+                      <span>{item.label}</span>
+                    </div>
+                  </a>
+                );
+              }
               return (
                 <button
                   key={item.id}
@@ -158,8 +188,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     {isPlaylist ? (
                       <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
-                        {item.coverUrl ? (
-                          <img src={item.coverUrl} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                        {item.coverUrl || (item.tracks && item.tracks.length > 0 && item.tracks[0].thumbnail) ? (
+                          <img src={item.coverUrl || item.tracks[0].thumbnail} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         ) : (
                           <ListMusic className="w-4.5 h-4.5 text-brand-accent group-hover:scale-105 transition-transform" />
                         )}
@@ -189,9 +219,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Listen Together Section */}
-        <div className="mt-4 shrink-0">
-          <ListenTogether />
+        {/* Branding Footer */}
+        <div className="border-t border-white/5 pt-4 mt-auto shrink-0 flex items-center justify-center">
+          <span className="text-[10px] text-gray-600 font-medium tracking-wider uppercase">ibrastream v1.0</span>
         </div>
       </aside>
 
@@ -202,9 +232,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           { id: "search",    icon: Search,    label: "Search" },
           { id: "favorites", icon: Heart,     label: "Liked" },
           { id: "playlists", icon: ListMusic, label: "Library" },
-          { id: "visuals",   icon: Sparkles,  label: "Visuals" },
-        ].map(({ id, icon: Icon, label }) => {
+          { id: "github",    icon: Github,    label: "GitHub", url: "https://github.com/ibraadrm21" },
+        ].map(({ id, icon: Icon, label, url }) => {
           const isActive = activeTab === id;
+          if (url) {
+            return (
+              <a
+                key={id}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex flex-col items-center justify-center flex-1 h-full gap-1 transition-all"
+              >
+                <div className="p-1.5 rounded-xl transition-all">
+                  <Icon className="w-5 h-5 text-gray-500" />
+                </div>
+                <span className="text-[9px] font-semibold tracking-wide text-gray-600">
+                  {label}
+                </span>
+              </a>
+            );
+          }
           return (
             <button
               key={id}

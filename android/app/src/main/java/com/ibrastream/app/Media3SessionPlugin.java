@@ -40,7 +40,19 @@ public class Media3SessionPlugin extends Plugin {
                             JSObject ret = new JSObject();
                             ret.put("ended", true);
                             notifyListeners("onPlaybackEnded", ret);
+                        } else if (playbackState == Player.STATE_READY) {
+                            JSObject ret = new JSObject();
+                            ret.put("ready", true);
+                            notifyListeners("onPlaybackReady", ret);
                         }
+                    }
+
+                    @Override
+                    public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                        Log.e(TAG, "Player Error: " + error.getMessage(), error);
+                        JSObject ret = new JSObject();
+                        ret.put("error", error.getMessage());
+                        notifyListeners("onPlaybackError", ret);
                     }
                 });
                 isListenerRegistered = true;
@@ -92,7 +104,8 @@ public class Media3SessionPlugin extends Plugin {
         String artist = call.getString("artist");
         String artwork = call.getString("artwork");
         Double duration = call.getDouble("duration");
-        Log.e(TAG, "Plugin: updateMetadata: " + title + ", artwork=" + artwork + ", duration=" + duration);
+        String streamUrl = call.getString("streamUrl");
+        Log.e(TAG, "Plugin: updateMetadata: " + title + ", streamUrl=" + streamUrl + ", duration=" + duration);
 
         MainActivity activity = (MainActivity) getActivity();
         if (activity.getControllerFuture() == null) {
@@ -124,7 +137,11 @@ public class Media3SessionPlugin extends Plugin {
                                 .setMediaId("remote_audio")
                                 .setMediaMetadata(metaBuilder.build());
 
-                        mediaItemBuilder.setUri("android.resource://" + activity.getPackageName() + "/" + R.raw.silent);
+                        if (streamUrl != null && !streamUrl.isEmpty()) {
+                            mediaItemBuilder.setUri(streamUrl);
+                        } else {
+                            mediaItemBuilder.setUri("android.resource://" + activity.getPackageName() + "/" + R.raw.silent);
+                        }
                         
                         controller.setMediaItem(mediaItemBuilder.build());
                         controller.prepare();
@@ -202,12 +219,25 @@ public class Media3SessionPlugin extends Plugin {
             try {
                 MediaController controller = activity.getControllerFuture().get();
                 ensureControllerListener(controller);
-                JSObject ret = new JSObject();
-                ret.put("position", controller.getCurrentPosition() / 1000.0);
-                ret.put("duration", controller.getDuration() / 1000.0);
-                ret.put("isPlaying", controller.isPlaying());
-                call.resolve(ret);
+                
+                activity.runOnUiThread(() -> {
+                    try {
+                        JSObject ret = new JSObject();
+                        ret.put("position", controller.getCurrentPosition() / 1000.0);
+                        ret.put("duration", controller.getDuration() / 1000.0);
+                        ret.put("isPlaying", controller.isPlaying());
+                        call.resolve(ret);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error in UI thread getPlaybackInfo", e);
+                        JSObject ret = new JSObject();
+                        ret.put("position", 0.0);
+                        ret.put("duration", 0.0);
+                        ret.put("isPlaying", false);
+                        call.resolve(ret);
+                    }
+                });
             } catch (Exception e) {
+                Log.e(TAG, "Error in getPlaybackInfo", e);
                 JSObject ret = new JSObject();
                 ret.put("position", 0.0);
                 ret.put("duration", 0.0);
@@ -249,6 +279,7 @@ public class Media3SessionPlugin extends Plugin {
     @PluginMethod
     public void setVolume(PluginCall call) {
         Double volume = call.getDouble("volume", 1.0);
+        PlaybackService.userVolume = volume.floatValue();
         MainActivity activity = (MainActivity) getActivity();
         if (activity.getControllerFuture() == null) {
             call.reject("Controller future is null");
@@ -261,7 +292,7 @@ public class Media3SessionPlugin extends Plugin {
                 ensureControllerListener(controller);
                 activity.runOnUiThread(() -> {
                     try {
-                        controller.setVolume(volume.floatValue());
+                        controller.setVolume(PlaybackService.userVolume);
                         call.resolve();
                     } catch (Exception e) {
                         Log.e(TAG, "UI Thread error in setVolume", e);

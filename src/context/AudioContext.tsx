@@ -4,17 +4,15 @@ import { getYouTubeVideoId } from "../services/musicApi";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { supabase } from "../services/supabaseClient";
 
-const isAndroid = Capacitor.getPlatform() === "android";
-const Media3Session = registerPlugin<any>("Media3Session");
-
-
-
 declare global {
   interface Window {
     YT: any;
     onYouTubeIframeAPIReady: (() => void) | undefined;
   }
 }
+
+const isAndroid = Capacitor.getPlatform() === "android";
+const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 
 interface AudioContextType {
   currentTrack: Track | null;
@@ -50,10 +48,11 @@ interface AudioContextType {
   roomId: string | null;
   isHost: boolean;
   isConnected: boolean;
-  participants: { id: string; name: string }[];
+  participants: { id: string; name: string; pfp?: string }[];
   createRoom: () => void;
   joinRoom: (roomId: string) => void;
   leaveRoom: () => void;
+  updateUserIdentity: (name: string, pfp?: string) => void;
 }
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
@@ -103,13 +102,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [roomId, setRoomId] = useState<string | null>(null);
   const [isHost, setIsHost] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [participants, setParticipants] = useState<{ id: string; name: string }[]>([]);
+  const [participants, setParticipants] = useState<{ id: string; name: string; pfp?: string }[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user ?? null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Listen Together Refs
   const channelRef = useRef<any>(null);
   const clientIdRef = useRef<string>(Math.random().toString(36).substring(2, 11));
   const userNameRef = useRef<string>(`User-${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
+  const userPfpRef = useRef<string>("");
   const lastBroadcastRef = useRef<number>(0);
+
+  const updateUserIdentity = (name: string, pfp?: string) => {
+    if (name.trim()) userNameRef.current = name.trim();
+    if (pfp !== undefined) userPfpRef.current = pfp;
+
+    if (channelRef.current && isConnected) {
+      channelRef.current.track({
+        name: userNameRef.current,
+        pfp: userPfpRef.current,
+        joinedAt: Date.now()
+      }).catch((err: any) => console.error("Failed to update presence info:", err));
+    }
+  };
   const roomIdRef = useRef<string | null>(null);
   const isHostRef = useRef<boolean>(false);
   const currentTrackRef = useRef<Track | null>(null);
@@ -123,21 +147,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isHostRef.current = isHost;
   }, [roomId, isHost]);
 
-  useEffect(() => {
-    currentTrackRef.current = currentTrack;
-  }, [currentTrack]);
-
-  useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-
-  useEffect(() => {
-    queueRef.current = queue;
-  }, [queue]);
-
-  useEffect(() => {
-    currentIndexRef.current = currentIndex;
-  }, [currentIndex]);
+  useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
 
   // Persist playback settings in localStorage
   useEffect(() => {
@@ -158,26 +171,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.removeItem("ibrastream_current_track");
     }
   }, [queue, originalQueue, currentIndex, currentTrack]);
+
   const [toast, setToast] = useState<{ message: string; type: "info" | "success" | "error" } | null>(null);
 
+  // YouTube IFrame Player ref (web only)
   const ytPlayerRef = useRef<any>(null);
+  const ytReadyRef = useRef<boolean>(false);
+
+  // Silent audio hack to keep Media Session alive (web only)
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const progressIntervalRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const handleTrackEndedRef = useRef<() => void>(() => {});
-  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const nextTrackRef = useRef<() => void>(() => {});
   const prevTrackRef = useRef<() => void>(() => {});
   const togglePlayRef = useRef<() => void>(() => {});
-  const playbackExpectedRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    // Verified 100% valid silent WAV file base64 to keep media session active
-    const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA");
-    silentAudio.loop = true;
-    silentAudioRef.current = silentAudio;
-  }, []);
-
   const syncMediaSessionRef = useRef<() => void>(() => {});
+  const playbackExpectedRef = useRef<boolean>(false);
 
   useEffect(() => {
     handleTrackEndedRef.current = handleTrackEnded;
@@ -187,77 +198,156 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     syncMediaSessionRef.current = syncMediaSession;
   });
 
-  const webAudioCtxRef = useRef<AudioContext | null>(null);
-  const webAudioGainRef = useRef<GainNode | null>(null);
-
-  const startWebAudioSilence = () => {
-    if (webAudioCtxRef.current) {
-      if (webAudioCtxRef.current.state === "suspended") {
-        webAudioCtxRef.current.resume().catch(err => console.warn("Failed to resume Web Audio context:", err));
-      }
-      return;
-    }
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioContextClass();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      
-      // Extremely quiet and low frequency (inaudible but registered by OS as active audio)
-      osc.frequency.value = 20; 
-      gain.gain.value = 0.00001; 
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      
-      ctx.resume().catch(err => console.warn("Web Audio context resume failed:", err));
-      
-      webAudioCtxRef.current = ctx;
-      webAudioGainRef.current = gain;
-    } catch (err) {
-      console.warn("Failed to initialize Web Audio silence:", err);
-    }
-  };
-
-  const showToast = (message: string, type: "info" | "success" | "error" = "info") => {
-    setToast({ message, type });
-  };
-
-  // Auto-hide toast messages
+  // Initialize YouTube IFrame Player (web only)
   useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(null), 3000);
-      return () => clearTimeout(timer);
+    if (isAndroid) return;
+
+    // Silent audio for Media Session background capability
+    const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+    silentAudio.loop = true;
+    silentAudioRef.current = silentAudio;
+
+    // Create hidden container for YT iframe
+    let ytDiv = document.getElementById("youtube-player");
+    if (!ytDiv) {
+      ytDiv = document.createElement("div");
+      ytDiv.id = "youtube-player";
+      ytDiv.setAttribute(
+        "style",
+        "position: fixed; top: -9999px; left: -9999px; width: 1px; height: 1px; opacity: 0.001; pointer-events: none; z-index: -9999;"
+      );
+      document.body.appendChild(ytDiv);
     }
-  }, [toast]);
+
+    const initPlayer = () => {
+      if (ytReadyRef.current) return;
+      ytReadyRef.current = true;
+      ytPlayerRef.current = new window.YT.Player("youtube-player", {
+        height: "1",
+        width: "1",
+        playerVars: {
+          autoplay: 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          rel: 0,
+          showinfo: 0,
+          modestbranding: 1,
+          playsinline: 1,
+        },
+        events: {
+          onReady: (event: any) => {
+            event.target.setVolume(isMuted ? 0 : volume * 100);
+          },
+          onStateChange: (event: any) => {
+            // YT.PlayerState: -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
+            const state = event.data;
+            if (state === 1) {
+              setIsPlaying(true);
+              setIsLoading(false);
+              startPollingProgress();
+              // Seek to target if set (Listen Together sync)
+              if (targetSeekTimeRef.current !== null) {
+                event.target.seekTo(targetSeekTimeRef.current, true);
+                targetSeekTimeRef.current = null;
+              }
+              // Keep silent audio alive for MediaSession
+              silentAudioRef.current?.play().catch(() => {});
+            } else if (state === 2) {
+              setIsPlaying(false);
+              stopPollingProgress();
+              silentAudioRef.current?.pause();
+            } else if (state === 0) {
+              // Ended
+              setIsPlaying(false);
+              stopPollingProgress();
+              silentAudioRef.current?.pause();
+              handleTrackEndedRef.current();
+            } else if (state === 3) {
+              setIsLoading(true);
+            }
+          },
+          onError: (e: any) => {
+            console.error("YouTube Player error:", e.data);
+            setIsPlaying(false);
+            setIsLoading(false);
+            playbackExpectedRef.current = false;
+            // Error codes: 2=invalid param, 5=HTML5 error, 100=not found, 101/150=embed disabled
+            const msg = e.data === 150 || e.data === 101
+              ? "This track cannot be embedded. Trying next..."
+              : "Playback error. Trying next track...";
+            showToast(msg, "error");
+            setTimeout(() => nextTrackRef.current(), 2000);
+          }
+        }
+      });
+    };
+
+    // Load YT IFrame API
+    if (window.YT && window.YT.Player) {
+      initPlayer();
+    } else if (!document.getElementById("yt-iframe-api-script")) {
+      const tag = document.createElement("script");
+      tag.id = "yt-iframe-api-script";
+      tag.src = "https://www.youtube.com/iframe_api";
+      const firstScriptTag = document.getElementsByTagName("script")[0];
+      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+      window.onYouTubeIframeAPIReady = initPlayer;
+    } else {
+      window.onYouTubeIframeAPIReady = initPlayer;
+    }
+
+    return () => {
+      stopPollingProgress();
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === "function") {
+        try { ytPlayerRef.current.destroy(); } catch {}
+      }
+      const playerEl = document.getElementById("youtube-player");
+      if (playerEl) playerEl.remove();
+      ytReadyRef.current = false;
+      silentAudioRef.current?.pause();
+    };
+  }, []);
+
+  // Android: Poll progress
+  useEffect(() => {
+    if (isAndroid) {
+      const interval = window.setInterval(() => {
+        Media3Session.getPlaybackInfo().then((info: any) => {
+          setCurrentTime(info.position || 0);
+          setDuration(info.duration || 0);
+          setIsPlaying(info.isPlaying);
+          if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && info.duration > 0) {
+            try {
+              navigator.mediaSession.setPositionState({
+                duration: info.duration,
+                playbackRate: 1,
+                position: Math.min(info.position || 0, info.duration)
+              });
+            } catch {}
+          }
+          if (roomIdRef.current && isHostRef.current && Date.now() - lastBroadcastRef.current > 4000) {
+            lastBroadcastRef.current = Date.now();
+            broadcastState(info.position || 0, true, currentTrackRef.current);
+          }
+        }).catch(() => {});
+      }, 500);
+      return () => clearInterval(interval);
+    }
+  }, []);
 
   const startPollingProgress = () => {
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
     progressIntervalRef.current = window.setInterval(() => {
       if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === "function") {
-        const time = ytPlayerRef.current.getCurrentTime() || 0;
+        const ct = ytPlayerRef.current.getCurrentTime() || 0;
         const dur = ytPlayerRef.current.getDuration() || 0;
-        setCurrentTime(time);
+        setCurrentTime(ct);
         setDuration(dur);
-
-        // Update Chrome's MediaSession timeline to enable skip/prev buttons on overlay
-        if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && dur > 0) {
-          try {
-            navigator.mediaSession.setPositionState({
-              duration: dur,
-              playbackRate: 1,
-              position: Math.min(time, dur)
-            });
-          } catch (e) {
-            console.warn("Failed to set position state:", e);
-          }
-        }
-
-        // Periodically broadcast state to listeners every 4 seconds to maintain sync
+        // Broadcast for Listen Together
         if (roomIdRef.current && isHostRef.current && Date.now() - lastBroadcastRef.current > 4000) {
           lastBroadcastRef.current = Date.now();
-          broadcastState(time, true, currentTrackRef.current);
+          broadcastState(ct, true, currentTrackRef.current);
         }
       }
     }, 500);
@@ -270,143 +360,36 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Initialize YouTube IFrame Player
+  const showToast = (message: string, type: "info" | "success" | "error" = "info") => {
+    setToast({ message, type });
+  };
+
   useEffect(() => {
-    // 1. Create a hidden container for the YouTube iframe off-screen
-    let ytDiv = document.getElementById("youtube-player");
-    if (!ytDiv) {
-      ytDiv = document.createElement("div");
-      ytDiv.id = "youtube-player";
-      ytDiv.setAttribute(
-        "style",
-        "position: fixed; bottom: 10px; right: 10px; width: 200px; height: 200px; opacity: 1; pointer-events: none; z-index: -10;"
-      );
-      document.body.appendChild(ytDiv);
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
     }
+  }, [toast]);
 
-    // 2. Load YouTube IFrame API script if not present
-    if (!window.YT) {
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      const firstScriptTag = document.getElementsByTagName("script")[0];
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-    }
-
-    // Player initializer function
-    const initPlayer = () => {
-      ytPlayerRef.current = new window.YT.Player("youtube-player", {
-        height: "200",
-        width: "200",
-        playerVars: {
-          autoplay: 0,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          rel: 0,
-          showinfo: 0,
-          modestbranding: 1
-        },
-        events: {
-          onReady: (event: any) => {
-            event.target.setVolume(volume * 100);
-          },
-          onStateChange: (event: any) => {
-            // YT.PlayerState: -1 (unstarted), 0 (ended), 1 (playing), 2 (paused), 3 (buffering)
-            const state = event.data;
-            if (state === 1) {
-              setIsPlaying(true);
-              setIsLoading(false);
-              startPollingProgress();
-              if (isAndroid) {
-                Media3Session.setPlaybackState({ isPlaying: true }).catch(() => {});
-              }
-              // Force sync MediaSession metadata and handlers immediately when YouTube player transitions to playing state
-              syncMediaSessionRef.current();
-
-              // Sync target seek time for listener if set
-              if (!isHostRef.current && targetSeekTimeRef.current !== null) {
-                const targetPos = targetSeekTimeRef.current;
-                targetSeekTimeRef.current = null;
-                setTimeout(() => {
-                  if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === "function") {
-                    ytPlayerRef.current.seekTo(targetPos, true);
-                    setCurrentTime(targetPos);
-                  }
-                }, 50);
-              }
-
-              // Broadcast if host
-              if (roomIdRef.current && isHostRef.current) {
-                broadcastState(0, true, currentTrackRef.current);
-              }
-            } else if (state === 2) {
-              if (playbackExpectedRef.current) {
-                // If it paused but we expect it to play (e.g. background auto-pause or loaded in background)
-                // Force-resume it immediately.
-                if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === "function") {
-                  ytPlayerRef.current.playVideo();
-                }
-              } else {
-                stopPollingProgress();
-                if (isAndroid) {
-                  Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
-                }
-              }
-            } else if (state === 0) {
-              setIsPlaying(false);
-              stopPollingProgress();
-              if (isAndroid) {
-                Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
-              }
-              handleTrackEndedRef.current();
-            } else if (state === 3) {
-              setIsLoading(true);
-            }
-          },
-          onError: (e: any) => {
-            console.error("YouTube Player error:", e.data);
-            setIsPlaying(false);
-            setIsLoading(false);
-            showToast("Playback error: audio restricted in this region.", "error");
-          }
-        }
-      });
-    };
-
-    if (window.YT && window.YT.Player) {
-      initPlayer();
-    } else {
-      window.onYouTubeIframeAPIReady = initPlayer;
-    }
-
-    return () => {
-      stopPollingProgress();
-      if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === "function") {
-        ytPlayerRef.current.destroy();
-      }
-      const playerEl = document.getElementById("youtube-player");
-      if (playerEl) playerEl.remove();
-    };
-  }, []);
-
-  // Sync volume state
+  // Sync volume to YT player or Android
   useEffect(() => {
     if (isAndroid) {
-      Media3Session.setVolume({ volume: isMuted ? 0 : volume }).catch((err: any) => console.error("Volume sync failed", err));
+      Media3Session.setVolume({ volume: isMuted ? 0 : volume }).catch(() => {});
     } else if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === "function") {
       ytPlayerRef.current.setVolume(isMuted ? 0 : volume * 100);
     }
   }, [volume, isMuted]);
 
-  // Handle track ending logic
   const handleTrackEnded = () => {
     if (isRepeat === "one") {
-      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === "function") {
+      if (isAndroid) {
+        Media3Session.seek({ position: 0 });
+        Media3Session.setPlaybackState({ isPlaying: true });
+      } else if (ytPlayerRef.current) {
         ytPlayerRef.current.seekTo(0, true);
-        playbackExpectedRef.current = true;
         ytPlayerRef.current.playVideo();
-        setIsPlaying(true);
       }
+      setIsPlaying(true);
     } else {
       nextTrack();
     }
@@ -426,12 +409,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    // Start Web Audio silence to keep the tab awake in the background
-    startWebAudioSilence();
 
-    // Synchronously trigger silent audio play to bypass autoplay restrictions and register MediaSession
-    if (silentAudioRef.current) {
-      silentAudioRef.current.play().catch(err => console.warn("Autoplay bypass failed", err));
+    // Check track limit for guests
+    if (!currentUser && !isRemoteSync) {
+      const savedCount = localStorage.getItem("ibrastream_guest_tracks_played");
+      const playedCount = savedCount ? parseInt(savedCount, 10) : 0;
+      if (playedCount >= 3) {
+        showToast("Please create an account to continue listening", "error");
+        window.dispatchEvent(new Event("ibrastream_force_login"));
+        return;
+      }
+      localStorage.setItem("ibrastream_guest_tracks_played", String(playedCount + 1));
     }
 
     // Abort previous loading request if any
@@ -457,7 +445,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (newQueue) {
         setOriginalQueue(newQueue);
         if (isShuffle) {
-          // Shuffle the new queue, keeping the clicked track at index 0
           const otherTracks = newQueue.filter(t => t.id !== track.id);
           const shuffled = [track, ...shuffleArray(otherTracks)];
           setQueue(shuffled);
@@ -468,7 +455,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setCurrentIndex(index !== -1 ? index : 0);
         }
       } else {
-        // Direct playback from the existing queue
         const index = queue.findIndex(t => t.id === track.id);
         if (index !== -1) {
           setCurrentIndex(index);
@@ -483,43 +469,75 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     playbackExpectedRef.current = true;
     setCurrentTrack(track);
+
+    // Add to recently played in localStorage
+    try {
+      const saved = localStorage.getItem("ibrastream_recently_played");
+      let recent: Track[] = saved ? JSON.parse(saved) : [];
+      recent = recent.filter(t => t.id !== track.id);
+      recent.unshift(track);
+      recent = recent.slice(0, 50);
+      localStorage.setItem("ibrastream_recently_played", JSON.stringify(recent));
+      window.dispatchEvent(new Event("ibrastream_history_updated"));
+    } catch (e) {
+      console.error("Failed to save to recently played:", e);
+    }
     setIsPlaying(false);
     setIsLoading(true);
+
+    // Broadcast immediately if host
+    if (roomIdRef.current && isHostRef.current) {
+      broadcastState(0, true, track);
+    }
 
     try {
       const videoId = await getYouTubeVideoId(track, abortController.signal);
       if (abortController.signal.aborted) return;
 
-      if (!ytPlayerRef.current || typeof ytPlayerRef.current.loadVideoById !== "function") {
-        throw new Error("YouTube Player not fully initialized.");
-      }
-
-      if (typeof ytPlayerRef.current.unMute === "function") {
-        ytPlayerRef.current.unMute();
-      }
-      if (typeof ytPlayerRef.current.setVolume === "function") {
-        ytPlayerRef.current.setVolume(isMuted ? 0 : volume * 100);
-      }
-
-      ytPlayerRef.current.loadVideoById(videoId);
-
-      // Broadcast state change immediately if host
-      if (roomIdRef.current && isHostRef.current) {
-        broadcastState(0, true, track);
-      }
+      // Asynchronously fetch YouTube views count
+      import("../services/musicApi").then(async ({ getYoutubeClient }) => {
+        try {
+          const yt = await getYoutubeClient();
+          const info = await yt.getBasicInfo(videoId);
+          const views = info.basic_info.view_count;
+          if (views !== undefined && !abortController.signal.aborted) {
+            const formatViewCount = (count: number): string => {
+              if (count >= 1e9) return `${(count / 1e9).toFixed(1)}B`;
+              if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
+              if (count >= 1e3) return `${(count / 1e3).toFixed(1)}K`;
+              return String(count);
+            };
+            const playsFormatted = formatViewCount(views);
+            track.plays = playsFormatted;
+            setCurrentTrack(prev => prev && prev.id === track.id ? { ...prev, plays: playsFormatted } : prev);
+          }
+        } catch (e) {
+          console.warn("Failed to fetch YouTube views:", e);
+        }
+      });
 
       if (isAndroid) {
-        try {
-          await Media3Session.updateMetadata({
-            title: track.title,
-            artist: track.artist,
-            artwork: track.thumbnail,
-            duration: track.duration
-          });
-          await Media3Session.setPlaybackState({ isPlaying: true });
-        } catch (err) {
-          console.error("Native session setup failed:", err);
+        // Build a stream URL via Piped for Android native player
+        const streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+        if (abortController.signal.aborted) return;
+        await Media3Session.updateMetadata({
+          title: track.title,
+          artist: track.artist,
+          artwork: track.thumbnail,
+          duration: track.duration,
+          streamUrl
+        });
+        await Media3Session.setPlaybackState({ isPlaying: true });
+      } else {
+        // Web: use YouTube IFrame API
+        if (!ytPlayerRef.current || typeof ytPlayerRef.current.loadVideoById !== "function") {
+          // Player not ready yet — wait briefly and retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          if (!ytPlayerRef.current || typeof ytPlayerRef.current.loadVideoById !== "function") {
+            throw new Error("YouTube Player not fully initialized.");
+          }
         }
+        ytPlayerRef.current.loadVideoById(videoId);
       }
     } catch (err: any) {
       if (err.name === "AbortError") {
@@ -534,40 +552,80 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const getAndroidStreamUrl = async (videoId: string, _track: Track, signal?: AbortSignal): Promise<string> => {
+    try {
+      console.log("Trying primary deciphering via youtubei.js (Innertube) for Android...");
+      const { getYouTubeAudioStream } = await import("../services/musicApi");
+      const url = await getYouTubeAudioStream(videoId);
+      if (url) {
+        console.log("Successfully got stream URL via youtubei.js on Android, validating accessibility...");
+        const validateResponse = await fetch(url, { method: "HEAD", signal });
+        if (validateResponse.status === 403) {
+          throw new Error("Validation returned 403 Forbidden");
+        }
+        console.log(`Stream URL validated successfully: status ${validateResponse.status}`);
+        return url;
+      }
+    } catch (e) {
+      console.warn("youtubei.js stream resolution or validation failed on Android, falling back to Piped:", e);
+    }
+
+    const PIPED_HOSTS = [
+      "https://pipedapi.kavin.rocks",
+      "https://api.piped.private.coffee",
+      "https://pipedapi.lvk.li",
+    ];
+
+    for (const host of PIPED_HOSTS) {
+      try {
+        const r = await fetch(`${host}/streams/${videoId}`, {
+          signal,
+          headers: { "Accept": "application/json" }
+        });
+        if (!r.ok) continue;
+        const data = await r.json();
+        // Pick best audio stream
+        const audio = (data.audioStreams || [])
+          .filter((s: any) => s.mimeType?.includes("audio"))
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        if (audio?.url) {
+          console.log(`Got Android stream URL from ${host}`);
+          return audio.url;
+        }
+      } catch (e: any) {
+        if (e?.name === "AbortError") throw e;
+        console.warn(`Piped ${host} failed for Android:`, e);
+      }
+    }
+
+    throw new Error("Failed to get playback stream URL.");
+  };
+
   const togglePlay = () => {
     if (roomIdRef.current && !isHostRef.current) {
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (!ytPlayerRef.current || !currentTrack || typeof ytPlayerRef.current.playVideo !== "function") return;
 
-    // Start Web Audio silence to keep the tab awake in the background
-    startWebAudioSilence();
+    if (!currentTrack) return;
 
     const nextState = !isPlaying;
     playbackExpectedRef.current = nextState;
-    if (nextState) {
-      if (silentAudioRef.current) {
-        silentAudioRef.current.play().catch(err => console.warn("Silent audio play failed", err));
-      }
-      ytPlayerRef.current.playVideo();
-      setIsPlaying(true);
-      startPollingProgress();
-    } else {
-      if (silentAudioRef.current) {
-        silentAudioRef.current.pause();
-      }
-      ytPlayerRef.current.pauseVideo();
-      setIsPlaying(false);
-      stopPollingProgress();
-    }
 
     if (isAndroid) {
       Media3Session.setPlaybackState({ isPlaying: nextState })
         .catch((err: any) => console.error("Toggle play failed", err));
+    } else {
+      if (!ytPlayerRef.current) return;
+      if (nextState) {
+        ytPlayerRef.current.playVideo?.();
+      } else {
+        ytPlayerRef.current.pauseVideo?.();
+      }
     }
 
-    // Broadcast if host
+    setIsPlaying(nextState);
+
     if (roomIdRef.current && isHostRef.current) {
       broadcastState(undefined, nextState, currentTrackRef.current);
     }
@@ -581,20 +639,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (queue.length === 0) return;
 
     let nextIdx = currentIndex + 1;
-
     if (nextIdx >= queue.length) {
       if (isRepeat === "all") {
         nextIdx = 0;
       } else {
         playbackExpectedRef.current = false;
         setIsPlaying(false);
-        return; // End of playlist
+        return;
       }
     }
 
-    if (queue[nextIdx]) {
-      playTrack(queue[nextIdx]);
-    }
+    if (queue[nextIdx]) playTrack(queue[nextIdx]);
   };
 
   const prevTrack = () => {
@@ -610,18 +665,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     let prevIdx = currentIndex - 1;
-
     if (prevIdx < 0) {
-      if (isRepeat === "all") {
-        prevIdx = queue.length - 1;
-      } else {
-        prevIdx = 0; // Remain on first track
-      }
+      prevIdx = isRepeat === "all" ? queue.length - 1 : 0;
     }
 
-    if (queue[prevIdx]) {
-      playTrack(queue[prevIdx]);
-    }
+    if (queue[prevIdx]) playTrack(queue[prevIdx]);
   };
 
   const seek = (time: number, isRemoteSync?: boolean) => {
@@ -629,25 +677,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (!ytPlayerRef.current || typeof ytPlayerRef.current.seekTo !== "function") return;
-    ytPlayerRef.current.seekTo(time, true);
+    if (isAndroid) {
+      Media3Session.seek({ position: time }).catch(() => {});
+    } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === "function") {
+      ytPlayerRef.current.seekTo(time, true);
+    }
     setCurrentTime(time);
 
-    if (isAndroid) {
-      Media3Session.seek({ position: time }).catch((err: any) => console.error("Seek failed", err));
-    } else if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && duration > 0) {
+    if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && duration > 0) {
       try {
         navigator.mediaSession.setPositionState({
-          duration: duration,
+          duration,
           playbackRate: 1,
           position: Math.min(time, duration)
         });
-      } catch (e) {
-        console.warn("Failed to set position state during seek:", e);
-      }
+      } catch {}
     }
 
-    // Broadcast if host
     if (roomIdRef.current && isHostRef.current) {
       broadcastState(time, undefined, currentTrackRef.current);
     }
@@ -656,21 +702,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const changeVolume = (vol: number) => {
     const clamped = Math.max(0, Math.min(1, vol));
     setVolume(clamped);
-    if (clamped > 0) {
-      setIsMuted(false);
-    }
+    if (clamped > 0) setIsMuted(false);
     if (isAndroid) {
-      Media3Session.setVolume({ volume: isMuted ? 0 : clamped }).catch((err: any) => console.error("Volume set failed", err));
+      Media3Session.setVolume({ volume: clamped }).catch(() => {});
     }
   };
 
-  const toggleMute = () => {
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-    if (isAndroid) {
-      Media3Session.setVolume({ volume: nextMuted ? 0 : volume }).catch((err: any) => console.error("Volume set failed", err));
-    }
-  };
+  const toggleMute = () => setIsMuted(prev => !prev);
 
   const toggleShuffle = () => {
     if (roomIdRef.current && !isHostRef.current) {
@@ -679,23 +717,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     const nextShuffle = !isShuffle;
     setIsShuffle(nextShuffle);
-    
+
     if (nextShuffle) {
-      // Turn Shuffle ON
       setOriginalQueue(queue);
       if (currentTrack) {
-        const otherTracks = queue.filter(t => t.id !== currentTrack.id);
-        const shuffled = [currentTrack, ...shuffleArray(otherTracks)];
-        setQueue(shuffled);
+        const others = queue.filter(t => t.id !== currentTrack.id);
+        setQueue([currentTrack, ...shuffleArray(others)]);
         setCurrentIndex(0);
       } else {
-        const shuffled = shuffleArray(queue);
-        setQueue(shuffled);
+        setQueue(shuffleArray(queue));
         setCurrentIndex(0);
       }
       showToast("Shuffle on", "info");
     } else {
-      // Turn Shuffle OFF
       if (originalQueue.length > 0) {
         setQueue(originalQueue);
         if (currentTrack) {
@@ -713,9 +747,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     setIsRepeat(prev => {
-      let nextState: "none" | "one" | "all" = "none";
-      if (prev === "none") nextState = "all";
-      if (prev === "all") nextState = "one";
+      const nextState: "none" | "one" | "all" = prev === "none" ? "all" : prev === "all" ? "one" : "none";
       showToast(nextState === "none" ? "Repeat off" : nextState === "all" ? "Repeat playlist" : "Repeat track", "info");
       return nextState;
     });
@@ -740,38 +772,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    // 1. Remove if already in queue to avoid duplicates
     const cleanedQueue = queue.filter(t => t.id !== track.id);
     const cleanedOriginal = originalQueue.filter(t => t.id !== track.id);
-    
-    // Find current index in cleanedQueue
     const currentId = currentTrack?.id;
     const activeIdx = cleanedQueue.findIndex(t => t.id === currentId);
-    
-    let newQueue = [...cleanedQueue];
+
+    const newQueue = [...cleanedQueue];
     if (activeIdx !== -1) {
       newQueue.splice(activeIdx + 1, 0, track);
     } else {
       newQueue.unshift(track);
     }
-    
-    let newOriginal = [...cleanedOriginal];
+
+    const newOriginal = [...cleanedOriginal];
     const originalActiveIdx = cleanedOriginal.findIndex(t => t.id === currentId);
     if (originalActiveIdx !== -1) {
       newOriginal.splice(originalActiveIdx + 1, 0, track);
     } else {
       newOriginal.unshift(track);
     }
-    
+
     setQueue(newQueue);
     setOriginalQueue(newOriginal);
-    
-    // Recalculate index
+
     const newIdx = newQueue.findIndex(t => t.id === currentId);
-    if (newIdx !== -1) {
-      setCurrentIndex(newIdx);
-    }
-    
+    if (newIdx !== -1) setCurrentIndex(newIdx);
+
     showToast(`"${track.title}" will play next`, "success");
   };
 
@@ -803,54 +829,40 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     if (fromIndex < 0 || fromIndex >= queue.length || toIndex < 0 || toIndex >= queue.length) return;
-    
+
     const updated = [...queue];
     const [movedItem] = updated.splice(fromIndex, 1);
     updated.splice(toIndex, 0, movedItem);
     setQueue(updated);
 
-    // Sync originalQueue
     const updatedOriginal = [...originalQueue];
     const originalFromIdx = updatedOriginal.findIndex(t => t.id === movedItem.id);
     if (originalFromIdx !== -1) {
       const [movedOriginal] = updatedOriginal.splice(originalFromIdx, 1);
-      // Determine where to insert it in original queue
-      const targetOriginalIdx = Math.max(0, Math.min(updatedOriginal.length, toIndex));
-      updatedOriginal.splice(targetOriginalIdx, 0, movedOriginal);
+      updatedOriginal.splice(Math.max(0, Math.min(updatedOriginal.length, toIndex)), 0, movedOriginal);
       setOriginalQueue(updatedOriginal);
     }
 
-    // Update currentIndex to follow the currently playing track
     if (currentIndex === fromIndex) {
       setCurrentIndex(toIndex);
     } else {
       let newIdx = currentIndex;
-      if (currentIndex > fromIndex && currentIndex <= toIndex) {
-        newIdx = currentIndex - 1;
-      } else if (currentIndex < fromIndex && currentIndex >= toIndex) {
-        newIdx = currentIndex + 1;
-      }
+      if (currentIndex > fromIndex && currentIndex <= toIndex) newIdx = currentIndex - 1;
+      else if (currentIndex < fromIndex && currentIndex >= toIndex) newIdx = currentIndex + 1;
       setCurrentIndex(newIdx);
     }
   };
 
-  // Keyboard and Media Session Controls
+  // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Avoid intercepting keyboard controls when typing in inputs/textareas
       const activeEl = document.activeElement;
-      if (
-        activeEl &&
-        (activeEl.tagName === "INPUT" ||
-          activeEl.tagName === "TEXTAREA" ||
-          activeEl.getAttribute("contenteditable") === "true")
-      ) {
+      if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.getAttribute("contenteditable") === "true")) {
         return;
       }
-
       if (e.code === "Space" || e.key === " ") {
         e.preventDefault();
-        togglePlay();
+        togglePlayRef.current();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         seek(Math.max(0, currentTime - 5));
@@ -868,83 +880,47 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         toggleMute();
       } else if (e.key === "MediaTrackNext" || e.key === "F8") {
         e.preventDefault();
-        nextTrack();
+        nextTrackRef.current();
       } else if (e.key === "MediaTrackPrevious" || e.key === "F6") {
         e.preventDefault();
-        prevTrack();
+        prevTrackRef.current();
       } else if (e.key === "F7") {
         e.preventDefault();
-        togglePlay();
+        togglePlayRef.current();
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isPlaying, currentTrack, nextTrack, prevTrack, togglePlay, currentTime, duration, volume, seek, changeVolume, toggleMute]);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentTime, duration, volume]);
 
   const syncMediaSession = () => {
     if (!currentTrack || !("mediaSession" in navigator)) return;
-
     try {
-      // 1. Sync metadata
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentTrack.title,
         artist: currentTrack.artist,
         album: currentTrack.albumName || "",
         artwork: [
           { src: currentTrack.thumbnail, sizes: "96x96", type: "image/jpeg" },
-          { src: currentTrack.thumbnail, sizes: "128x128", type: "image/jpeg" },
-          { src: currentTrack.thumbnail, sizes: "192x192", type: "image/jpeg" },
           { src: currentTrack.thumbnail, sizes: "256x256", type: "image/jpeg" },
-          { src: currentTrack.thumbnail, sizes: "384x384", type: "image/jpeg" },
           { src: currentTrack.thumbnail, sizes: "512x512", type: "image/jpeg" },
         ]
       });
-
-      // 2. Sync playback state
       navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-
-      // 3. Sync action handlers to override YouTube iframe defaults
-      navigator.mediaSession.setActionHandler("play", () => {
-        togglePlayRef.current();
-      });
-      navigator.mediaSession.setActionHandler("pause", () => {
-        togglePlayRef.current();
-      });
-      navigator.mediaSession.setActionHandler("nexttrack", () => {
-        nextTrackRef.current();
-      });
-      navigator.mediaSession.setActionHandler("previoustrack", () => {
-        prevTrackRef.current();
-      });
-    } catch (error) {
-      console.warn("Failed to sync Media Session:", error);
-    }
+      navigator.mediaSession.setActionHandler("play", () => togglePlayRef.current());
+      navigator.mediaSession.setActionHandler("pause", () => togglePlayRef.current());
+      navigator.mediaSession.setActionHandler("nexttrack", () => nextTrackRef.current());
+      navigator.mediaSession.setActionHandler("previoustrack", () => prevTrackRef.current());
+    } catch {}
   };
 
-  // Sync Media Session and schedule delayed retries to override YouTube player asynchronously
   useEffect(() => {
     syncMediaSession();
-
-    // Schedule retries in case YouTube iframe script delays overwriting mediaSession
-    const t1 = setTimeout(syncMediaSession, 200);
-    const t2 = setTimeout(syncMediaSession, 500);
-    const t3 = setTimeout(syncMediaSession, 1000);
-    const t4 = setTimeout(syncMediaSession, 2000);
-    const t5 = setTimeout(syncMediaSession, 4000);
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-      clearTimeout(t4);
-      clearTimeout(t5);
-    };
+    const t1 = setTimeout(syncMediaSession, 300);
+    const t2 = setTimeout(syncMediaSession, 1000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [currentTrack, isPlaying]);
 
-  // Clean up action handlers only when the audio provider is fully unmounted
   useEffect(() => {
     return () => {
       if ("mediaSession" in navigator) {
@@ -953,13 +929,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           navigator.mediaSession.setActionHandler("pause", null);
           navigator.mediaSession.setActionHandler("nexttrack", null);
           navigator.mediaSession.setActionHandler("previoustrack", null);
-        } catch (error) {
-          console.warn("Media Session Action Handler cleanup failed:", error);
-        }
+        } catch {}
       }
     };
   }, []);
 
+  // Listen Together
   const leaveRoom = () => {
     if (channelRef.current) {
       channelRef.current.unsubscribe();
@@ -972,25 +947,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast("Left Listen Together room", "info");
   };
 
-  const primeYouTubePlayer = () => {
-    if (ytPlayerRef.current && typeof ytPlayerRef.current.loadVideoById === "function") {
-      try {
-        ytPlayerRef.current.mute();
-        ytPlayerRef.current.loadVideoById("dQw4w9WgXcQ");
-        ytPlayerRef.current.playVideo();
-      } catch (err) {
-        console.warn("Failed to prime YouTube player:", err);
-      }
-    }
-  };
-
   const createRoom = () => {
-    leaveRoom();
-    startWebAudioSilence();
-    primeYouTubePlayer();
-    if (silentAudioRef.current) {
-      silentAudioRef.current.play().catch(err => console.warn("Autoplay bypass failed on room creation", err));
+    if (!currentUser) {
+      showToast("Please login to create a Listen Together room", "error");
+      window.dispatchEvent(new Event("ibrastream_force_login"));
+      return;
     }
+    leaveRoom();
     const newRoomId = `ROOM-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     setRoomId(newRoomId);
     setIsHost(true);
@@ -998,13 +961,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const joinRoom = (targetRoomId: string) => {
+    if (!currentUser) {
+      showToast("Please login to join a Listen Together room", "error");
+      window.dispatchEvent(new Event("ibrastream_force_login"));
+      return;
+    }
     if (!targetRoomId.trim()) return;
     leaveRoom();
-    startWebAudioSilence();
-    primeYouTubePlayer();
-    if (silentAudioRef.current) {
-      silentAudioRef.current.play().catch(err => console.warn("Autoplay bypass failed on room join", err));
-    }
     const cleanId = targetRoomId.trim().toUpperCase();
     setRoomId(cleanId);
     setIsHost(false);
@@ -1012,7 +975,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const joinChannel = (roomName: string, hostFlag: boolean) => {
-    console.log(`[ListenTogether] JoinChannel called. roomName=${roomName}, hostFlag=${hostFlag}, clientId=${clientIdRef.current}`);
     const channel = supabase.channel(roomName, {
       config: {
         broadcast: { self: false },
@@ -1022,57 +984,39 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     channel
       .on("broadcast", { event: "state_change" }, (msg: any) => {
-        console.log("[ListenTogether] Received state_change broadcast:", msg);
-        if (hostFlag) {
-          console.log("[ListenTogether] Host ignoring state_change broadcast.");
-          return;
-        }
+        if (hostFlag) return;
         handleRemoteState(msg.payload);
       })
-      .on("broadcast", { event: "request_state" }, (msg: any) => {
-        console.log("[ListenTogether] Received request_state broadcast:", msg);
-        if (!hostFlag) {
-          console.log("[ListenTogether] Listener ignoring request_state broadcast.");
-          return;
-        }
-        console.log("[ListenTogether] Host responding to request_state broadcast.");
+      .on("broadcast", { event: "request_state" }, (_msg: any) => {
+        if (!hostFlag) return;
         broadcastState(undefined, undefined, currentTrackRef.current);
       });
 
-    // Setup Presence to track participants
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
-      console.log("[ListenTogether] Presence Sync. Current state:", state);
-      const users: { id: string; name: string }[] = [];
-      Object.keys(state).forEach((key) => {
+      const users: { id: string; name: string; pfp?: string }[] = [];
+      Object.keys(state).forEach(key => {
         const presences = state[key] as any;
-        presences.forEach((p: any) => {
-          users.push({ id: key, name: p.name || `User ${key.substring(0, 4)}` });
-        });
+        presences.forEach((p: any) => users.push({
+          id: key,
+          name: p.name || `User ${key.substring(0, 4)}`,
+          pfp: p.pfp || ""
+        }));
       });
-      console.log("[ListenTogether] Connected participants list updated:", users);
       setParticipants(users);
     });
 
     channel.subscribe((status: string) => {
-      console.log(`[ListenTogether] Channel subscribe status update: ${status}`);
       if (status === "SUBSCRIBED") {
         setIsConnected(true);
-        channel.track({ name: userNameRef.current, joinedAt: Date.now() })
-          .then((res) => console.log("[ListenTogether] presence track result:", res))
-          .catch((err) => console.error("[ListenTogether] presence track error:", err));
+        channel.track({
+          name: userNameRef.current,
+          pfp: userPfpRef.current,
+          joinedAt: Date.now()
+        }).catch(() => {});
         showToast(`Connected to room ${roomName}`, "success");
-        
         if (!hostFlag) {
-          console.log("[ListenTogether] Listener requesting current state from host...");
-          // Request current state from host
-          channel.send({
-            type: "broadcast",
-            event: "request_state",
-            payload: { requesterId: clientIdRef.current }
-          }).then((res) => {
-            console.log("[ListenTogether] request_state send result:", res);
-          });
+          channel.send({ type: "broadcast", event: "request_state", payload: { requesterId: clientIdRef.current } });
         }
       } else {
         setIsConnected(false);
@@ -1083,17 +1027,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const handleRemoteState = async (payload: any) => {
-    console.log("[ListenTogether] handleRemoteState payload:", payload);
     const { track, isPlaying: remoteIsPlaying, position, queue: remoteQueue, currentIndex: remoteCurrentIndex, timestamp } = payload;
-    if (!track) {
-      console.log("[ListenTogether] handleRemoteState: no track in payload, aborting.");
-      return;
-    }
+    if (!track) return;
 
     try {
-      // Sync queue and index first so local lists and PlayerPanel are aligned
       if (remoteQueue && Array.isArray(remoteQueue)) {
-        console.log("[ListenTogether] Syncing queue. Size:", remoteQueue.length, "Index:", remoteCurrentIndex);
         setQueue(remoteQueue);
         setOriginalQueue(remoteQueue);
         if (remoteCurrentIndex !== undefined && remoteCurrentIndex !== -1) {
@@ -1101,143 +1039,93 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      // Calculate elapsed time due to latency
       const latency = (Date.now() - timestamp) / 1000;
       const targetPosition = position + Math.max(0, latency);
-      console.log(`[ListenTogether] Latency: ${latency.toFixed(3)}s, Target position: ${targetPosition.toFixed(2)}s`);
 
-      // 1. Sync track if different
       if (!currentTrackRef.current || currentTrackRef.current.id !== track.id) {
-        console.log(`[ListenTogether] Changing track from ${currentTrackRef.current?.title || "none"} to ${track.title}`);
         if (remoteIsPlaying) {
           targetSeekTimeRef.current = targetPosition;
-          console.log(`[ListenTogether] Set targetSeekTimeRef to ${targetPosition.toFixed(2)}`);
         } else {
           targetSeekTimeRef.current = null;
         }
         await playTrack(track, undefined, undefined, true);
       } else {
-        // 2. Sync seek position if drift > 2 seconds
-        if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === "function") {
-          const currentPos = ytPlayerRef.current.getCurrentTime() || 0;
-          const drift = Math.abs(currentPos - targetPosition);
-          console.log(`[ListenTogether] Drift: ${drift.toFixed(2)}s (Local: ${currentPos.toFixed(2)}s, Target: ${targetPosition.toFixed(2)}s)`);
-          if (drift > 2) {
-            console.log("[ListenTogether] Drift exceeded 2s. Seeking...");
-            seek(targetPosition, true);
-          }
-        }
+        const drift = Math.abs(currentTime - targetPosition);
+        if (drift > 2) seek(targetPosition, true);
       }
 
-      // 3. Sync play/pause state
       if (remoteIsPlaying !== isPlayingRef.current) {
-        console.log(`[ListenTogether] Syncing playback state. Remote: ${remoteIsPlaying}, Local: ${isPlayingRef.current}`);
         playbackExpectedRef.current = remoteIsPlaying;
         if (remoteIsPlaying) {
-          if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === "function") {
-            ytPlayerRef.current.playVideo();
-            setIsPlaying(true);
-          }
+          if (isAndroid) Media3Session.setPlaybackState({ isPlaying: true });
+          else ytPlayerRef.current?.playVideo?.();
+          setIsPlaying(true);
         } else {
-          if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === "function") {
-            ytPlayerRef.current.pauseVideo();
-            setIsPlaying(false);
-          }
+          if (isAndroid) Media3Session.setPlaybackState({ isPlaying: false });
+          else ytPlayerRef.current?.pauseVideo?.();
+          setIsPlaying(false);
         }
       }
     } catch (err) {
-      console.warn("[ListenTogether] Failed to apply remote playback state:", err);
+      console.warn("[ListenTogether] Failed to apply remote state:", err);
     }
   };
 
   const broadcastState = (customPosition?: number, forceIsPlaying?: boolean, customTrack?: Track | null) => {
-    console.log(`[ListenTogether] broadcastState. roomId=${roomIdRef.current}, isHost=${isHostRef.current}, channelActive=${!!channelRef.current}`);
     if (!roomIdRef.current || !isHostRef.current || !channelRef.current) return;
-    
-    const pos = customPosition !== undefined ? customPosition : (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === "function" ? ytPlayerRef.current.getCurrentTime() : 0);
-    const playing = forceIsPlaying !== undefined ? forceIsPlaying : isPlayingRef.current;
     const trackToBroadcast = customTrack !== undefined ? customTrack : currentTrackRef.current;
-
-    console.log(`[ListenTogether] Broadcasting: track=${trackToBroadcast?.title}, playing=${playing}, position=${pos}`);
-    if (!trackToBroadcast) {
-      console.log("[ListenTogether] No track to broadcast, aborting.");
-      return;
-    }
+    if (!trackToBroadcast) return;
 
     channelRef.current.send({
       type: "broadcast",
       event: "state_change",
       payload: {
         track: trackToBroadcast,
-        isPlaying: playing,
-        position: pos,
+        isPlaying: forceIsPlaying !== undefined ? forceIsPlaying : isPlayingRef.current,
+        position: customPosition !== undefined ? customPosition : currentTime,
         queue: queueRef.current,
         currentIndex: currentIndexRef.current,
         timestamp: Date.now()
       }
-    }).then((res: any) => {
-      console.log("[ListenTogether] broadcastState send result:", res);
     });
   };
 
-  // Clean up channel on unmount
   useEffect(() => {
     return () => {
-      if (channelRef.current) {
-        channelRef.current.unsubscribe();
-      }
+      if (channelRef.current) channelRef.current.unsubscribe();
     };
   }, []);
 
-  // Listen to native player events on Android
+  // Android: native Media3 listeners
   useEffect(() => {
-    if (isAndroid) {
-      try {
-        Media3Session.addListener("onIsPlayingChanged", (data: { isPlaying: boolean }) => {
-          setIsPlaying(data.isPlaying);
-          if (data.isPlaying) {
-            if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === "function") {
-              ytPlayerRef.current.playVideo();
-            }
-            startPollingProgress();
-          } else {
-            if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === "function") {
-              ytPlayerRef.current.pauseVideo();
-            }
-            stopPollingProgress();
-          }
-        });
-
-        Media3Session.addListener("onPlaybackEnded", () => {
-          console.log("Native track ended event received");
-          if (handleTrackEndedRef.current) {
-            handleTrackEndedRef.current();
-          }
-        });
-
-        Media3Session.addListener("onNotificationCommand", (data: { command: string; position?: number }) => {
-          console.log("Native notification command received:", data.command);
-          if (data.command === "next") {
-            nextTrack();
-          } else if (data.command === "previous") {
-            prevTrack();
-          } else if (data.command === "seek" && data.position !== undefined) {
-            if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === "function") {
-              const diff = Math.abs(ytPlayerRef.current.getCurrentTime() - data.position);
-              if (diff > 2) {
-                seek(data.position);
-              }
-            }
-          }
-        });
-      } catch (err) {
-        console.warn("Failed to register native media session listeners:", err);
-      }
-
-      return () => {
-        Media3Session.removeAllListeners().catch((err: any) => console.warn("Failed to remove all listeners:", err));
-      };
+    if (!isAndroid) return;
+    try {
+      Media3Session.addListener("onIsPlayingChanged", (data: { isPlaying: boolean }) => {
+        setIsPlaying(data.isPlaying);
+        if (data.isPlaying) setIsLoading(false);
+      });
+      Media3Session.addListener("onPlaybackReady", () => setIsLoading(false));
+      Media3Session.addListener("onPlaybackError", (data: { error: string }) => {
+        console.error("Native playback error:", data.error);
+        setIsLoading(false);
+        setIsPlaying(false);
+        showToast("Playback error. Skipping...", "error");
+        setTimeout(() => nextTrack(), 2000);
+      });
+      Media3Session.addListener("onPlaybackEnded", () => {
+        handleTrackEndedRef.current();
+      });
+      Media3Session.addListener("onNotificationCommand", (data: { command: string; position?: number }) => {
+        if (data.command === "next") nextTrack();
+        else if (data.command === "previous") prevTrack();
+        else if (data.command === "seek" && data.position !== undefined) seek(data.position);
+      });
+    } catch (err) {
+      console.warn("Failed to register native listeners:", err);
     }
+    return () => {
+      Media3Session.removeAllListeners().catch(() => {});
+    };
   }, [currentIndex, queue, isRepeat]);
 
   return (
@@ -1278,7 +1166,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         participants,
         createRoom,
         joinRoom,
-        leaveRoom
+        leaveRoom,
+        updateUserIdentity,
       }}
     >
       {children}

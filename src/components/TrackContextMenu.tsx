@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Play, Heart, ListPlus, Plus, Music, User, Copy, Trash2, ChevronRight, Disc } from "lucide-react";
+import { Play, Heart, ListPlus, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare } from "lucide-react";
 import type { Track } from "../services/musicApi";
 
 interface TrackContextMenuProps {
@@ -18,6 +18,7 @@ interface TrackContextMenuProps {
   onAddToPlaylist: (playlistId: string) => void;
   onRemoveFromPlaylist?: () => void;
   onPlayNext?: () => void;
+  onSelect?: () => void;
 }
 
 export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
@@ -35,7 +36,8 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   onShare,
   onAddToPlaylist,
   onRemoveFromPlaylist,
-  onPlayNext
+  onPlayNext,
+  onSelect
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [adjustedCoords, setAdjustedCoords] = useState({ left: x, top: y });
@@ -117,6 +119,20 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
         </div>
       </div>
+
+      {/* Select option */}
+      {onSelect && (
+        <button
+          onClick={() => {
+            onSelect();
+            onClose();
+          }}
+          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-b border-white/5 pb-2.5 mb-1"
+        >
+          <CheckSquare className="w-4 h-4 text-brand-accent" />
+          <span className="text-brand-accent font-medium">Select</span>
+        </button>
+      )}
 
       {/* Playlist submenu trigger */}
       <div

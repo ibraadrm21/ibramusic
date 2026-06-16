@@ -7,12 +7,25 @@ import androidx.media3.session.MediaController;
 import androidx.media3.session.SessionToken;
 import com.getcapacitor.BridgeActivity;
 import com.google.common.util.concurrent.ListenableFuture;
-
+import android.util.Log;
 public class MainActivity extends BridgeActivity {
+    public static boolean isAppInForeground = false;
     private ListenableFuture<MediaController> controllerFuture;
 
     public ListenableFuture<MediaController> getControllerFuture() {
         return controllerFuture;
+    }
+
+    private void setNativePlayerVolume(float volume) {
+        if (PlaybackService.customPlayer != null) {
+            try {
+                float targetVol = (volume > 0f) ? PlaybackService.userVolume : 0f;
+                https://github.com/anandnet/Harmony-Music PlaybackService.customPlayer.setVolume(targetVol);
+                Log.e("IbraStreamMedia", "MainActivity: setNativePlayerVolume=" + targetVol);
+            } catch (Exception e) {
+                Log.e("IbraStreamMedia", "Failed to set native player volume", e);
+            }
+        }
     }
 
     @Override
@@ -21,6 +34,22 @@ public class MainActivity extends BridgeActivity {
         SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
 
+        // Explicitly start the PlaybackService so it runs independently of Activity lifecycle
+        try {
+            android.content.Intent serviceIntent = new android.content.Intent(this, PlaybackService.class);
+            startService(serviceIntent);
+            Log.e("IbraStreamMedia", "MainActivity: PlaybackService started via startService");
+        } catch (Exception e) {
+            Log.e("IbraStreamMedia", "MainActivity: Failed to start PlaybackService", e);
+        }
+
+        // Request POST_NOTIFICATIONS permission on Android 13+ to ensure foreground service notifications are visible
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+
         SessionToken sessionToken = new SessionToken(this, new ComponentName(this, PlaybackService.class));
         controllerFuture = new MediaController.Builder(this, sessionToken).buildAsync();
     }
@@ -28,10 +57,19 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPause() {
         super.onPause();
-        if (this.bridge != null && this.bridge.getWebView() != null) {
-            this.bridge.getWebView().resumeTimers();
-            this.bridge.getWebView().onResume();
-        }
+        isAppInForeground = false;
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        isAppInForeground = false;
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        isAppInForeground = true;
     }
 
     @Override

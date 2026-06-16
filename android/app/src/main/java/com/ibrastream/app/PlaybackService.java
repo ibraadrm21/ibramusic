@@ -15,6 +15,7 @@ import androidx.media3.session.SessionResult;
 public class PlaybackService extends MediaSessionService {
     private static final String TAG = "IbraStreamService";
     public static CustomPlayerWrapper customPlayer = null;
+    public static float userVolume = 1f;
     private MediaSession mediaSession = null;
     private ExoPlayer player = null;
 
@@ -28,10 +29,49 @@ public class PlaybackService extends MediaSessionService {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build();
 
+        androidx.media3.datasource.DefaultHttpDataSource.Factory httpDataSourceFactory = 
+            new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36");
+        
+        androidx.media3.datasource.DefaultDataSource.Factory dataSourceFactory = 
+            new androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory);
+        
+        androidx.media3.exoplayer.source.DefaultMediaSourceFactory mediaSourceFactory = 
+            new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
+                .setDataSourceFactory(dataSourceFactory);
+
         player = new ExoPlayer.Builder(this)
-                .setAudioAttributes(audioAttributes, false)
+                .setAudioAttributes(audioAttributes, true)
                 .setHandleAudioBecomingNoisy(true)
+                .setMediaSourceFactory(mediaSourceFactory)
                 .build();
+        
+        player.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int state) {
+                String stateStr = "UNKNOWN";
+                if (state == Player.STATE_IDLE) stateStr = "IDLE";
+                else if (state == Player.STATE_BUFFERING) stateStr = "BUFFERING";
+                else if (state == Player.STATE_READY) stateStr = "READY";
+                else if (state == Player.STATE_ENDED) stateStr = "ENDED";
+                Log.e(TAG, "ExoPlayer: onPlaybackStateChanged=" + stateStr);
+            }
+
+            @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                Log.e(TAG, "ExoPlayer: onPlayWhenReadyChanged=" + playWhenReady + ", reason=" + reason);
+            }
+
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                Log.e(TAG, "ExoPlayer: onPlayerError=" + error.getMessage(), error);
+            }
+
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                Log.e(TAG, "ExoPlayer: onIsPlayingChanged=" + isPlaying);
+            }
+        });
         
         player.setVolume(1f);
         player.setRepeatMode(Player.REPEAT_MODE_ALL);

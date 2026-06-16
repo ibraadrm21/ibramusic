@@ -10,13 +10,18 @@ const config: CapacitorConfig = {
       keystoreAlias: undefined,
     }
   },
+  /*
   server: {
     url: 'http://localhost:5173',
     cleartext: true
   },
+  */
   plugins: {
     SplashScreen: {
       launchShowDuration: 0,
+    },
+    CapacitorHttp: {
+      enabled: true,
     },
   },
 };

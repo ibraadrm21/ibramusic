@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
-  Volume2, VolumeX, Info, ExternalLink, Disc, Mic
+  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
@@ -82,6 +82,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   const [plainLyrics, setPlainLyrics] = useState<string>("");
   const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
   const [monthlyListeners, setMonthlyListeners] = useState<number | undefined>(undefined);
+  const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+
 
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -197,7 +199,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   };
 
   return (
-    <div className="h-full flex flex-col justify-between p-6 md:p-8 glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none">
+    <div className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none">
       
       {/* Header Controls */}
       <div className="flex items-center justify-between mb-6 shrink-0">
@@ -223,15 +225,19 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             <Mic className="w-3.5 h-3.5" /> Lyrics
           </button>
         </div>
-        <button className="p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white">
+        <button 
+          onClick={() => setShowInfoModal(true)}
+          className="p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white"
+        >
           <Info className="w-4.5 h-4.5" />
         </button>
+
       </div>
 
       {/* Main Content Area: Album Art or Lyrics */}
       {view === "info" ? (
         /* Album Artwork Container */
-        <div className="flex-1 flex flex-col items-center justify-center my-4 min-h-0">
+        <div className="flex-1 shrink-0 flex flex-col items-center justify-center my-4">
           <div className="relative group w-64 md:w-72 aspect-square rounded-[32px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink-0">
             <div className="w-full h-full rounded-[28px] overflow-hidden relative">
               <img
@@ -270,16 +276,17 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             >
               {lyrics.map((line, idx) => {
                 const isActive = idx === activeLineIndex;
+                const isPast = idx < activeLineIndex;
                 return (
                   <p
                     key={idx}
                     onClick={() => seek(line.time)}
-                    className={`text-lg md:text-xl font-bold cursor-pointer transition-all duration-300 text-left origin-left leading-relaxed ${
+                    className={`lyrics-line text-lg md:text-xl font-bold cursor-pointer transition-all duration-300 text-left origin-left leading-relaxed ${
                       isActive 
                         ? "lyrics-active-line text-white scale-105 filter drop-shadow-[0_0_12px_rgba(255,255,255,0.4)] opacity-100" 
-                        : idx < activeLineIndex 
-                          ? "text-white/40 hover:text-white/80" 
-                          : "text-white/20 hover:text-white/60"
+                        : isPast 
+                          ? "lyrics-line-past text-white/40 hover:text-white/80" 
+                          : "lyrics-line-future text-white/20 hover:text-white/60"
                     }`}
                   >
                     {line.text || "•••"}
@@ -288,7 +295,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
               })}
             </div>
           ) : plainLyrics ? (
-            <div className="flex-1 overflow-y-auto whitespace-pre-wrap text-base font-medium text-gray-300 leading-loose py-4 text-left">
+            <div className="plain-lyrics flex-1 overflow-y-auto whitespace-pre-wrap text-base font-medium text-gray-300 leading-loose py-4 text-left">
               {plainLyrics}
             </div>
           ) : (
@@ -491,67 +498,138 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         </div>
       </div>
 
-      {/* Artist Profile & Next Up Sections */}
-      <div className="hidden lg:flex mt-4 flex-col gap-5 w-full shrink-0">
-        {/* About the Artist Card */}
-        <div className="relative rounded-2xl overflow-hidden bg-white/5 border border-white/5 group/artist h-36">
-          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/10 z-10" />
-          <img 
-            src={artistPic || currentTrack.thumbnail} 
-            alt={currentTrack.artist} 
-            className="w-full h-full object-cover opacity-60 blur-xs scale-105 group-hover/artist:scale-110 transition-transform duration-700" 
-          />
-          <div className="absolute inset-x-0 bottom-0 p-4 z-20 flex flex-col gap-1.5">
-            <span className="text-[9px] font-extrabold uppercase tracking-widest text-brand-accent">About the Artist</span>
-            <div className="flex items-center gap-2.5">
-              <img 
-                src={artistPic || currentTrack.thumbnail} 
-                alt={currentTrack.artist} 
-                className="w-9 h-9 rounded-full object-cover border border-brand-accent/50 shadow-md"
-              />
-              <div className="min-w-0">
-                <h3 className="font-bold text-white text-sm truncate">{currentTrack.artist}</h3>
-                {monthlyListeners !== undefined && (
-                  <p className="text-[9px] text-gray-300 mt-0.5">
-                    {monthlyListeners.toLocaleString()} Monthly Listeners
-                  </p>
-                )}
+      {/* Artist Profile & Next Up Sections (Only visible in Overview tab) */}
+      {view === "info" && (
+        <div className="hidden lg:flex mt-4 flex-col gap-5 w-full shrink-0">
+          {/* About the Artist Card */}
+          <div className="relative rounded-2xl overflow-hidden bg-white/5 border border-white/5 group/artist h-36">
+            <div className="artist-card-overlay absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/10 z-10" />
+            <img 
+              src={artistPic || currentTrack.thumbnail} 
+              alt={currentTrack.artist} 
+              className="w-full h-full object-cover opacity-60 blur-xs scale-105 group-hover/artist:scale-110 transition-transform duration-700" 
+            />
+            <div className="absolute inset-x-0 bottom-0 p-4 z-20 flex flex-col gap-1.5">
+              <span className="text-[9px] font-extrabold uppercase tracking-widest text-brand-accent">About the Artist</span>
+              <div className="flex items-center gap-2.5">
+                <img 
+                  src={artistPic || currentTrack.thumbnail} 
+                  alt={currentTrack.artist} 
+                  className="w-9 h-9 rounded-full object-cover border border-brand-accent/50 shadow-md"
+                />
+                <div className="min-w-0">
+                  <h3 className="font-bold text-white text-sm truncate">{currentTrack.artist}</h3>
+                  {monthlyListeners !== undefined && (
+                    <p className="text-[9px] text-gray-300 mt-0.5">
+                      {monthlyListeners.toLocaleString()} Monthly Listeners
+                    </p>
+                  )}
+                </div>
               </div>
+              <p className="text-[10px] text-gray-400 leading-relaxed line-clamp-1 mt-0.5">
+                Leading the charts. Stream more popular tracks from {currentTrack.artist} directly on their page.
+              </p>
             </div>
-            <p className="text-[10px] text-gray-400 leading-relaxed line-clamp-1 mt-0.5">
-              Leading the charts. Stream more popular tracks from {currentTrack.artist} directly on their page.
-            </p>
+          </div>
+
+          {/* Next Up Card */}
+          <div className="rounded-2xl bg-white/5 border border-white/5 p-3 flex flex-col gap-2">
+            <span className="text-[9px] font-extrabold uppercase tracking-widest text-gray-400">Next In Queue</span>
+            {currentIndex >= 0 && currentIndex < queue.length - 1 ? (
+              (() => {
+                const nextTrackItem = queue[currentIndex + 1];
+                return (
+                  <div 
+                    onClick={() => playTrack(nextTrackItem)}
+                    className="flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-brand-accent/10 hover:border-brand-accent/20 border border-transparent transition-all cursor-pointer group/next"
+                  >
+                    <img src={nextTrackItem.thumbnail} className="w-8 h-8 rounded-lg object-cover" />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-bold text-[11px] text-white truncate group-hover/next:text-brand-accent transition-colors">{nextTrackItem.title}</h4>
+                      <p className="text-[9px] text-gray-400 truncate mt-0.5">{nextTrackItem.artist}</p>
+                    </div>
+                    <Play className="w-3 h-3 text-gray-400 group-hover/next:text-brand-accent fill-current transition-colors opacity-0 group-hover/next:opacity-100 mr-1" />
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="text-[10px] text-gray-500 py-1 italic text-center">
+                Queue ends after this track.
+              </div>
+            )}
           </div>
         </div>
+      )}
 
-        {/* Next Up Card */}
-        <div className="rounded-2xl bg-white/5 border border-white/5 p-3 flex flex-col gap-2">
-          <span className="text-[9px] font-extrabold uppercase tracking-widest text-gray-400">Next In Queue</span>
-          {currentIndex >= 0 && currentIndex < queue.length - 1 ? (
-            (() => {
-              const nextTrackItem = queue[currentIndex + 1];
-              return (
-                <div 
-                  onClick={() => playTrack(nextTrackItem)}
-                  className="flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-brand-accent/10 hover:border-brand-accent/20 border border-transparent transition-all cursor-pointer group/next"
-                >
-                  <img src={nextTrackItem.thumbnail} className="w-8 h-8 rounded-lg object-cover" />
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-bold text-[11px] text-white truncate group-hover/next:text-brand-accent transition-colors">{nextTrackItem.title}</h4>
-                    <p className="text-[9px] text-gray-400 truncate mt-0.5">{nextTrackItem.artist}</p>
-                  </div>
-                  <Play className="w-3 h-3 text-gray-400 group-hover/next:text-brand-accent fill-current transition-colors opacity-0 group-hover/next:opacity-100 mr-1" />
+      {/* Track Info Detail Modal */}
+      {showInfoModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 select-none animate-fadeIn backdrop-blur-md">
+          <div className="bg-[#121212] border border-white/10 w-full max-w-md rounded-[28px] p-6 shadow-2xl relative">
+            <button 
+              onClick={() => setShowInfoModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 hover:bg-white/5 rounded-full transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Info className="w-5 h-5 text-brand-accent" />
+              Track Metadata
+            </h3>
+
+            <div className="flex flex-col gap-4 text-xs">
+              <div className="flex items-center gap-4 bg-white/5 p-3 rounded-2xl border border-white/5">
+                <img src={currentTrack.thumbnail} className="w-14 h-14 rounded-lg object-cover" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-sm text-white truncate">{currentTrack.title}</p>
+                  <p className="text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
+                  {currentTrack.albumName && (
+                    <p className="text-[10px] text-gray-500 truncate mt-0.5">Album: {currentTrack.albumName}</p>
+                  )}
                 </div>
-              );
-            })()
-          ) : (
-            <div className="text-[10px] text-gray-500 py-1 italic text-center">
-              Queue ends after this track.
+              </div>
+
+              <div className="flex flex-col gap-2.5 bg-white/5 p-4 rounded-2xl border border-white/5">
+                <div className="flex justify-between">
+                  <span className="text-gray-500 font-semibold">Track ID:</span>
+                  <span className="text-gray-300 font-mono text-[10px] select-all">{currentTrack.id}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500 font-semibold">Duration:</span>
+                  <span className="text-gray-300">{formatTime(currentTrack.duration)} ({currentTrack.duration}s)</span>
+                </div>
+                {currentTrack.plays && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 font-semibold">YouTube Views:</span>
+                    <span className="text-gray-300">{currentTrack.plays}</span>
+                  </div>
+                )}
+                {currentTrack.audioUrl && (
+                  <div className="flex flex-col gap-1.5 mt-1 pt-2.5 border-t border-white/5">
+                    <span className="text-gray-500 font-semibold">Decrypted Stream URL:</span>
+                    <input 
+                      type="text" 
+                      readOnly 
+                      value={currentTrack.audioUrl} 
+                      className="bg-black/40 border border-white/5 rounded-lg p-2 font-mono text-[9px] text-gray-400 select-all"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => setShowInfoModal(false)}
+                className="w-full py-2.5 mt-2 rounded-full bg-white text-black text-xs font-semibold hover:bg-gray-200 transition-all"
+              >
+                Dismiss
+              </button>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
+
     </div>
   );
 };
 export default PlayerPanel;
+

@@ -429,9 +429,9 @@ export function parseM3U(content: string): { title: string; artist: string }[] {
 }
 
 /**
- * Simple CSV parser that handles quotes.
+ * Simple CSV parser that handles quotes and custom delimiters.
  */
-function parseCSVLine(text: string): string[] {
+function parseCSVLine(text: string, delimiter: string = ","): string[] {
   const result: string[] = [];
   let current = "";
   let inQuotes = false;
@@ -439,7 +439,7 @@ function parseCSVLine(text: string): string[] {
     const char = text[i];
     if (char === '"') {
       inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       result.push(current);
       current = "";
     } else {
@@ -452,32 +452,77 @@ function parseCSVLine(text: string): string[] {
 
 /**
  * Parses a CSV file (e.g. Exportify or SpotifyDown format) into track metadata.
+ * Dynamically detects comma, semicolon, or tab delimiters, looks for header rows,
+ * and falls back to index 0/1 if headers are not present.
  */
 export function parseCSV(content: string): { title: string; artist: string }[] {
-  const lines = content.split(/\r?\n/);
-  if (lines.length < 2) return [];
+  const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  // Detect delimiter: check first line for comma, semicolon, tab
+  const firstLine = lines[0];
+  let delimiter = ",";
+  if (firstLine.includes("\t")) {
+    delimiter = "\t";
+  } else if (firstLine.includes(";")) {
+    delimiter = ";";
+  } else if (firstLine.includes(",")) {
+    delimiter = ",";
+  } else {
+    // No common delimiter found, likely not a CSV
+    return [];
+  }
 
   const tracks: { title: string; artist: string }[] = [];
-  
-  // Find column indices from headers
-  const headers = parseCSVLine(lines[0]);
-  let trackNameIdx = headers.findIndex(h => h.toLowerCase().includes("track name") || h.toLowerCase() === "title" || h.toLowerCase() === "name");
-  let artistNameIdx = headers.findIndex(h => h.toLowerCase().includes("artist name") || h.toLowerCase() === "artist" || h.toLowerCase().includes("artist(s)"));
+  const firstLineParts = parseCSVLine(firstLine, delimiter);
 
-  // Fallback defaults if headers aren't detected
-  if (trackNameIdx === -1) trackNameIdx = 1;
-  if (artistNameIdx === -1) artistNameIdx = 2;
+  // Check if first line has header keywords
+  const hasHeaders = firstLineParts.some(h => {
+    const lh = h.toLowerCase();
+    return lh.includes("track") || lh.includes("title") || lh.includes("name") || lh.includes("artist") || lh.includes("uri") || lh.includes("song");
+  });
 
-  // Parse rows
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const parts = parseCSVLine(line);
-    if (parts.length > Math.max(trackNameIdx, artistNameIdx)) {
-      tracks.push({
-        title: parts[trackNameIdx],
-        artist: parts[artistNameIdx] || "Unknown Artist"
-      });
+  let trackNameIdx = -1;
+  let artistNameIdx = -1;
+
+  if (hasHeaders) {
+    trackNameIdx = firstLineParts.findIndex(h => {
+      const lh = h.toLowerCase();
+      return lh.includes("track name") || lh === "title" || lh === "name" || lh === "song" || lh.includes("song title") || lh.includes("track_name");
+    });
+    artistNameIdx = firstLineParts.findIndex(h => {
+      const lh = h.toLowerCase();
+      return lh.includes("artist name") || lh === "artist" || lh.includes("artist(s)") || lh.includes("artist_name");
+    });
+  }
+
+  // Fallback defaults if headers aren't detected or only partially matched
+  const numColumns = firstLineParts.length;
+  if (trackNameIdx === -1 && artistNameIdx === -1) {
+    if (numColumns >= 2) {
+      trackNameIdx = 0;
+      artistNameIdx = 1;
+    } else {
+      trackNameIdx = 0;
+    }
+  } else if (trackNameIdx === -1) {
+    trackNameIdx = artistNameIdx === 0 ? 1 : 0;
+  } else if (artistNameIdx === -1) {
+    if (numColumns >= 2) {
+      artistNameIdx = trackNameIdx === 0 ? 1 : 0;
+    }
+  }
+
+  const startLine = hasHeaders ? 1 : 0;
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+    const parts = parseCSVLine(line, delimiter);
+    if (parts.length > 0) {
+      const title = trackNameIdx !== -1 && parts[trackNameIdx] ? parts[trackNameIdx] : "";
+      const artist = artistNameIdx !== -1 && parts[artistNameIdx] ? parts[artistNameIdx] : "Unknown Artist";
+      if (title) {
+        tracks.push({ title, artist });
+      }
     }
   }
 
@@ -488,11 +533,14 @@ export function parseCSV(content: string): { title: string; artist: string }[] {
  * Resolves tracks from an M3U or CSV content block against our engine and returns a playlist.
  */
 export async function importM3UPlaylist(name: string, m3uContent: string): Promise<{ name: string; tracks: Track[] }> {
-  // Simple heuristic to check if file is CSV
-  const firstLine = m3uContent.split(/\r?\n/)[0] || "";
-  const isCSV = firstLine.includes(",") && (firstLine.toLowerCase().includes("name") || firstLine.toLowerCase().includes("title") || firstLine.toLowerCase().includes("uri") || firstLine.toLowerCase().includes("artist"));
+  // Try CSV parsing first
+  let parsedItems = parseCSV(m3uContent);
   
-  const parsedItems = isCSV ? parseCSV(m3uContent) : parseM3U(m3uContent);
+  // If CSV parsing returned no results, fall back to M3U parsing
+  if (parsedItems.length === 0) {
+    parsedItems = parseM3U(m3uContent);
+  }
+  
   const tracks: Track[] = [];
   
   const concurrencyLimit = 5;

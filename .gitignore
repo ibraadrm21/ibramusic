@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local development files & JDK
+jdk-21/
+*.bak
+dump-instances.cjs
+test-*.cjs
+test-*.js
+src/test-*.js
+src/test-*.cjs
