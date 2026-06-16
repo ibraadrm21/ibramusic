@@ -864,8 +864,8 @@ export async function searchPublicPlaylists(query: string): Promise<any[]> {
 export async function getPublicPlaylistTracks(playlistId: string): Promise<Track[]> {
   // --- Primary: Innertube (same client used for audio, bypasses CORS) ---
   try {
-    console.log(`[getPublicPlaylistTracks] Trying Innertube for playlist ${playlistId}...`);
-    const yt = await getYoutubeClient();
+    console.log(`[getPublicPlaylistTracks] Trying Innertube WEB client for playlist ${playlistId}...`);
+    const yt = await getYoutubeWebClient();
     const playlist = await (yt as any).getPlaylist(playlistId);
     const items: any[] = playlist?.videos?.as?.() ?? playlist?.videos ?? [];
     

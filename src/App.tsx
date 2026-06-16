@@ -2181,7 +2181,7 @@ const MainLayout: React.FC = () => {
                           tracksQueue={artistTracks}
                           onToggleFavorite={handleToggleFavorite}
                           isFavorite={favorites.some((f) => f.id === track.id)}
-                          onOpenAlbum={handleOpenAlbum}
+
                           onOpenArtist={handleOpenArtist}
                           onAddToPlaylist={setTrackToAddToPlaylist}
                           onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -2303,7 +2303,7 @@ const MainLayout: React.FC = () => {
                       tracksQueue={albumTracks}
                       onToggleFavorite={handleToggleFavorite}
                       isFavorite={favorites.some((f) => f.id === track.id)}
-                      onOpenAlbum={handleOpenAlbum}
+
                       onOpenArtist={handleOpenArtist}
                       onAddToPlaylist={setTrackToAddToPlaylist}
                       onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -2801,7 +2801,7 @@ const MainLayout: React.FC = () => {
                                       tracksQueue={sortedTracks}
                                       onToggleFavorite={handleToggleFavorite}
                                       isFavorite={favorites.some((f) => f.id === track.id)}
-                                      onOpenAlbum={handleOpenAlbum}
+
                                       onOpenArtist={handleOpenArtist}
                                       onAddToPlaylist={setTrackToAddToPlaylist}
                                       trackIndex={idx + 1}
@@ -3064,7 +3064,7 @@ const MainLayout: React.FC = () => {
                             tracksQueue={trendingTracks}
                             onToggleFavorite={handleToggleFavorite}
                             isFavorite={favorites.some((f) => f.id === track.id)}
-                            onOpenAlbum={handleOpenAlbum}
+
                             onOpenArtist={handleOpenArtist}
                             onAddToPlaylist={setTrackToAddToPlaylist}
                             onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -3146,7 +3146,7 @@ const MainLayout: React.FC = () => {
                               tracksQueue={searchResults}
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={favorites.some((f) => f.id === track.id)}
-                              onOpenAlbum={handleOpenAlbum}
+
                               onOpenArtist={handleOpenArtist}
                               onAddToPlaylist={setTrackToAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -3167,7 +3167,7 @@ const MainLayout: React.FC = () => {
                                   tracksQueue={searchRecommendations}
                                   onToggleFavorite={handleToggleFavorite}
                                   isFavorite={favorites.some((f) => f.id === track.id)}
-                                  onOpenAlbum={handleOpenAlbum}
+
                                   onOpenArtist={handleOpenArtist}
                                   onAddToPlaylist={setTrackToAddToPlaylist}
                                   onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -3395,7 +3395,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={filtered}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={true}
-                        onOpenAlbum={handleOpenAlbum}
+
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={setTrackToAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4068,7 +4068,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={featuredSongs}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
-                        onOpenAlbum={handleOpenAlbum}
+
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={setTrackToAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4128,7 +4128,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={homeRecommendations}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
-                        onOpenAlbum={handleOpenAlbum}
+
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={setTrackToAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4209,7 +4209,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={trendingTracks}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
-                        onOpenAlbum={handleOpenAlbum}
+
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={setTrackToAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4234,7 +4234,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={homeRecommendations}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
-                        onOpenAlbum={handleOpenAlbum}
+
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={setTrackToAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4400,7 +4400,7 @@ const MainLayout: React.FC = () => {
             <PlayerPanel
               onToggleFavorite={handleToggleFavorite}
               isFavorite={currentTrack ? favorites.some((f) => f.id === currentTrack.id) : false}
-              onOpenAlbum={handleOpenAlbum}
+
               onOpenArtist={handleOpenArtist}
             />
           )}
@@ -4413,7 +4413,7 @@ const MainLayout: React.FC = () => {
               onToggleFavorite={handleToggleFavorite}
               isFavorite={favorites.some((f) => f.id === currentTrack.id)}
               onClose={() => setShowMobilePlayer(false)}
-              onOpenAlbum={handleOpenAlbum}
+
               onOpenArtist={handleOpenArtist}
             />
           </div>

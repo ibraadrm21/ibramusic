@@ -9,7 +9,6 @@ interface TrackCardProps {
   tracksQueue?: Track[];
   onToggleFavorite?: (track: Track) => void;
   isFavorite?: boolean;
-  onOpenAlbum?: (album: any) => void;
   onOpenArtist?: (artist: any) => void;
   onAddToPlaylist?: (track: Track) => void;
   trackIndex?: number;
@@ -23,7 +22,6 @@ export const TrackCard: React.FC<TrackCardProps> = ({
   tracksQueue = [],
   onToggleFavorite,
   isFavorite = false,
-  onOpenAlbum,
   onOpenArtist,
   onAddToPlaylist,
   trackIndex,
