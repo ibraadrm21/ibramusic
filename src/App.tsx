@@ -3,7 +3,7 @@ import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
-  User, Globe, Lock, Link
+  User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star
 } from "lucide-react";
 import { AudioProvider, useAudio } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
@@ -19,7 +19,8 @@ import {
   searchTracks, MOCK_LIBRARY,
   searchAlbums, searchArtists,
   getAlbumTracks, getArtistTracks,
-  getSpotifyArtistStats, getSpotifyAlbumStats
+  getSpotifyArtistStats, getSpotifyAlbumStats,
+  searchPublicPlaylists, getPublicPlaylistTracks
 } from "./services/musicApi";
 import type { Track, Album, Artist } from "./services/musicApi";
 import AlbumCard from "./components/AlbumCard";
@@ -160,6 +161,27 @@ const MainLayout: React.FC = () => {
     updateUserIdentity
   } = useAudio();
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
+  const [tabDirection, setTabDirection] = useState<"forward" | "backward" | "none">("none");
+
+  // Tab order for directional transition detection
+  const TAB_ORDER = ["home", "search", "favorites", "playlists", "dashboard", "github"];
+  const prevTabRef = React.useRef<string>(activeTab);
+
+  const navigateTab = React.useCallback((tab: string) => {
+    const prevIdx = TAB_ORDER.indexOf(prevTabRef.current);
+    const nextIdx = TAB_ORDER.indexOf(tab);
+    if (prevIdx === -1 || nextIdx === -1 || prevIdx === nextIdx) {
+      setTabDirection("none");
+    } else {
+      setTabDirection(nextIdx > prevIdx ? "forward" : "backward");
+    }
+    prevTabRef.current = tab;
+    // Clear sub-selections so they don't bleed into other tabs
+    setSelectedPlaylist(null);
+    setSelectedArtist(null);
+    setSelectedAlbum(null);
+    setActiveTab(tab);
+  }, []);
 
   // Theme settings state
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(() => {
@@ -379,6 +401,7 @@ const MainLayout: React.FC = () => {
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
   const [editingPlaylistName, setEditingPlaylistName] = useState<string>("");
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
+  const isOwnPlaylist = selectedPlaylist ? playlists.some(p => p.id === selectedPlaylist.id) : false;
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
   const [saveQueueMode, setSaveQueueMode] = useState<boolean>(false);
 
@@ -557,6 +580,7 @@ const MainLayout: React.FC = () => {
   const [newAdminPlPfp, setNewAdminPlPfp] = useState<string>("");
   const [adminPlSearchResults, setAdminPlSearchResults] = useState<Track[]>([]);
   const [newAdminPlTracks, setNewAdminPlTracks] = useState<Track[]>([]);
+  const [loadingYouTubePlaylistId, setLoadingYouTubePlaylistId] = useState<string | null>(null);
 
   // Hero Banner State
   const [heroTitle, setHeroTitle] = useState<string>("Let The Music");
@@ -880,6 +904,25 @@ const MainLayout: React.FC = () => {
     setSaveQueueMode(false);
     showToast(`Created playlist "${newPlaylist.name}"`, "success");
   };
+
+  const handleAddPlaylistToLibrary = (playlistToAdd: Playlist) => {
+    if (!user) {
+      showToast("Please login to add playlists to library", "error");
+      window.dispatchEvent(new Event("ibrastream_force_login"));
+      return;
+    }
+    const newPlaylist: Playlist = {
+      id: String(Date.now()) + "_" + Math.random().toString(36).substr(2, 9),
+      name: playlistToAdd.name,
+      tracks: playlistToAdd.tracks || [],
+      coverUrl: playlistToAdd.coverUrl,
+      isPublic: false
+    };
+    const updated = [...playlists, newPlaylist];
+    savePlaylists(updated);
+    showToast(`Added "${playlistToAdd.name}" to your library!`, "success");
+  };
+
 
   const handleImportSpotify = async (link: string) => {
     if (!link.trim()) return;
@@ -1414,16 +1457,21 @@ const MainLayout: React.FC = () => {
         const results = await searchArtists(query);
         setArtistResults(results);
       } else if (type === "community") {
-        const { data, error } = await supabase
-          .from("public_playlists")
-          .select("*")
-          .ilike("name", `%${query}%`);
-        if (error) {
-          console.error("Failed to query public playlists:", error);
-          setCommunityResults([]);
-        } else {
-          setCommunityResults(data || []);
-        }
+        const [supabaseResult, pipedResults] = await Promise.allSettled([
+          supabase
+            .from("public_playlists")
+            .select("*")
+            .ilike("name", `%${query}%`),
+          searchPublicPlaylists(query)
+        ]);
+
+        const supabasePlaylists = supabaseResult.status === "fulfilled" && !supabaseResult.value.error
+          ? (supabaseResult.value.data || [])
+          : [];
+
+        const pipedPlaylists = pipedResults.status === "fulfilled" ? pipedResults.value : [];
+
+        setCommunityResults([...supabasePlaylists, ...pipedPlaylists]);
       }
     } catch (e) {
       console.error(e);
@@ -1637,7 +1685,7 @@ const MainLayout: React.FC = () => {
             setSelectedArtist(null);
             setSelectedAlbum(null);
             setPreviousArtist(null);
-            setActiveTab(tab);
+            navigateTab(tab);
             setShowMobilePlayer(false);
             clearSelection();
           }}
@@ -2047,6 +2095,16 @@ const MainLayout: React.FC = () => {
           </header>
 
           {/* Dynamic Inner Panel View */}
+          <div
+            key={`${activeTab}-${selectedArtist?.id ?? ""}-${selectedAlbum?.id ?? ""}-${selectedPlaylist?.id ?? ""}`}
+            className={
+              tabDirection === "forward"
+                ? "animate-tab-forward"
+                : tabDirection === "backward"
+                ? "animate-tab-backward"
+                : "animate-mobile-page"
+            }
+          >
           {selectedArtist ? (
             /* ARTIST PANEL - FULL PAGE SPACE */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-subpage">
@@ -2303,82 +2361,135 @@ const MainLayout: React.FC = () => {
                       ← Back to Playlists
                     </button>
                     <div className="flex items-center gap-2">
-                      {user && (
-                        <button
-                          onClick={() => {
-                            const updated = playlists.map(p => {
-                              if (p.id === selectedPlaylist.id) {
-                                const newPublic = !p.isPublic;
-                                return { ...p, isPublic: newPublic };
-                              }
-                              return p;
-                            });
-                            savePlaylists(updated);
-                            setSelectedPlaylist(prev => prev ? { ...prev, isPublic: !prev.isPublic } : null);
-                            showToast(!selectedPlaylist.isPublic ? "Playlist is now Public" : "Playlist is now Private", "success");
-                          }}
-                          className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                            selectedPlaylist.isPublic
-                              ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25"
-                              : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
-                          }`}
-                        >
-                          {selectedPlaylist.isPublic ? (
-                            <>
-                              <Globe className="w-3.5 h-3.5" /> Public
-                            </>
-                          ) : (
-                            <>
-                              <Lock className="w-3.5 h-3.5" /> Private
-                            </>
+                      {isOwnPlaylist ? (
+                        <>
+                          {user && (
+                            <button
+                              onClick={() => {
+                                const updated = playlists.map(p => {
+                                  if (p.id === selectedPlaylist.id) {
+                                    const newPublic = !p.isPublic;
+                                    return { ...p, isPublic: newPublic };
+                                  }
+                                  return p;
+                                });
+                                savePlaylists(updated);
+                                setSelectedPlaylist(prev => prev ? { ...prev, isPublic: !prev.isPublic } : null);
+                                showToast(!selectedPlaylist.isPublic ? "Playlist is now Public" : "Playlist is now Private", "success");
+                              }}
+                              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                                selectedPlaylist.isPublic
+                                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25"
+                                  : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
+                              }`}
+                            >
+                              {selectedPlaylist.isPublic ? (
+                                <>
+                                  <Globe className="w-3.5 h-3.5" /> Public
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="w-3.5 h-3.5" /> Private
+                                </>
+                              )}
+                            </button>
                           )}
-                        </button>
+                          {user && selectedPlaylist.isPublic && (
+                            <button
+                              onClick={() => {
+                                const link = `${window.location.origin}${window.location.pathname}?playlistId=${selectedPlaylist.id}`;
+                                navigator.clipboard.writeText(link);
+                                showToast("Link copied to clipboard!", "success");
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-400 hover:text-white transition-all flex items-center gap-1.5"
+                            >
+                              <Link className="w-3.5 h-3.5" /> Copy Link
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setEditingPlaylistId(selectedPlaylist.id);
+                              setEditingPlaylistName(selectedPlaylist.name);
+                            }}
+                            className="px-3 py-1.5 rounded-xl border border-white/10 text-xs font-semibold text-gray-400 hover:text-white transition-all"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
+                            className="px-3 py-1.5 rounded-xl border border-red-500/25 hover:border-red-500 text-xs font-semibold text-red-400 hover:text-red-300 transition-all"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {(() => {
+                            const isAlreadyAdded = playlists.some(
+                              p => p.name.toLowerCase() === selectedPlaylist.name.toLowerCase() &&
+                                   p.tracks.length === selectedPlaylist.tracks.length
+                            );
+                            return (
+                              <button
+                                onClick={() => !isAlreadyAdded && handleAddPlaylistToLibrary(selectedPlaylist)}
+                                disabled={isAlreadyAdded}
+                                className={`px-4 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                                  isAlreadyAdded
+                                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 cursor-default"
+                                    : "bg-brand-accent/25 border border-brand-accent/40 text-brand-accent hover:bg-brand-accent/35 active:scale-95"
+                                }`}
+                              >
+                                {isAlreadyAdded ? (
+                                  <>
+                                    <svg viewBox="0 0 10 8" className="w-3 h-3 stroke-current" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="1,4 3.5,7 9,1" />
+                                    </svg>
+                                    Added to Library
+                                  </>
+                                ) : (
+                                  <>
+                                    <Plus className="w-3.5 h-3.5" /> Add to Library
+                                  </>
+                                )}
+                              </button>
+                            );
+                          })()}
+                          {selectedPlaylist.isPublic && (
+                            <button
+                              onClick={() => {
+                                const link = `${window.location.origin}${window.location.pathname}?playlistId=${selectedPlaylist.id}`;
+                                navigator.clipboard.writeText(link);
+                                showToast("Link copied to clipboard!", "success");
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-400 hover:text-white transition-all flex items-center gap-1.5"
+                            >
+                              <Link className="w-3.5 h-3.5" /> Copy Link
+                            </button>
+                          )}
+                        </>
                       )}
-                      {user && selectedPlaylist.isPublic && (
-                        <button
-                          onClick={() => {
-                            const link = `${window.location.origin}${window.location.pathname}?playlistId=${selectedPlaylist.id}`;
-                            navigator.clipboard.writeText(link);
-                            showToast("Link copied to clipboard!", "success");
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-400 hover:text-white transition-all flex items-center gap-1.5"
-                        >
-                          <Link className="w-3.5 h-3.5" /> Copy Link
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          setEditingPlaylistId(selectedPlaylist.id);
-                          setEditingPlaylistName(selectedPlaylist.name);
-                        }}
-                        className="px-3 py-1.5 rounded-xl border border-white/10 text-xs font-semibold text-gray-400 hover:text-white transition-all"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
-                        className="px-3 py-1.5 rounded-xl border border-red-500/25 hover:border-red-500 text-xs font-semibold text-red-400 hover:text-red-300 transition-all"
-                      >
-                        Delete
-                      </button>
                     </div>
                   </div>
 
                   <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-br from-brand-accent/10 to-transparent border border-white/5 flex flex-col md:flex-row gap-6 items-center">
                     <div
-                      className="w-28 h-28 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center relative shadow-lg overflow-hidden group cursor-pointer"
-                      onClick={() => document.getElementById("playlist-cover-upload")?.click()}
-                      title="Click to upload custom cover photo"
+                      className={`w-28 h-28 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center relative shadow-lg overflow-hidden ${isOwnPlaylist ? "group cursor-pointer" : ""}`}
+                      onClick={() => isOwnPlaylist && document.getElementById("playlist-cover-upload")?.click()}
+                      title={isOwnPlaylist ? "Click to upload custom cover photo" : undefined}
                     >
                       {selectedPlaylist.coverUrl || (selectedPlaylist.tracks && selectedPlaylist.tracks.length > 0 && selectedPlaylist.tracks[0].thumbnail) ? (
                         <img src={selectedPlaylist.coverUrl || selectedPlaylist.tracks[0].thumbnail} className="w-full h-full object-cover" alt="Playlist cover" />
                       ) : (
                         <ListMusic className="w-12 h-12 text-brand-accent" />
                       )}
-                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        <Plus className="w-6 h-6 text-white mb-1" />
-                        <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
-                      </div>
+                      {isOwnPlaylist && (
+                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <Plus className="w-6 h-6 text-white mb-1" />
+                          <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
+                        </div>
+                      )}
+                    </div>
+                    {isOwnPlaylist && (
                       <input
                         id="playlist-cover-upload"
                         type="file"
@@ -2396,7 +2507,7 @@ const MainLayout: React.FC = () => {
                           }
                         }}
                       />
-                    </div>
+                    )}
                     <div className="flex-1 text-center md:text-left">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-brand-accent">Playlist</span>
                       {editingPlaylistId === selectedPlaylist.id ? (
@@ -2778,11 +2889,48 @@ const MainLayout: React.FC = () => {
               )}
             </section>
           ) : activeTab === "search" ? (
-            /* SEARCH EXPLORER PANEL */
+            /* SEARCH / EXPLORE PANEL */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
-              <div className="flex items-center justify-between">
+
+              {/* Mobile-only inline search bar (desktop already has one in the top bar) */}
+              <div className="md:hidden">
+                <form
+                  onSubmit={(e) => { e.preventDefault(); if (searchQuery.trim()) handleSearch(searchQuery); }}
+                  className="relative"
+                >
+                  <Search className="w-4 h-4 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Songs, artists, albums..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      if (e.target.value.trim() === "") {
+                        setSearchResults([]);
+                        setSearchRecommendations([]);
+                      }
+                    }}
+                    className="w-full pl-11 pr-10 py-3 rounded-2xl bg-white/7 border border-white/8 text-white text-sm focus:outline-none focus:border-brand-accent/50 focus:bg-white/10 transition-all placeholder:text-gray-500"
+                  />
+                  {isSearching && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                  )}
+                  {searchQuery && !isSearching && (
+                    <button
+                      type="button"
+                      onClick={() => { setSearchQuery(""); setSearchResults([]); setSearchRecommendations([]); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </form>
+              </div>
+
+              {/* Desktop header */}
+              <div className="hidden md:flex items-center justify-between">
                 <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                  <Search className="w-6 h-6 text-brand-accent" /> Search Explorer
+                  <Search className="w-6 h-6 text-brand-accent" /> Explore
                 </h2>
                 {isSearching && (
                   <div className="flex items-center gap-2 text-xs text-brand-accent">
@@ -2793,71 +2941,188 @@ const MainLayout: React.FC = () => {
               </div>
 
               {searchQuery.trim() === "" ? (
-                searchHistory.length > 0 ? (
-                  <div className="bg-white/4 border border-white/5 rounded-3xl p-6 flex flex-col gap-4 animate-[fadeIn_0.3s_ease]">
-                    <div className="flex items-center justify-between pl-1">
-                      <h3 className="text-sm font-bold text-white tracking-wider uppercase flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-brand-accent" /> Recent Searches
-                      </h3>
-                      <button
-                        onClick={clearSearchHistory}
-                        className="text-xs text-gray-500 hover:text-white transition-colors cursor-pointer font-medium px-3 py-1 rounded-lg hover:bg-white/5 border border-white/5"
-                      >
-                        Clear All
-                      </button>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      {searchHistory.map((queryText, index) => (
-                        <div
-                          key={`${queryText}-${index}`}
-                          className="flex items-center justify-between group p-3 rounded-xl hover:bg-white/5 transition-all cursor-pointer border border-transparent hover:border-white/5"
-                          onClick={() => {
-                            setSearchQuery(queryText);
-                            handleSearch(queryText);
-                          }}
-                        >
-                          <div className="flex items-center gap-3">
-                            <Clock className="w-4 h-4 text-gray-500 group-hover:text-brand-accent transition-colors" />
-                            <span className="text-sm font-semibold text-gray-300 group-hover:text-white transition-colors truncate">
-                              {queryText}
-                            </span>
-                          </div>
+                <>
+                  {/* ── Recent Search History as pills ── */}
+                  {searchHistory.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between pl-1">
+                        <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5" /> Recent Searches
+                        </h3>
+                        <button onClick={clearSearchHistory} className="text-[10px] text-gray-600 hover:text-white transition-colors hover:bg-white/5 px-2 py-1 rounded-lg">
+                          Clear all
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {searchHistory.slice(0, 8).map((queryText, index) => (
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeHistoryItem(queryText);
-                            }}
-                            className="p-1 rounded-lg hover:bg-white/10 text-gray-500 hover:text-white transition-all cursor-pointer"
-                            title="Remove"
+                            key={`hist-pill-${queryText}-${index}`}
+                            className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-full bg-white/5 border border-white/8 hover:bg-white/10 active:scale-95 transition-all text-xs font-medium text-gray-300 hover:text-white group"
+                            onClick={() => { setSearchQuery(queryText); handleSearch(queryText); }}
                           >
-                            <X className="w-4 h-4" />
+                            {queryText}
+                            <span
+                              role="button"
+                              onClick={(e) => { e.stopPropagation(); removeHistoryItem(queryText); }}
+                              className="p-0.5 rounded-full text-gray-600 group-hover:text-gray-400 hover:text-white transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </span>
                           </button>
-                        </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Genre / Mood Quick-Search Grid ── */}
+                  <div className="flex flex-col gap-3">
+                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">Browse by mood</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { label: "Pop Hits",      query: "pop hits 2024",             Icon: Music2 },
+                        { label: "Hip-Hop",       query: "hip hop rap",               Icon: Mic2 },
+                        { label: "R&B / Soul",    query: "rnb soul smooth",           Icon: Waves },
+                        { label: "Electronic",    query: "electronic edm dance",      Icon: Zap },
+                        { label: "Sad Vibes",     query: "sad emotional heartbreak",  Icon: CloudRain },
+                        { label: "Good Energy",   query: "workout motivation upbeat", Icon: Flame },
+                        { label: "Chill / Lo-fi", query: "chill lofi relaxing study", Icon: Moon },
+                        { label: "Arabic Music",  query: "arabic music اغاني عربي",  Icon: Star },
+                      ] as const).map((chip) => (
+                        <button
+                          key={chip.label}
+                          id={`genre-chip-${chip.label.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
+                          onClick={() => {
+                            setSearchQuery(chip.query);
+                            setSearchType("track");
+                            handleSearch(chip.query, "track");
+                          }}
+                          className="relative flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white/[0.04] border border-white/[0.07] hover:bg-white/[0.08] hover:border-white/[0.12] active:scale-95 transition-all text-left overflow-hidden group"
+                        >
+                          <chip.Icon className="w-4 h-4 shrink-0 text-gray-400 group-hover:text-gray-200 transition-colors" strokeWidth={1.75} />
+                          <span className="font-medium text-sm text-gray-300 group-hover:text-white leading-tight transition-colors">{chip.label}</span>
+                        </button>
                       ))}
                     </div>
                   </div>
-                ) : (
-                  <div className="text-center py-16 text-gray-500 bg-white/4 border border-white/5 rounded-3xl p-8 border-dashed border-gray-800">
-                    <Search className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-                    <p className="font-semibold text-gray-400">Search for songs, albums, or artists</p>
-                    <p className="text-xs text-gray-600 mt-1">Your recent searches will appear here</p>
-                  </div>
-                )
+
+                  {/* ── Recently Played Tracks ── */}
+                  {(() => {
+                    let recentTracks: Track[] = [];
+                    try {
+                      const saved = localStorage.getItem("ibrastream_recently_played");
+                      const parsed = saved ? JSON.parse(saved) : [];
+                      recentTracks = Array.isArray(parsed) && parsed[0]?.title ? parsed : [];
+                    } catch { recentTracks = []; }
+                    if (recentTracks.length === 0) return null;
+                    return (
+                      <div className="flex flex-col gap-3">
+                        <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1 flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5 text-brand-accent" /> Recently Played
+                        </h3>
+                        <div className="flex flex-col gap-1.5">
+                          {recentTracks.slice(0, 6).map((track: Track, idx: number) => (
+                            <div
+                              key={`explore-recent-${track.id}-${idx}`}
+                              className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 active:bg-white/8 transition-all cursor-pointer group border border-transparent hover:border-white/5"
+                              onClick={() => playTrack(track, recentTracks.slice(0, 10))}
+                            >
+                              <div className="relative shrink-0">
+                                <img src={track.thumbnail} alt={track.title} className="w-11 h-11 rounded-xl object-cover" />
+                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
+                                  <Play className="w-4 h-4 fill-white text-white" />
+                                </div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{track.title}</p>
+                                <p className="text-xs text-gray-500 truncate mt-0.5">{track.artist}</p>
+                              </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setSearchQuery(track.artist); handleSearch(track.artist, "track"); }}
+                                className="shrink-0 text-[10px] text-gray-600 hover:text-brand-accent px-2 py-1 rounded-lg hover:bg-white/5 transition-all"
+                              >
+                                More
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Trending Tracks ── */}
+                  {trendingTracks.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1 flex items-center gap-2">
+                        <Heart className="w-3.5 h-3.5 text-red-500 animate-pulse" /> Trending Now
+                      </h3>
+                      <div className="flex flex-col gap-2">
+                        {trendingTracks.slice(0, 5).map((track, idx) => (
+                          <TrackCard
+                            key={`explore-trending-${track.id}-${idx}`}
+                            track={track}
+                            variant="row"
+                            tracksQueue={trendingTracks}
+                            onToggleFavorite={handleToggleFavorite}
+                            isFavorite={favorites.some((f) => f.id === track.id)}
+                            onOpenAlbum={handleOpenAlbum}
+                            onOpenArtist={handleOpenArtist}
+                            onAddToPlaylist={setTrackToAddToPlaylist}
+                            onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Featured Playlists ── */}
+                  {featuredPlaylists.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1 flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-brand-accent" /> Featured Playlists
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {featuredPlaylists.map((pl) => (
+                          <div
+                            key={`explore-feat-${pl.id}`}
+                            onClick={() => {
+                              setSelectedPlaylist({ id: String(pl.id), name: pl.name, tracks: pl.tracks || [], coverUrl: pl.pfp });
+                              setActiveTab("playlists");
+                            }}
+                            className="glass-card rounded-2xl p-3.5 flex flex-col gap-2.5 group cursor-pointer active:scale-95 transition-all"
+                          >
+                            <div className="aspect-square w-full rounded-xl bg-white/5 border border-white/5 overflow-hidden relative shadow-md">
+                              {pl.pfp
+                                ? <img src={pl.pfp} className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300" alt={pl.name} />
+                                : <ListMusic className="w-10 h-10 text-brand-accent absolute inset-0 m-auto group-hover:scale-110 transition-all duration-300" />
+                              }
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors rounded-xl flex items-center justify-center">
+                                <Play className="w-8 h-8 fill-white text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg" />
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="font-bold text-xs text-white truncate group-hover:text-brand-accent transition-colors">{pl.name}</h4>
+                              <p className="text-[10px] text-gray-500 mt-0.5">{pl.tracks?.length || 0} songs</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                </>
               ) : (
                 <>
-                  {/* Filter Tabs */}
+                  {/* ── Filter Tabs ── */}
                   <div className="flex gap-2 p-1 bg-white/5 border border-white/5 rounded-2xl w-fit self-start">
                     {(["track", "album", "artist", "community"] as const).map((type) => (
                       <button
                         key={type}
-                        onClick={() => {
-                          setSearchType(type);
-                          handleSearch(searchQuery, type);
-                        }}
-                        className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all ${searchType === type
+                        onClick={() => { setSearchType(type); handleSearch(searchQuery, type); }}
+                        className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all ${
+                          searchType === type
                             ? "bg-brand-accent text-white shadow-md shadow-brand-accent/20"
                             : "text-gray-400 hover:text-white"
-                          }`}
+                        }`}
                       >
                         {type === "community" ? "Community" : type + "s"}
                       </button>
@@ -2888,8 +3153,6 @@ const MainLayout: React.FC = () => {
                             />
                           ))}
                         </div>
-
-                        {/* Related search recommendations */}
                         {searchRecommendations.length > 0 && (
                           <div className="mt-4 border-t border-white/5 pt-6 animate-[fadeIn_0.3s_ease]">
                             <h3 className="text-sm font-bold text-gray-400 tracking-wider uppercase mb-3 pl-1">
@@ -2926,11 +3189,7 @@ const MainLayout: React.FC = () => {
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         {albumResults.map((album) => (
-                          <AlbumCard
-                            key={album.id}
-                            album={album}
-                            onClick={handleOpenAlbum}
-                          />
+                          <AlbumCard key={album.id} album={album} onClick={handleOpenAlbum} />
                         ))}
                       </div>
                     )
@@ -2945,11 +3204,7 @@ const MainLayout: React.FC = () => {
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         {artistResults.map((artist) => (
-                          <ArtistCard
-                            key={artist.id}
-                            artist={artist}
-                            onClick={handleOpenArtist}
-                          />
+                          <ArtistCard key={artist.id} artist={artist} onClick={handleOpenArtist} />
                         ))}
                       </div>
                     )
@@ -2963,43 +3218,98 @@ const MainLayout: React.FC = () => {
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                        {communityResults.map((p) => (
-                          <div
-                            key={p.playlist_id}
-                            onClick={() => {
-                              const sharedPlaylist: Playlist = {
-                                id: p.playlist_id,
-                                name: p.name,
-                                tracks: p.tracks || [],
-                                coverUrl: p.cover_url,
-                                isPublic: true
-                              };
-                              setSelectedPlaylist(sharedPlaylist);
-                              setActiveTab("playlists");
-                            }}
-                            className="glass-card rounded-2xl p-4 flex flex-col gap-3 group cursor-pointer"
-                          >
-                            <div className="aspect-square w-full rounded-xl bg-white/5 border border-white/5 flex items-center justify-center overflow-hidden relative shadow-md">
-                              {p.cover_url || (p.tracks && p.tracks.length > 0 && p.tracks[0].thumbnail) ? (
-                                <img
-                                  src={p.cover_url || p.tracks[0].thumbnail}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
-                                  alt={p.name}
-                                />
-                              ) : (
-                                <ListMusic className="w-10 h-10 text-brand-accent group-hover:scale-105 transition-all duration-300" />
-                              )}
+                        {communityResults.map((p) => {
+                          const isYouTube = !!p.is_youtube;
+                          const isLoadingThis = loadingYouTubePlaylistId === p.playlist_id;
+                          return (
+                            <div
+                              key={p.playlist_id}
+                              onClick={async () => {
+                                if (isLoadingThis) return;
+                                if (isYouTube) {
+                                  setLoadingYouTubePlaylistId(p.playlist_id);
+                                  try {
+                                    const tracks = await getPublicPlaylistTracks(p.playlist_id);
+                                    const sharedPlaylist: Playlist = {
+                                      id: `yt_${p.playlist_id}`,
+                                      name: p.name,
+                                      tracks,
+                                      coverUrl: p.cover_url,
+                                      isPublic: true
+                                    };
+                                    setSelectedPlaylist(sharedPlaylist);
+                                    setActiveTab("playlists");
+                                  } catch (err) {
+                                    console.error("Failed to load YouTube playlist tracks:", err);
+                                    showToast("Failed to load playlist tracks", "error");
+                                  } finally {
+                                    setLoadingYouTubePlaylistId(null);
+                                  }
+                                } else {
+                                  const sharedPlaylist: Playlist = {
+                                    id: p.playlist_id,
+                                    name: p.name,
+                                    tracks: p.tracks || [],
+                                    coverUrl: p.cover_url,
+                                    isPublic: true
+                                  };
+                                  setSelectedPlaylist(sharedPlaylist);
+                                  setActiveTab("playlists");
+                                }
+                              }}
+                              className="glass-card rounded-2xl p-4 flex flex-col gap-3 group cursor-pointer active:scale-95 transition-all"
+                            >
+                              <div className="aspect-square w-full rounded-xl bg-white/5 border border-white/5 flex items-center justify-center overflow-hidden relative shadow-md">
+                                {p.cover_url || (!isYouTube && p.tracks && p.tracks.length > 0 && p.tracks[0].thumbnail) ? (
+                                  <img
+                                    src={p.cover_url || p.tracks[0].thumbnail}
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
+                                    alt={p.name}
+                                  />
+                                ) : (
+                                  <ListMusic className="w-10 h-10 text-brand-accent group-hover:scale-105 transition-all duration-300" />
+                                )}
+                                {/* Source badge */}
+                                <div className={`absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                                  isYouTube
+                                    ? "bg-red-600/90 text-white"
+                                    : "bg-brand-accent/80 text-black"
+                                }`}>
+                                  {isYouTube ? (
+                                    <>
+                                      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                                      </svg>
+                                      YouTube
+                                    </>
+                                  ) : "Community"}
+                                </div>
+                                {/* Loading overlay */}
+                                {isLoadingThis && (
+                                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-xl">
+                                    <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                                  </div>
+                                )}
+                                {/* Play hover overlay */}
+                                {!isLoadingThis && (
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors rounded-xl flex items-center justify-center">
+                                    <Play className="w-8 h-8 fill-white text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0 text-left">
+                                <h4 className="font-bold text-sm text-white truncate group-hover:text-brand-accent transition-colors">
+                                  {p.name}
+                                </h4>
+                                <p className="text-[10px] text-gray-400 truncate mt-0.5">
+                                  {isYouTube
+                                    ? `${p.uploader || "YouTube"}${p.videosCount ? ` • ${p.videosCount} videos` : ""}`
+                                    : `By ${p.username || "Anonymous"} • ${p.tracks ? p.tracks.length : 0} Songs`}
+                                </p>
+                              </div>
                             </div>
-                            <div className="min-w-0 text-left">
-                              <h4 className="font-bold text-sm text-white truncate group-hover:text-brand-accent transition-colors">
-                                {p.name}
-                              </h4>
-                              <p className="text-[10px] text-gray-400 truncate mt-0.5">
-                                By {p.username || "Anonymous"} • {p.tracks ? p.tracks.length : 0} Songs
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )
                   )}
@@ -3938,6 +4248,7 @@ const MainLayout: React.FC = () => {
 
             </section>
           )}
+          </div>{/* end transition wrapper */}
 
         </main>
 
@@ -5167,12 +5478,16 @@ const MainLayout: React.FC = () => {
           }}
 
           onAddToPlaylist={(playlistId) => handleAddTrackToPlaylist(playlistId, contextMenu.track)}
-          onRemoveFromPlaylist={() => {
-            if (contextMenu.currentPlaylistId) {
-              handleRemoveTrackFromPlaylist(contextMenu.currentPlaylistId, contextMenu.track.id);
-            }
-          }}
-          onSelect={contextMenu.currentPlaylistId ? () => handleSelectTrack(contextMenu.track.id) : undefined}
+          onRemoveFromPlaylist={
+            contextMenu.currentPlaylistId && playlists.some(p => p.id === contextMenu.currentPlaylistId)
+              ? () => handleRemoveTrackFromPlaylist(contextMenu.currentPlaylistId!, contextMenu.track.id)
+              : undefined
+          }
+          onSelect={
+            contextMenu.currentPlaylistId && playlists.some(p => p.id === contextMenu.currentPlaylistId)
+              ? () => handleSelectTrack(contextMenu.track.id)
+              : undefined
+          }
         />
       )}
     </div>

@@ -624,6 +624,7 @@ const fetchWithTimeout = async (url: string, options: any = {}, timeoutMs: numbe
 };
 
 let youtubeClientPromise: Promise<Innertube> | null = null;
+let youtubeWebClientPromise: Promise<Innertube> | null = null;
 
 export const getYoutubeClient = (): Promise<Innertube> => {
   if (!youtubeClientPromise) {
@@ -694,6 +695,37 @@ export const getYoutubeClient = (): Promise<Innertube> => {
     });
   }
   return youtubeClientPromise;
+};
+
+// Separate WEB client for playlist browsing (ANDROID_VR does not support playlist page)
+const getYoutubeWebClient = (): Promise<Innertube> => {
+  if (!youtubeWebClientPromise) {
+    const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
+      const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+      if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
+        if (url.startsWith("https://www.youtube.com")) url = url.replace("https://www.youtube.com", "/youtube-com");
+        else if (url.startsWith("https://youtubei.googleapis.com")) url = url.replace("https://youtubei.googleapis.com", "/youtubei-googleapis");
+      }
+      let method = "GET", headers: Record<string, string> = {}, body: any = null, credentials: any = undefined, mode: any = undefined;
+      if (input instanceof Request) {
+        method = input.method; credentials = input.credentials; mode = input.mode;
+        for (const [k, v] of input.headers.entries()) headers[k] = v;
+        if (method !== "GET" && method !== "HEAD") body = await input.clone().text();
+      }
+      if (init) {
+        if (init.method) method = init.method;
+        if (init.credentials) credentials = init.credentials;
+        if (init.mode) mode = init.mode;
+        if (init.headers) { const h = new Headers(init.headers as any); for (const [k,v] of h.entries()) headers[k]=v; }
+        if (init.body !== undefined) body = init.body;
+      }
+      if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") body = null;
+      return fetch(url, { method, headers, body, credentials, mode } as any);
+    };
+    youtubeWebClientPromise = Innertube.create({ fetch: customFetch });
+  }
+  return youtubeWebClientPromise;
 };
 
 export async function getYouTubeAudioStream(videoId: string): Promise<string> {
@@ -778,6 +810,143 @@ export async function resolveTidalTrackById(trackId: string): Promise<Track | nu
     console.error("resolveTidalTrackById failed:", err);
     return null;
   }
+}
+
+const PIPED_HOSTS = [
+  "https://pipedapi.kavin.rocks",
+  "https://api.piped.private.coffee",
+  "https://pipedapi.lvk.li",
+  "https://api.piped.yt"
+];
+
+export async function searchPublicPlaylists(query: string): Promise<any[]> {
+  if (!query.trim()) return [];
+  for (const baseUrl of PIPED_HOSTS) {
+    try {
+      const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(query)}&filter=playlists`;
+      const res = await fetchWithTimeout(searchUrl, {
+        headers: {
+          'Referer': 'https://piped.video/',
+          'Origin': 'https://piped.video'
+        }
+      }, 10000);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const items = data.items || [];
+      if (Array.isArray(items) && items.length > 0) {
+        const playlists = items
+          .filter((item: any) => item.type === "playlist")
+          .map((item: any) => {
+            // URL can be "/playlist?list=ID" or "?list=ID&..."
+            const playlistIdMatch = item.url?.match(/[?&]list=([^&]+)/);
+            const playlistId = playlistIdMatch ? playlistIdMatch[1] : null;
+            if (!playlistId) return null;
+            return {
+              playlist_id: playlistId,
+              name: item.name || "YouTube Playlist",
+              cover_url: item.thumbnail || "",
+              tracks: [],
+              is_youtube: true,
+              videosCount: item.videos || 0,
+              uploader: item.uploaderName || ""
+            };
+          })
+          .filter(Boolean);
+        if (playlists.length > 0) return playlists;
+      }
+    } catch (e) {
+      console.warn(`Piped playlist search failed on ${baseUrl}:`, e);
+    }
+  }
+  return [];
+}
+
+export async function getPublicPlaylistTracks(playlistId: string): Promise<Track[]> {
+  // --- Primary: Innertube (same client used for audio, bypasses CORS) ---
+  try {
+    console.log(`[getPublicPlaylistTracks] Trying Innertube for playlist ${playlistId}...`);
+    const yt = await getYoutubeClient();
+    const playlist = await (yt as any).getPlaylist(playlistId);
+    const items: any[] = playlist?.videos?.as?.() ?? playlist?.videos ?? [];
+    
+    if (items.length > 0) {
+      console.log(`[getPublicPlaylistTracks] Innertube returned ${items.length} tracks`);
+      return items
+        .map((item: any) => {
+          const id = item.id || item.video_id || "";
+          if (!id) return null;
+          const title =
+            typeof item.title === "string" ? item.title :
+            item.title?.text ?? item.title?.toString?.() ?? "Unknown Title";
+          const artist =
+            typeof item.author === "string" ? item.author :
+            item.author?.name ?? item.author?.text ?? "Unknown Artist";
+          const duration =
+            typeof item.duration === "number" ? item.duration :
+            item.duration?.seconds ?? item.duration?.text
+              ? (() => {
+                  const parts = (item.duration.text as string).split(":").map(Number);
+                  return parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0] * 3600 + parts[1] * 60 + parts[2];
+                })()
+              : 180;
+          const thumbnails: any[] =
+            Array.isArray(item.thumbnails) ? item.thumbnails :
+            item.thumbnail?.contents ?? item.thumbnail ?? [];
+          const thumbnail =
+            thumbnails.length > 0
+              ? (thumbnails[thumbnails.length - 1]?.url ?? thumbnails[0]?.url ?? "")
+              : "";
+          return { id, title, artist, duration, thumbnail, audioUrl: "" };
+        })
+        .filter(Boolean) as Track[];
+    }
+  } catch (e) {
+    console.warn("[getPublicPlaylistTracks] Innertube failed, trying Piped:", e);
+  }
+
+  // --- Fallback: Piped API ---
+  const mapStream = (item: any): Track | null => {
+    const videoIdMatch = (item.url || "").match(/[?&]v=([^&]+)/);
+    const videoId = videoIdMatch ? videoIdMatch[1] : (item.url || "").replace(/^\/watch\?v=/, "");
+    if (!videoId) return null;
+    return {
+      id: videoId,
+      title: item.title || "Unknown Title",
+      artist: item.uploaderName || "Unknown Artist",
+      duration: item.duration || 180,
+      thumbnail: item.thumbnail || "",
+      audioUrl: ""
+    };
+  };
+
+  for (const baseUrl of PIPED_HOSTS) {
+    try {
+      const playlistUrl = `${baseUrl}/playlists/${playlistId}`;
+      console.log(`[getPublicPlaylistTracks] Trying Piped: ${playlistUrl}`);
+      const res = await fetchWithTimeout(playlistUrl, {
+        headers: { 'Referer': 'https://piped.video/', 'Origin': 'https://piped.video' }
+      }, 12000);
+      if (!res.ok) {
+        console.warn(`[getPublicPlaylistTracks] Piped ${baseUrl} returned ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      console.log(`[getPublicPlaylistTracks] Piped ${baseUrl} response keys:`, Object.keys(data));
+      const relatedStreams: any[] = data.relatedStreams || data.videos || data.tracks || [];
+      if (relatedStreams.length === 0) {
+        console.warn(`[getPublicPlaylistTracks] Piped ${baseUrl} returned empty streams`);
+        continue;
+      }
+      const tracks = relatedStreams.map(mapStream).filter(Boolean) as Track[];
+      console.log(`[getPublicPlaylistTracks] Piped returned ${tracks.length} tracks`);
+      return tracks;
+    } catch (e) {
+      console.warn(`[getPublicPlaylistTracks] Piped ${baseUrl} error:`, e);
+    }
+  }
+
+  console.error(`[getPublicPlaylistTracks] All sources failed for playlist ${playlistId}`);
+  return [];
 }
 
 

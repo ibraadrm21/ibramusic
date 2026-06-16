@@ -82,6 +82,7 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
     const genreCounts: Record<string, number> = {};
 
     favorites.forEach(track => {
+      if (!track || !track.artist) return;
       const art = track.artist.toLowerCase();
       artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 3, id: track.artistId }; // High weight for favorites
 
@@ -93,6 +94,7 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
     });
 
     recentlyPlayed.forEach(track => {
+      if (!track || !track.artist) return;
       const art = track.artist.toLowerCase();
       artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 1, id: track.artistId };
 
@@ -102,7 +104,7 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
       }
     });
 
-    if (currentTrack) {
+    if (currentTrack && currentTrack.artist) {
       const art = currentTrack.artist.toLowerCase();
       artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 4, id: currentTrack.artistId }; // Current track has highest immediate relevance
 
@@ -158,9 +160,10 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
     const seenIds = new Set<string>();
     const scoredCandidates: { track: Track; score: number }[] = [];
 
-    const historyIds = new Set(allUserHistory.map(h => h.id));
+    const historyIds = new Set(allUserHistory.filter(h => h && h.id).map(h => h.id));
 
     candidates.forEach(track => {
+      if (!track || !track.id || !track.artist) return;
       if (historyIds.has(track.id) || seenIds.has(track.id)) return;
       seenIds.add(track.id);
 
@@ -191,7 +194,7 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
 
     if (sorted.length < 6) {
       const fallback = await fetchFallbackPool();
-      return [...sorted, ...fallback.filter(s => !historyIds.has(s.id))].slice(0, 12);
+      return [...sorted, ...fallback.filter(s => s && s.id && !historyIds.has(s.id))].slice(0, 12);
     }
 
     return sorted.slice(0, 12);

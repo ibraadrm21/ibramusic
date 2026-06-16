@@ -216,12 +216,12 @@ export const TrackCard: React.FC<TrackCardProps> = ({
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
-      className={`group flex items-center justify-between md:grid md:grid-cols-12 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
+      className={`group flex items-center justify-between md:grid md:grid-cols-10 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
         isCurrent ? "bg-white/10 border-l-4 border-brand-accent" : "hover:bg-white/5 border-l-4 border-transparent"
       }`}
     >
       {/* Col 1: Play button, Cover, Title & Sub-artist (visible on all screen widths) */}
-      <div className="flex items-center gap-3 md:gap-4 col-span-5 flex-1 min-w-0">
+      <div className="flex items-center gap-3 md:gap-4 col-span-8 flex-1 min-w-0">
         {/* Index/Play button */}
         <div className="flex items-center justify-center w-8 shrink-0">
           <button
@@ -299,34 +299,10 @@ export const TrackCard: React.FC<TrackCardProps> = ({
         </div>
       </div>
 
-      {/* Col 2: Album Name (col-span-3, visible on md+) */}
-      <div className="hidden md:block col-span-3 min-w-0">
-        {track.albumName ? (
-          <span 
-            onClick={(e) => {
-              if (onOpenAlbum && track.albumId) {
-                e.stopPropagation();
-                onOpenAlbum({ id: track.albumId, title: track.albumName, artist: track.artist, thumbnail: track.thumbnail });
-              }
-            }}
-            className="text-xs text-gray-400 hover:text-brand-accent hover:underline cursor-pointer truncate block"
-          >
-            {track.albumName}
-          </span>
-        ) : (
-          <span className="text-xs text-gray-600">—</span>
-        )}
-      </div>
 
-      {/* Col 3: Date Added (col-span-2, visible on md+) */}
-      <div className="hidden md:block col-span-2 min-w-0">
-        <span className="text-xs text-gray-400 block truncate">
-          {track.dateAdded ? new Date(track.dateAdded).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : "—"}
-        </span>
-      </div>
 
-      {/* Col 4: Actions & Duration (col-span-2, visible on all width but duration on md+) */}
-      <div className="col-span-7 md:col-span-2 flex items-center justify-end gap-1.5 md:gap-2.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* Col 2: Actions & Duration */}
+      <div className="col-span-3 md:col-span-2 flex items-center justify-end gap-1.5 md:gap-2.5 shrink-0" onClick={(e) => e.stopPropagation()}>
         {/* Add to Playlist Button */}
         {onAddToPlaylist && (
           <button

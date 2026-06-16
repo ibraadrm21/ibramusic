@@ -140,6 +140,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isPlayingRef = useRef<boolean>(false);
   const queueRef = useRef<Track[]>([]);
   const currentIndexRef = useRef<number>(-1);
+  const isRepeatRef = useRef<"none" | "one" | "all">("none");
   const targetSeekTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -151,6 +152,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { queueRef.current = queue; }, [queue]);
   useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+  useEffect(() => { isRepeatRef.current = isRepeat; }, [isRepeat]);
 
   // Persist playback settings in localStorage
   useEffect(() => {
@@ -381,7 +383,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [volume, isMuted]);
 
   const handleTrackEnded = () => {
-    if (isRepeat === "one") {
+    if (isRepeatRef.current === "one") {
       if (isAndroid) {
         Media3Session.seek({ position: 0 });
         Media3Session.setPlaybackState({ isPlaying: true });
@@ -391,7 +393,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       setIsPlaying(true);
     } else {
-      nextTrack();
+      nextTrackRef.current();
     }
   };
 
@@ -455,12 +457,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setCurrentIndex(index !== -1 ? index : 0);
         }
       } else {
-        const index = queue.findIndex(t => t.id === track.id);
+        // Use queueRef.current (always fresh) instead of stale 'queue' state
+        const currentQ = queueRef.current;
+        const index = currentQ.findIndex(t => t.id === track.id);
         if (index !== -1) {
           setCurrentIndex(index);
         } else {
-          const updatedQueue = [...queue, track];
+          // Track not in queue at all — add it
+          const updatedQueue = [...currentQ, track];
           setQueue(updatedQueue);
+          queueRef.current = updatedQueue;
           setOriginalQueue(prev => [...prev, track]);
           setCurrentIndex(updatedQueue.length - 1);
         }
@@ -636,11 +642,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (queue.length === 0) return;
+    const q = queueRef.current;
+    const idx = currentIndexRef.current;
+    if (q.length === 0) return;
 
-    let nextIdx = currentIndex + 1;
-    if (nextIdx >= queue.length) {
-      if (isRepeat === "all") {
+    let nextIdx = idx + 1;
+    if (nextIdx >= q.length) {
+      if (isRepeatRef.current === "all") {
         nextIdx = 0;
       } else {
         playbackExpectedRef.current = false;
@@ -649,7 +657,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    if (queue[nextIdx]) playTrack(queue[nextIdx]);
+    if (q[nextIdx]) playTrack(q[nextIdx]);
   };
 
   const prevTrack = () => {
@@ -657,19 +665,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (queue.length === 0) return;
+    const q = queueRef.current;
+    const idx = currentIndexRef.current;
+    if (q.length === 0) return;
 
     if (currentTime >= 3) {
       seek(0);
       return;
     }
 
-    let prevIdx = currentIndex - 1;
+    let prevIdx = idx - 1;
     if (prevIdx < 0) {
-      prevIdx = isRepeat === "all" ? queue.length - 1 : 0;
+      prevIdx = isRepeatRef.current === "all" ? q.length - 1 : 0;
     }
 
-    if (queue[prevIdx]) playTrack(queue[prevIdx]);
+    if (q[prevIdx]) playTrack(q[prevIdx]);
   };
 
   const seek = (time: number, isRemoteSync?: boolean) => {
@@ -1118,14 +1128,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setIsLoading(false);
         setIsPlaying(false);
         showToast("Playback error. Skipping...", "error");
-        setTimeout(() => nextTrack(), 2000);
+        setTimeout(() => nextTrackRef.current(), 2000);
       });
       Media3Session.addListener("onPlaybackEnded", () => {
         handleTrackEndedRef.current();
       });
       Media3Session.addListener("onNotificationCommand", (data: { command: string; position?: number }) => {
-        if (data.command === "next") nextTrack();
-        else if (data.command === "previous") prevTrack();
+        if (data.command === "next") nextTrackRef.current();
+        else if (data.command === "previous") prevTrackRef.current();
         else if (data.command === "seek" && data.position !== undefined) seek(data.position);
       });
     } catch (err) {
@@ -1134,7 +1144,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       Media3Session.removeAllListeners().catch(() => {});
     };
-  }, [currentIndex, queue, isRepeat]);
+  }, []);
 
   return (
     <AudioContext.Provider
