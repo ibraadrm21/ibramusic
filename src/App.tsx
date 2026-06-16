@@ -1668,12 +1668,23 @@ const MainLayout: React.FC = () => {
                   autoFocus
                   placeholder="Search songs, artists, albums..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    if (e.target.value.trim() === "") {
+                      setSearchResults([]);
+                      setSearchRecommendations([]);
+                    }
+                  }}
                   className="w-full px-4 py-2.5 rounded-xl bg-white/7 border border-white/8 text-white text-sm focus:outline-none placeholder:text-gray-500"
                 />
               </form>
               <button
-                onClick={() => { setMobileSearchOpen(false); setSearchQuery(""); }}
+                onClick={() => {
+                  setMobileSearchOpen(false);
+                  setSearchQuery("");
+                  setSearchResults([]);
+                  setSearchRecommendations([]);
+                }}
                 className="text-gray-400 hover:text-white text-sm font-medium shrink-0"
               >
                 Cancel
@@ -1792,7 +1803,13 @@ const MainLayout: React.FC = () => {
                     type="text"
                     placeholder="What do you want to play?"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    if (e.target.value.trim() === "") {
+                      setSearchResults([]);
+                      setSearchRecommendations([]);
+                    }
+                  }}
                     className="w-full pl-11 pr-4 py-2.5 rounded-full bg-white/5 border border-white/5 focus:border-brand-accent/50 focus:bg-white/10 text-white text-sm focus:outline-none transition-all placeholder:text-gray-500"
                   />
                 </form>
@@ -2643,29 +2660,29 @@ const MainLayout: React.FC = () => {
                                   key={`${track.id}-${idx}`}
                                   className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
                                 >
-                                  {/* Checkbox (always in DOM during selection, clickable) */}
-                                  <div
-                                    className={`shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all
-                                      ${isSelecting ? "opacity-100" : "opacity-0 group-hover:opacity-60"}
-                                    `}
-                                    onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
-                                    title={isChecked ? "Deselect" : "Select"}
-                                  >
+                                  {/* Checkbox (only rendered during selection) */}
+                                  {isSelecting && (
                                     <div
-                                      className={`rounded-md border-2 flex items-center justify-center transition-all
-                                        ${isChecked
-                                          ? "border-brand-accent bg-brand-accent"
-                                          : "border-white/80 bg-black"
-                                        }`}
-                                      style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                                      className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                                      onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                                      title={isChecked ? "Deselect" : "Select"}
                                     >
-                                      {isChecked && (
-                                        <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                          <polyline points="1,4 3.5,7 9,1" />
-                                        </svg>
-                                      )}
+                                      <div
+                                        className={`rounded-md border-2 flex items-center justify-center transition-all
+                                          ${isChecked
+                                            ? "border-brand-accent bg-brand-accent"
+                                            : "border-white/80 bg-black"
+                                          }`}
+                                        style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                                      >
+                                        {isChecked && (
+                                          <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                            <polyline points="1,4 3.5,7 9,1" />
+                                          </svg>
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
+                                  )}
                                   <div className="flex-1 min-w-0">
                                     <TrackCard
                                       track={track}
