@@ -115,6 +115,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => subscription.unsubscribe();
   }, []);
 
+  // Sync currentUser session details to Listen Together identity
+  useEffect(() => {
+    if (currentUser) {
+      userNameRef.current = currentUser.user_metadata?.username || currentUser.email?.split("@")[0] || "User";
+      userPfpRef.current = currentUser.user_metadata?.avatar_url || "";
+      clientIdRef.current = currentUser.id;
+    } else {
+      userNameRef.current = `User-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      userPfpRef.current = "";
+      clientIdRef.current = Math.random().toString(36).substring(2, 11);
+    }
+  }, [currentUser]);
+
+
   // Listen Together Refs
   const channelRef = useRef<any>(null);
   const clientIdRef = useRef<string>(Math.random().toString(36).substring(2, 11));
