@@ -1,6 +1,8 @@
 import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -81,10 +83,16 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
   }
 }
 
-/**
- * Direct action to open the update URL in the browser.
- */
 export async function redirectToUpdate(url: string): Promise<void> {
+  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+    try {
+      await Media3Session.downloadAndInstallApk({ url });
+      return;
+    } catch (error) {
+      console.error('Direct APK installation failed, falling back to browser:', error);
+    }
+  }
+
   try {
     await Browser.open({ url });
   } catch (error) {

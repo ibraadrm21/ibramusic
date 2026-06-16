@@ -74,7 +74,7 @@ public class PlaybackService extends MediaSessionService {
         });
         
         player.setVolume(1f);
-        player.setRepeatMode(Player.REPEAT_MODE_ALL);
+        player.setRepeatMode(Player.REPEAT_MODE_OFF);
         
         customPlayer = new CustomPlayerWrapper(player, this);
         

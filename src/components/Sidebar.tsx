@@ -1,5 +1,5 @@
 import React from "react";
-import { Home, Search, Heart, Music, ListMusic } from "lucide-react";
+import { Home, Search, Heart, Music, ListMusic, Sparkles } from "lucide-react";
 
 const Github: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -23,6 +23,7 @@ interface SidebarProps {
   followedArtists: any[];
   onSelectPlaylist: (playlist: any) => void;
   onSelectArtist: (artist: any) => void;
+  userEmail?: string | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -32,12 +33,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   followedArtists,
   onSelectPlaylist,
   onSelectArtist,
+  userEmail,
 }) => {
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "search", label: "Search", icon: Search },
     { id: "favorites", label: "Favorites", icon: Heart },
     { id: "playlists", label: "Playlists", icon: ListMusic },
+    ...(userEmail === "ibradramee123@gmail.com" ? [{ id: "admin", label: "Dashboard", icon: Sparkles }] : []),
     { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
   ];
 
@@ -232,7 +235,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           { id: "search",    icon: Search,    label: "Search" },
           { id: "favorites", icon: Heart,     label: "Liked" },
           { id: "playlists", icon: ListMusic, label: "Library" },
-          { id: "github",    icon: Github,    label: "GitHub", url: "https://github.com/ibraadrm21" },
+          ...(userEmail === "ibradramee123@gmail.com"
+            ? [{ id: "admin", icon: Sparkles, label: "Dashboard" }]
+            : [{ id: "github", icon: Github, label: "GitHub", url: "https://github.com/ibraadrm21" }])
         ].map(({ id, icon: Icon, label, url }) => {
           const isActive = activeTab === id;
           if (url) {

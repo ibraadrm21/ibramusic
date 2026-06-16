@@ -374,7 +374,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Sync volume to YT player or Android
   useEffect(() => {
     if (isAndroid) {
-      Media3Session.setVolume({ volume: isMuted ? 0 : volume }).catch(() => {});
+      Media3Session.setVolume({ volume: isMuted ? 0 : 1.0 }).catch(() => {});
     } else if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === "function") {
       ytPlayerRef.current.setVolume(isMuted ? 0 : volume * 100);
     }
@@ -704,7 +704,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setVolume(clamped);
     if (clamped > 0) setIsMuted(false);
     if (isAndroid) {
-      Media3Session.setVolume({ volume: clamped }).catch(() => {});
+      Media3Session.setVolume({ volume: clamped === 0 || isMuted ? 0 : 1.0 }).catch(() => {});
     }
   };
 
@@ -938,6 +938,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const leaveRoom = () => {
     if (channelRef.current) {
       channelRef.current.unsubscribe();
+      supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
     setRoomId(null);
@@ -997,11 +998,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const users: { id: string; name: string; pfp?: string }[] = [];
       Object.keys(state).forEach(key => {
         const presences = state[key] as any;
-        presences.forEach((p: any) => users.push({
-          id: key,
-          name: p.name || `User ${key.substring(0, 4)}`,
-          pfp: p.pfp || ""
-        }));
+        if (presences && presences.length > 0) {
+          // Take the latest presence for this client ID to avoid duplicates
+          const p = presences[presences.length - 1];
+          users.push({
+            id: key,
+            name: p.name || `User ${key.substring(0, 4)}`,
+            pfp: p.pfp || ""
+          });
+        }
       });
       setParticipants(users);
     });
@@ -1092,7 +1097,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     return () => {
-      if (channelRef.current) channelRef.current.unsubscribe();
+      if (channelRef.current) {
+        channelRef.current.unsubscribe();
+        supabase.removeChannel(channelRef.current);
+      }
     };
   }, []);
 

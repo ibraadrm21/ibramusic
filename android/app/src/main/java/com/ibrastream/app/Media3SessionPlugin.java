@@ -13,6 +13,14 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.JSObject;
 import com.google.common.util.concurrent.MoreExecutors;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import android.content.Intent;
+import android.net.Uri;
+import androidx.core.content.FileProvider;
 
 @CapacitorPlugin(name = "Media3Session")
 public class Media3SessionPlugin extends Plugin {
@@ -304,5 +312,68 @@ public class Media3SessionPlugin extends Plugin {
                 call.reject(e.getMessage());
             }
         }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void downloadAndInstallApk(PluginCall call) {
+        String urlString = call.getString("url");
+        if (urlString == null || urlString.isEmpty()) {
+            call.reject("URL is required");
+            return;
+        }
+
+        Log.e(TAG, "Starting APK download from: " + urlString);
+        MainActivity activity = (MainActivity) getActivity();
+
+        new Thread(() -> {
+            try {
+                URL url = new URL(urlString);
+                HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                c.setRequestMethod("GET");
+                c.connect();
+
+                File cacheDir = activity.getCacheDir();
+                File apkFile = new File(cacheDir, "update.apk");
+                if (apkFile.exists()) {
+                    apkFile.delete();
+                }
+
+                FileOutputStream fos = new FileOutputStream(apkFile);
+                InputStream is = c.getInputStream();
+
+                byte[] buffer = new byte[4096];
+                int len1;
+                while ((len1 = is.read(buffer)) != -1) {
+                    fos.write(buffer, 0, len1);
+                }
+                fos.close();
+                is.close();
+
+                Log.e(TAG, "APK downloaded successfully to: " + apkFile.getAbsolutePath());
+
+                activity.runOnUiThread(() -> {
+                    try {
+                        Uri apkUri = FileProvider.getUriForFile(
+                            activity,
+                            activity.getPackageName() + ".fileprovider",
+                            apkFile
+                        );
+                        Intent intent = new Intent(Intent.ACTION_VIEW);
+                        intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        activity.startActivity(intent);
+                        call.resolve();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to start installation intent", e);
+                        call.reject("Failed to trigger installation: " + e.getMessage());
+                    }
+                });
+
+            } catch (Exception e) {
+                Log.e(TAG, "Error downloading APK", e);
+                call.reject("Download failed: " + e.getMessage());
+            }
+        }).start();
     }
 }

@@ -5,6 +5,9 @@ import {
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
+import { Capacitor } from "@capacitor/core";
+
+const isAndroid = Capacitor.getPlatform() === "android";
 
 interface PlayerPanelProps {
   onToggleFavorite?: (track: Track) => void;
@@ -478,24 +481,26 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         </div>
 
         {/* Volume Indicator */}
-        <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
-          <button onClick={toggleMute} className="text-gray-400 hover:text-white">
-            {isMuted || volume === 0 ? (
-              <VolumeX className="w-4.5 h-4.5 text-brand-accent" />
-            ) : (
-              <Volume2 className="w-4.5 h-4.5" />
-            )}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={isMuted ? 0 : volume}
-            onChange={(e) => changeVolume(parseFloat(e.target.value))}
-            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
-          />
-        </div>
+        {!isAndroid && (
+          <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
+            <button onClick={toggleMute} className="text-gray-400 hover:text-white">
+              {isMuted || volume === 0 ? (
+                <VolumeX className="w-4.5 h-4.5 text-brand-accent" />
+              ) : (
+                <Volume2 className="w-4.5 h-4.5" />
+              )}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => changeVolume(parseFloat(e.target.value))}
+              className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
+            />
+          </div>
+        )}
       </div>
 
       {/* Artist Profile & Next Up Sections (Only visible in Overview tab) */}

@@ -6,6 +6,9 @@ import {
   User, Globe, Lock, Link
 } from "lucide-react";
 import { AudioProvider, useAudio } from "./context/AudioContext";
+import { Capacitor } from "@capacitor/core";
+
+const isAndroid = Capacitor.getPlatform() === "android";
 import Sidebar from "./components/Sidebar";
 import PlayerPanel from "./components/PlayerPanel";
 import TrackCard from "./components/TrackCard";
@@ -546,6 +549,149 @@ const MainLayout: React.FC = () => {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
 
+  // Featured content states
+  const [featuredSongs, setFeaturedSongs] = useState<Track[]>([]);
+  const [featuredPlaylists, setFeaturedPlaylists] = useState<any[]>([]);
+  const [adminSongSearchResults, setAdminSongSearchResults] = useState<Track[]>([]);
+  const [newAdminPlName, setNewAdminPlName] = useState<string>("");
+  const [newAdminPlPfp, setNewAdminPlPfp] = useState<string>("");
+  const [adminPlSearchResults, setAdminPlSearchResults] = useState<Track[]>([]);
+  const [newAdminPlTracks, setNewAdminPlTracks] = useState<Track[]>([]);
+
+  // Hero Banner State
+  const [heroTitle, setHeroTitle] = useState<string>("Let The Music");
+  const [heroSubtitle, setHeroSubtitle] = useState<string>("Take You Away");
+  const [heroDescription, setHeroDescription] = useState<string>("IbraSexyStream Music Player Free Gay Pro Max.");
+  const [heroBgGradient, setHeroBgGradient] = useState<string>("from-brand-accent/20 via-pink-500/10 to-transparent");
+  const [heroTextColor, setHeroTextColor] = useState<string>("text-white");
+
+  const fetchFeaturedContent = async () => {
+    try {
+      const { data, error } = await supabase.from("featured_content").select("*");
+      if (error) throw error;
+      if (data) {
+        const songsEntry = data.find((item: any) => item.type === "songs");
+        setFeaturedSongs(songsEntry ? songsEntry.tracks : []);
+        setFeaturedPlaylists(data.filter((item: any) => item.type === "playlist"));
+
+        const heroEntry = data.find((item: any) => item.type === "hero_banner");
+        if (heroEntry) {
+          setHeroTitle(heroEntry.name || "Let The Music");
+          setHeroSubtitle(heroEntry.pfp || "Take You Away");
+          if (heroEntry.tracks && !Array.isArray(heroEntry.tracks)) {
+            const meta = heroEntry.tracks as any;
+            if (meta.description) setHeroDescription(meta.description);
+            if (meta.bgGradient) setHeroBgGradient(meta.bgGradient);
+            if (meta.textColor) setHeroTextColor(meta.textColor);
+          } else if (Array.isArray(heroEntry.tracks) && heroEntry.tracks.length > 0) {
+            const meta = heroEntry.tracks[0] as any;
+            if (meta) {
+              if (meta.description) setHeroDescription(meta.description);
+              if (meta.bgGradient) setHeroBgGradient(meta.bgGradient);
+              if (meta.textColor) setHeroTextColor(meta.textColor);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch featured content:", err);
+    }
+  };
+
+  const handleSaveFeaturedSongs = async (tracks: Track[]) => {
+    try {
+      const { data, error: selectError } = await supabase
+        .from("featured_content")
+        .select("id")
+        .eq("type", "songs")
+        .maybeSingle();
+      
+      if (selectError) throw selectError;
+
+      if (data) {
+        const { error } = await supabase
+          .from("featured_content")
+          .update({ tracks })
+          .eq("id", data.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("featured_content")
+          .insert({ type: "songs", name: "Featured Songs", tracks });
+        if (error) throw error;
+      }
+      showToast("Featured songs updated successfully!", "success");
+      fetchFeaturedContent();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Failed to save featured songs: " + err.message, "error");
+    }
+  };
+
+  const handleCreateFeaturedPlaylist = async () => {
+    if (!newAdminPlName.trim()) {
+      showToast("Playlist name is required", "error");
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from("featured_content")
+        .insert({
+          type: "playlist",
+          name: newAdminPlName.trim(),
+          pfp: newAdminPlPfp || null,
+          tracks: newAdminPlTracks
+        });
+      
+      if (error) throw error;
+      showToast(`Featured playlist "${newAdminPlName}" created!`, "success");
+      setNewAdminPlName("");
+      setNewAdminPlPfp("");
+      setNewAdminPlTracks([]);
+      fetchFeaturedContent();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Failed to create playlist: " + err.message, "error");
+    }
+  };
+
+  const handleSaveHeroBanner = async (title: string, subtitle: string, description: string, bgGradient: string, textColor: string) => {
+    try {
+      const { data, error: selectError } = await supabase
+        .from("featured_content")
+        .select("id")
+        .eq("type", "hero_banner")
+        .maybeSingle();
+      
+      if (selectError) throw selectError;
+
+      const payload = {
+        type: "hero_banner",
+        name: title,
+        pfp: subtitle,
+        tracks: [{ description, bgGradient, textColor }]
+      };
+
+      if (data) {
+        const { error } = await supabase
+          .from("featured_content")
+          .update(payload)
+          .eq("id", data.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("featured_content")
+          .insert(payload);
+        if (error) throw error;
+      }
+      showToast("Hero banner updated successfully!", "success");
+      fetchFeaturedContent();
+    } catch (err: any) {
+      console.error(err);
+      showToast("Failed to save hero banner: " + err.message, "error");
+    }
+  };
+
   // Auth and Sync state
   const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
   const [isAuthModalForced, setIsAuthModalForced] = useState<boolean>(false);
@@ -975,6 +1121,7 @@ const MainLayout: React.FC = () => {
         setShowUpdateModal(true);
       }
     });
+    fetchFeaturedContent();
   }, []);
 
   // Check for shared track ID in URL on mount
@@ -1507,6 +1654,7 @@ const MainLayout: React.FC = () => {
           onSelectArtist={(a) => {
             handleOpenArtist(a);
           }}
+          userEmail={user?.email}
         />
 
 
@@ -2277,6 +2425,23 @@ const MainLayout: React.FC = () => {
                           >
                             <Play className="w-5 h-5 fill-current ml-0.5" />
                           </button>
+                          <button
+                            onClick={() => {
+                              const filtered = selectedPlaylist.tracks.filter(track =>
+                                track.title.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
+                                track.artist.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
+                                (track.albumName && track.albumName.toLowerCase().includes(subSearchQuery.toLowerCase()))
+                              );
+                              if (filtered.length > 0) {
+                                const shuffled = [...filtered].sort(() => Math.random() - 0.5);
+                                playTrack(shuffled[0], shuffled, selectedPlaylist.id);
+                              }
+                            }}
+                            className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/10 active:scale-95 shrink-0"
+                            title="Shuffle play playlist"
+                          >
+                            <Shuffle className="w-5 h-5" />
+                          </button>
                         </div>
                       )}
                     </div>
@@ -2914,6 +3079,369 @@ const MainLayout: React.FC = () => {
                 );
               })()}
             </section>
+          ) : activeTab === "admin" && user?.email === "ibradramee123@gmail.com" ? (
+            /* ADMIN DASHBOARD TAB */
+            <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page text-left max-w-4xl select-none">
+              <div className="flex flex-col gap-1">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Sparkles className="w-6 h-6 text-brand-accent animate-pulse" /> Admin Dashboard
+                </h2>
+                <p className="text-xs text-gray-500">Manage featured songs and playlists displayed on the home page for all users.</p>
+              </div>
+
+              {/* SECTION: Featured Songs */}
+              <div className="rounded-2xl bg-white/4 border border-white/5 p-5 flex flex-col gap-5">
+                <h3 className="font-semibold text-sm text-white border-b border-white/5 pb-2.5">Featured Songs (Editor's Picks)</h3>
+                
+                <div className="flex flex-col gap-3">
+                  <span className="text-xs text-gray-400">Search and Add Song to Features:</span>
+                  <form onSubmit={async (e) => {
+                    e.preventDefault();
+                  }} className="flex gap-2">
+                    <input 
+                      type="text" 
+                      id="admin-song-search-input"
+                      placeholder="Search song to feature..."
+                      className="flex-1 bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    />
+                    <button 
+                      type="button"
+                      onClick={async () => {
+                        const input = document.getElementById("admin-song-search-input") as HTMLInputElement;
+                        if (!input?.value) return;
+                        const res = await searchTracks(input.value);
+                        setAdminSongSearchResults(res);
+                      }}
+                      className="px-4 py-2 bg-brand-accent text-black font-semibold rounded-xl text-xs"
+                    >
+                      Search
+                    </button>
+                  </form>
+
+                  {adminSongSearchResults.length > 0 && (
+                    <div className="max-h-48 overflow-y-auto bg-black/40 rounded-xl p-2 border border-white/5 flex flex-col gap-1">
+                      {adminSongSearchResults.slice(0, 5).map((track) => (
+                        <div key={track.id} className="flex items-center justify-between p-1.5 hover:bg-white/5 rounded-lg text-xs">
+                          <span className="text-white font-semibold truncate max-w-[200px]">{track.title} - {track.artist}</span>
+                          <button 
+                            onClick={async () => {
+                              const updated = [...featuredSongs, track];
+                              setFeaturedSongs(updated);
+                              await handleSaveFeaturedSongs(updated);
+                              setAdminSongSearchResults([]);
+                              const input = document.getElementById("admin-song-search-input") as HTMLInputElement;
+                              if (input) input.value = "";
+                            }}
+                            className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white rounded text-[10px]"
+                          >
+                            + Add
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs text-gray-400">Current Featured Songs:</span>
+                  {featuredSongs.length === 0 ? (
+                    <p className="text-[11px] text-gray-600 italic">No featured songs yet.</p>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {featuredSongs.map((track, index) => (
+                        <div key={track.id + "-" + index} className="flex items-center justify-between p-2 bg-white/2 rounded-xl text-xs border border-white/5">
+                          <span className="text-white truncate">{track.title} - {track.artist}</span>
+                          <button 
+                            onClick={async () => {
+                              const updated = featuredSongs.filter((_, i) => i !== index);
+                              setFeaturedSongs(updated);
+                              await handleSaveFeaturedSongs(updated);
+                            }}
+                            className="text-red-400 hover:text-red-300 font-semibold"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* SECTION: Featured Playlists */}
+              <div className="rounded-2xl bg-white/4 border border-white/5 p-5 flex flex-col gap-5">
+                <h3 className="font-semibold text-sm text-white border-b border-white/5 pb-2.5">Featured Playlists</h3>
+                
+                <div className="bg-black/20 border border-white/5 rounded-2xl p-4 flex flex-col gap-4">
+                  <span className="text-xs font-semibold text-white">Create New Featured Playlist</span>
+                  <div className="flex flex-col md:flex-row gap-4">
+                    <div 
+                      onClick={() => document.getElementById("admin-pl-pfp")?.click()}
+                      className="w-24 h-24 rounded-2xl border border-white/10 bg-white/5 flex flex-col items-center justify-center cursor-pointer overflow-hidden shrink-0 group relative"
+                    >
+                      {newAdminPlPfp ? (
+                        <img src={newAdminPlPfp} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="flex flex-col items-center text-gray-500">
+                          <Plus className="w-5 h-5" />
+                          <span className="text-[9px]">PFP/Cover</span>
+                        </div>
+                      )}
+                    </div>
+                    <input 
+                      type="file" 
+                      id="admin-pl-pfp" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (ev) => setNewAdminPlPfp(ev.target?.result as string);
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+
+                    <div className="flex-1 flex flex-col gap-3">
+                      <input 
+                        type="text" 
+                        placeholder="Playlist Name" 
+                        value={newAdminPlName}
+                        onChange={(e) => setNewAdminPlName(e.target.value)}
+                        className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      />
+                      
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] text-gray-400">Search and Add Songs:</span>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            id="admin-pl-song-search"
+                            placeholder="Song name..."
+                            className="flex-1 bg-white/5 border border-white/5 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none"
+                          />
+                          <button 
+                            type="button"
+                            onClick={async () => {
+                              const input = document.getElementById("admin-pl-song-search") as HTMLInputElement;
+                              if (!input?.value) return;
+                              const res = await searchTracks(input.value);
+                              setAdminPlSearchResults(res);
+                            }}
+                            className="px-3 py-1.5 bg-white/10 rounded-xl text-[10px] font-semibold text-white"
+                          >
+                            Search
+                          </button>
+                        </div>
+
+                        {adminPlSearchResults.length > 0 && (
+                          <div className="max-h-36 overflow-y-auto bg-black/40 rounded-xl p-1.5 border border-white/5 flex flex-col gap-1">
+                            {adminPlSearchResults.slice(0, 5).map((track) => (
+                              <div key={track.id} className="flex items-center justify-between p-1 hover:bg-white/5 rounded text-[10px]">
+                                <span className="text-white truncate max-w-[180px]">{track.title} - {track.artist}</span>
+                                <button 
+                                  onClick={() => {
+                                    setNewAdminPlTracks([...newAdminPlTracks, track]);
+                                    setAdminPlSearchResults([]);
+                                    const input = document.getElementById("admin-pl-song-search") as HTMLInputElement;
+                                    if (input) input.value = "";
+                                  }}
+                                  className="text-brand-accent font-semibold"
+                                >
+                                  + Add
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {newAdminPlTracks.length > 0 && (
+                    <div className="flex flex-col gap-1 border-t border-white/5 pt-2">
+                      <span className="text-[10px] text-gray-400">Added Tracks ({newAdminPlTracks.length}):</span>
+                      <div className="max-h-24 overflow-y-auto flex flex-col gap-1">
+                        {newAdminPlTracks.map((t, idx) => (
+                          <div key={t.id + "-" + idx} className="flex justify-between items-center text-[10px] text-gray-300">
+                            <span className="truncate">{t.title} - {t.artist}</span>
+                            <button 
+                              onClick={() => setNewAdminPlTracks(newAdminPlTracks.filter((_, i) => i !== idx))}
+                              className="text-red-400 hover:text-red-300"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={handleCreateFeaturedPlaylist}
+                    className="w-full py-2 bg-brand-accent text-black font-semibold rounded-xl text-xs shadow-md shadow-brand-accent/25 mt-2"
+                  >
+                    Save Playlist
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs text-gray-400">Featured Playlists List:</span>
+                  {featuredPlaylists.length === 0 ? (
+                    <p className="text-[11px] text-gray-600 italic">No featured playlists yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {featuredPlaylists.map((pl) => (
+                        <div key={pl.id} className="flex items-center gap-3 p-3 bg-white/2 rounded-2xl border border-white/5 justify-between">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {pl.pfp ? (
+                              <img src={pl.pfp} className="w-10 h-10 object-cover rounded-xl" />
+                            ) : (
+                              <div className="w-10 h-10 bg-white/5 border border-white/5 flex items-center justify-center rounded-xl text-brand-accent font-bold">
+                                PL
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="font-bold text-xs text-white truncate">{pl.name}</p>
+                              <p className="text-[10px] text-gray-400">{pl.tracks?.length || 0} Songs</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={async () => {
+                              await supabase.from("featured_content").delete().eq("id", pl.id);
+                              showToast(`Deleted playlist "${pl.name}"`, "info");
+                              fetchFeaturedContent();
+                            }}
+                            className="text-red-400 hover:text-red-300 text-xs font-semibold shrink-0"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* SECTION: Hero Banner Settings */}
+              <div className="rounded-2xl bg-white/4 border border-white/5 p-5 flex flex-col gap-5">
+                <h3 className="font-semibold text-sm text-white border-b border-white/5 pb-2.5">Hero Banner Customization</h3>
+                
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-400">Main Title Text</label>
+                    <input 
+                      type="text" 
+                      value={heroTitle}
+                      onChange={(e) => setHeroTitle(e.target.value)}
+                      placeholder="e.g., Let The Music"
+                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-400">Animated Subtitle Text</label>
+                    <input 
+                      type="text" 
+                      value={heroSubtitle}
+                      onChange={(e) => setHeroSubtitle(e.target.value)}
+                      placeholder="e.g., Take You Away"
+                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-400">Description / Disclaimer Text</label>
+                    <textarea 
+                      value={heroDescription}
+                      onChange={(e) => setHeroDescription(e.target.value)}
+                      placeholder="e.g., IbraSexyStream Music Player Free Gay Pro Max."
+                      rows={2}
+                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors resize-none"
+                    />
+                  </div>
+
+                  {/* Gradient Presets */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs text-gray-400">Select Background Gradient Preset</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                      {[
+                        { name: "Default Glow", class: "from-brand-accent/20 via-pink-500/10 to-transparent" },
+                        { name: "Sunset Sparkle", class: "from-orange-500/20 via-rose-500/15 to-transparent" },
+                        { name: "Cyberpunk Violet", class: "from-purple-600/20 via-fuchsia-500/15 to-transparent" },
+                        { name: "Emerald Aurora", class: "from-emerald-500/20 via-teal-500/10 to-transparent" },
+                        { name: "Ocean Breeze", class: "from-blue-600/20 via-cyan-500/15 to-transparent" }
+                      ].map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          onClick={() => setHeroBgGradient(preset.class)}
+                          className={`p-2 rounded-xl text-[10px] font-semibold transition-all border ${
+                            heroBgGradient === preset.class ? "bg-brand-accent text-black border-brand-accent" : "bg-white/5 text-white border-white/5 hover:bg-white/10"
+                          }`}
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-400">Custom Gradient Tailwind Classes</label>
+                    <input 
+                      type="text" 
+                      value={heroBgGradient}
+                      onChange={(e) => setHeroBgGradient(e.target.value)}
+                      placeholder="e.g., from-brand-accent/20 via-pink-500/10 to-transparent"
+                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors"
+                    />
+                  </div>
+
+                  {/* Text Color Presets */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs text-gray-400">Title & Subtitle Color Preset</label>
+                    <div className="flex gap-2">
+                      {[
+                        { name: "Pure White", class: "text-white" },
+                        { name: "Brand Accent", class: "text-brand-accent" },
+                        { name: "Muted Silver", class: "text-gray-300" },
+                        { name: "Rose Pink", class: "text-rose-400" }
+                      ].map((color) => (
+                        <button
+                          key={color.name}
+                          type="button"
+                          onClick={() => setHeroTextColor(color.class)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-semibold transition-all border ${
+                            heroTextColor === color.class ? "bg-brand-accent text-black border-brand-accent" : "bg-white/5 text-white border-white/5 hover:bg-white/10"
+                          }`}
+                        >
+                          {color.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-400">Custom Title/Subtitle Text Color Class</label>
+                    <input 
+                      type="text" 
+                      value={heroTextColor}
+                      onChange={(e) => setHeroTextColor(e.target.value)}
+                      placeholder="e.g., text-white"
+                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors"
+                    />
+                  </div>
+
+                  <button 
+                    onClick={() => handleSaveHeroBanner(heroTitle, heroSubtitle, heroDescription, heroBgGradient, heroTextColor)}
+                    className="w-full py-2.5 bg-brand-accent text-black font-bold rounded-xl text-xs shadow-md shadow-brand-accent/25 mt-2 hover:bg-brand-accent/90 active:scale-98 transition-all"
+                  >
+                    Save Banner Settings
+                  </button>
+                </div>
+              </div>
+            </section>
           ) : activeTab === "visuals" ? (
             /* VISUAL STYLING TAB */
             <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page text-left max-w-2xl">
@@ -3135,18 +3663,106 @@ const MainLayout: React.FC = () => {
             /* MAIN HOME VIEW */
             <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page">
 
+              {/* Customizable Hero Card */}
+              <div className={`relative overflow-hidden rounded-[32px] bg-gradient-to-br ${heroBgGradient} p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]`}>
+                <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand-accent/20 rounded-full blur-3xl pointer-events-none"></div>
+                <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
+                <div className="max-w-md relative z-10 flex flex-col gap-3">
+                  <span className={`inline-block font-semibold bg-gradient-to-r from-gray-400 via-white to-gray-400 bg-clip-text text-transparent bg-[length:200%_auto] animate-[shine_4s_linear_infinite] text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`} style={{ animationDuration: "4s" }}>{heroTitle}</span>
+                  <span className={`inline-flex flex-wrap text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`}>
+                    {heroSubtitle.split("").map((char, index) => (
+                      <span
+                        key={index}
+                        className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]"
+                        style={{
+                          animationDelay: `${index * 40}ms`,
+                          opacity: 1,
+                          whiteSpace: char === " " ? "pre" : "normal"
+                        }}
+                      >
+                        {char}
+                      </span>
+                    ))}
+                  </span>
+                  <p className="text-xs md:text-sm text-gray-400 mt-2 leading-relaxed">{heroDescription}</p>
+                </div>
+              </div>
+
+              {/* Ibra's Pick Section */}
+              {(featuredPlaylists.length > 0 || featuredSongs.length > 0) && (
+                <div className="animate-[fadeIn_0.4s_ease]">
+                  <h2 className="text-lg font-bold text-white tracking-wide mb-4 pl-1 flex items-center gap-2">
+                    <Sparkles className="w-4.5 h-4.5 text-brand-accent animate-pulse" /> Ibra's Pick
+                  </h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+                    {/* Featured Playlists */}
+                    {featuredPlaylists.map((pl) => (
+                      <div
+                        key={`feat-pl-${pl.id}`}
+                        onClick={() => {
+                          setSelectedPlaylist({
+                            id: String(pl.id),
+                            name: pl.name,
+                            tracks: pl.tracks || [],
+                            coverUrl: pl.pfp
+                          });
+                          setActiveTab("playlists");
+                        }}
+                        className="glass-card rounded-2xl p-4 flex flex-col gap-3 group cursor-pointer"
+                      >
+                        <div className="aspect-square w-full rounded-xl bg-white/5 border border-white/5 flex items-center justify-center overflow-hidden relative shadow-md">
+                          {pl.pfp ? (
+                            <img
+                              src={pl.pfp}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-all duration-300"
+                              alt={pl.name}
+                            />
+                          ) : (
+                            <ListMusic className="w-10 h-10 text-brand-accent group-hover:scale-105 transition-all duration-300" />
+                          )}
+                        </div>
+                        <div className="min-w-0 text-left">
+                          <h4 className="font-bold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
+                            {pl.name}
+                          </h4>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            Curated • {pl.tracks?.length || 0} Songs
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Featured Songs */}
+                    {featuredSongs.map((track, idx) => (
+                      <TrackCard
+                        key={`feat-song-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={featuredSongs}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        onOpenAlbum={handleOpenAlbum}
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Recent Section / 2x4 Quick Access Grid */}
-              {searchResults.length > 0 && (
+              {homeRecommendations.length > 0 && (
                 <div className="animate-[fadeIn_0.3s_ease]">
                   <h2 className="text-2xl font-bold text-white tracking-wide mb-4 pl-1">
                     Good Afternoon
                   </h2>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                     {/* 8 quick-access cards */}
-                    {searchResults.slice(0, 8).map((track) => (
+                    {homeRecommendations.slice(0, 8).map((track) => (
                       <div
                         key={`quick-${track.id}`}
-                        onClick={() => playTrack(track, searchResults)}
+                        onClick={() => playTrack(track, homeRecommendations)}
                         className="group relative flex items-center gap-4 bg-white/5 hover:bg-white/10 rounded-lg overflow-hidden cursor-pointer transition-all border border-white/5 select-none pr-12"
                       >
                         <img src={track.thumbnail} className="w-20 h-20 object-cover shrink-0" />
@@ -3169,31 +3785,6 @@ const MainLayout: React.FC = () => {
                   </div>
                 </div>
               )}
-
-              {/* Let the music take you away - Hero Card */}
-              <div className="relative overflow-hidden rounded-[32px] bg-gradient-to-br from-brand-accent/20 via-pink-500/10 to-transparent p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]">
-                <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand-accent/20 rounded-full blur-3xl pointer-events-none"></div>
-                <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
-                <div className="max-w-md relative z-10 flex flex-col gap-3">
-                  <span className="inline-block font-semibold bg-gradient-to-r from-gray-400 via-white to-gray-400 bg-clip-text text-transparent bg-[length:200%_auto] animate-[shine_4s_linear_infinite] text-3xl md:text-4xl font-extrabold tracking-wide" style={{ animationDuration: "4s" }}>Let The Music</span>
-                  <span className="inline-flex flex-wrap text-3xl md:text-4xl font-extrabold text-white tracking-wide">
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "0ms", opacity: 1, whiteSpace: "normal" }}>T</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "40ms", opacity: 1, whiteSpace: "normal" }}>a</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "80ms", opacity: 1, whiteSpace: "normal" }}>k</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "120ms", opacity: 1, whiteSpace: "normal" }}>e</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "160ms", opacity: 1, whiteSpace: "pre" }}> </span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "200ms", opacity: 1, whiteSpace: "normal" }}>Y</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "240ms", opacity: 1, whiteSpace: "normal" }}>o</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "280ms", opacity: 1, whiteSpace: "normal" }}>u</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "320ms", opacity: 1, whiteSpace: "pre" }}> </span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "360ms", opacity: 1, whiteSpace: "normal" }}>A</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "400ms", opacity: 1, whiteSpace: "normal" }}>w</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "440ms", opacity: 1, whiteSpace: "normal" }}>a</span>
-                    <span className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]" style={{ animationDelay: "480ms", opacity: 1, whiteSpace: "normal" }}>y</span>
-                  </span>
-                  <p className="text-xs md:text-sm text-gray-400 mt-2 leading-relaxed">IbraSexyStream Music Player Free Gay Pro Max.</p>
-                </div>
-              </div>
 
               {/* Discover Weekly */}
               {homeRecommendations.length > 6 && (
@@ -4505,16 +5096,18 @@ const MainLayout: React.FC = () => {
             >
               <ListMusic className="w-4.5 h-4.5" />
             </button>
-            <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
-              <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
-                {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
-              </button>
-              <input
-                type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
-                onChange={(e) => changeVolume(parseFloat(e.target.value))}
-                className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
-              />
-            </div>
+            {!isAndroid && (
+              <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
+                <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
+                  {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
+                </button>
+                <input
+                  type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
+                  onChange={(e) => changeVolume(parseFloat(e.target.value))}
+                  className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+                />
+              </div>
+            )}
           </div>
         </footer>
       )}
