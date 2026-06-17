@@ -16,11 +16,12 @@ public class MainActivity extends BridgeActivity {
         return controllerFuture;
     }
 
+    @androidx.media3.common.util.UnstableApi
     private void setNativePlayerVolume(float volume) {
         if (PlaybackService.customPlayer != null) {
             try {
                 float targetVol = (volume > 0f) ? PlaybackService.userVolume : 0f;
-                https://github.com/anandnet/Harmony-Music ºPlaybackService.customPlayer.setVolume(targetVol);
+                PlaybackService.customPlayer.setVolume(targetVol);
                 Log.e("IbraStreamMedia", "MainActivity: setNativePlayerVolume=" + targetVol);
             } catch (Exception e) {
                 Log.e("IbraStreamMedia", "Failed to set native player volume", e);

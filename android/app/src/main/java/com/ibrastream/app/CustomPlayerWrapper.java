@@ -74,6 +74,7 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
     private void sendMediaCommand(String command, Double position) {
         Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
         intent.putExtra("command", command);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         if (position != null) {
             intent.putExtra("position", position);
         }
@@ -84,7 +85,7 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
             PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:CustomPlayerWakeLock");
-                wakeLock.acquire(5000); // 5 seconds
+                wakeLock.acquire(10000); // 10 seconds
                 Log.e(TAG, "CustomPlayerWrapper: Acquired WakeLock for " + command);
             }
         } catch (Exception e) {

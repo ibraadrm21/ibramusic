@@ -5,6 +5,7 @@ import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.os.Build;
+import android.os.PowerManager;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.media3.common.MediaMetadata;
@@ -85,8 +86,17 @@ public class Media3SessionPlugin extends Plugin {
         commandReceiver = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(android.content.Context context, android.content.Intent intent) {
+                // Wake up the CPU for the Plugin as well
+                PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+                PowerManager.WakeLock wl = null;
+                if (pm != null) {
+                    wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:ReceiverWakeLock");
+                    wl.acquire(10000);
+                }
+
                 String command = intent.getStringExtra("command");
                 if (command != null) {
+                    Log.e(TAG, "Plugin: Received broadcast command: " + command);
                     JSObject ret = new JSObject();
                     ret.put("command", command);
                     if ("seek".equals(command)) {
@@ -94,20 +104,25 @@ public class Media3SessionPlugin extends Plugin {
                     }
                     notifyListeners("onNotificationCommand", ret);
                 }
+                
+                if (wl != null && wl.isHeld()) {
+                    wl.release();
+                }
             }
         };
         android.content.IntentFilter filter = new android.content.IntentFilter("com.ibrastream.app.MEDIA_COMMAND");
+        Context appContext = getContext().getApplicationContext();
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            getContext().registerReceiver(commandReceiver, filter, android.content.Context.RECEIVER_EXPORTED);
+            appContext.registerReceiver(commandReceiver, filter, android.content.Context.RECEIVER_EXPORTED);
         } else {
-            getContext().registerReceiver(commandReceiver, filter);
+            appContext.registerReceiver(commandReceiver, filter);
         }
     }
 
     @Override
     protected void handleOnDestroy() {
         if (commandReceiver != null) {
-            getContext().unregisterReceiver(commandReceiver);
+            getContext().getApplicationContext().unregisterReceiver(commandReceiver);
             commandReceiver = null;
         }
         super.handleOnDestroy();

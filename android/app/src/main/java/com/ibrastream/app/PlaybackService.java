@@ -125,6 +125,7 @@ public class PlaybackService extends MediaSessionService {
     private void sendMediaCommand(String command) {
         Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
         intent.putExtra("command", command);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         sendBroadcast(intent);
 
         // Acquire a temporary WakeLock to ensure the CPU stays on long enough
@@ -133,7 +134,7 @@ public class PlaybackService extends MediaSessionService {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
                 PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:MediaCommandWakeLock");
-                wakeLock.acquire(10000); // 10 seconds
+                wakeLock.acquire(15000); // Increased to 15 seconds
                 Log.e(TAG, "Acquired temporary WakeLock for command: " + command);
             }
         } catch (Exception e) {
