@@ -1,7 +1,12 @@
 package com.ibrastream.app;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.ComponentName;
+import android.content.Context;
+import android.os.Build;
 import android.util.Log;
+import androidx.core.app.NotificationCompat;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
@@ -314,6 +319,21 @@ public class Media3SessionPlugin extends Plugin {
         }, MoreExecutors.directExecutor());
     }
 
+    private static final String NOTIF_CHANNEL_ID = "ibrastream_update";
+    private static final int NOTIF_ID = 9001;
+
+    private void ensureNotificationChannel(Context ctx) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm.getNotificationChannel(NOTIF_CHANNEL_ID) == null) {
+                NotificationChannel ch = new NotificationChannel(
+                    NOTIF_CHANNEL_ID, "App Updates", NotificationManager.IMPORTANCE_LOW);
+                ch.setDescription("Download progress for app updates");
+                nm.createNotificationChannel(ch);
+            }
+        }
+    }
+
     @PluginMethod
     public void downloadAndInstallApk(PluginCall call) {
         String urlString = call.getString("url");
@@ -324,32 +344,90 @@ public class Media3SessionPlugin extends Plugin {
 
         Log.e(TAG, "Starting APK download from: " + urlString);
         MainActivity activity = (MainActivity) getActivity();
+        ensureNotificationChannel(activity);
+
+        NotificationManager nm = (NotificationManager) activity.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationCompat.Builder notifBuilder = new NotificationCompat.Builder(activity, NOTIF_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Downloading update…")
+            .setContentText("Preparing download")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setProgress(100, 0, true);
+        nm.notify(NOTIF_ID, notifBuilder.build());
 
         new Thread(() -> {
             try {
+                // Follow redirects manually (GitHub CDN uses HTTP→HTTPS redirects)
                 URL url = new URL(urlString);
                 HttpURLConnection c = (HttpURLConnection) url.openConnection();
-                c.setRequestMethod("GET");
+                c.setInstanceFollowRedirects(false);
+                c.setRequestProperty("User-Agent", "IbraStream-Updater/1.0");
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(60000);
                 c.connect();
+
+                int status = c.getResponseCode();
+                while (status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == 307 || status == 308) {
+                    String newUrl = c.getHeaderField("Location");
+                    c.disconnect();
+                    Log.e(TAG, "Redirect to: " + newUrl);
+                    url = new URL(newUrl);
+                    c = (HttpURLConnection) url.openConnection();
+                    c.setInstanceFollowRedirects(false);
+                    c.setRequestProperty("User-Agent", "IbraStream-Updater/1.0");
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(60000);
+                    c.connect();
+                    status = c.getResponseCode();
+                }
+
+                if (status < 200 || status >= 300) {
+                    nm.cancel(NOTIF_ID);
+                    call.reject("Server returned HTTP " + status);
+                    return;
+                }
+
+                long totalBytes = c.getContentLengthLong();
 
                 File cacheDir = activity.getCacheDir();
                 File apkFile = new File(cacheDir, "update.apk");
-                if (apkFile.exists()) {
-                    apkFile.delete();
-                }
+                if (apkFile.exists()) apkFile.delete();
 
                 FileOutputStream fos = new FileOutputStream(apkFile);
                 InputStream is = c.getInputStream();
 
-                byte[] buffer = new byte[4096];
-                int len1;
-                while ((len1 = is.read(buffer)) != -1) {
-                    fos.write(buffer, 0, len1);
+                byte[] buffer = new byte[8192];
+                long downloaded = 0;
+                int len;
+                int lastProgress = -1;
+
+                while ((len = is.read(buffer)) != -1) {
+                    fos.write(buffer, 0, len);
+                    downloaded += len;
+                    if (totalBytes > 0) {
+                        int progress = (int) (downloaded * 100 / totalBytes);
+                        if (progress != lastProgress) {
+                            lastProgress = progress;
+                            long dlMb = downloaded / (1024 * 1024);
+                            long totMb = totalBytes / (1024 * 1024);
+                            notifBuilder
+                                .setContentText(dlMb + " MB / " + totMb + " MB")
+                                .setProgress(100, progress, false);
+                            nm.notify(NOTIF_ID, notifBuilder.build());
+                        }
+                    }
                 }
                 fos.close();
                 is.close();
+                c.disconnect();
 
-                Log.e(TAG, "APK downloaded successfully to: " + apkFile.getAbsolutePath());
+                Log.e(TAG, "APK downloaded to: " + apkFile.getAbsolutePath() + " (" + downloaded + " bytes)");
+
+                // Cancel progress notification
+                nm.cancel(NOTIF_ID);
 
                 activity.runOnUiThread(() -> {
                     try {
@@ -372,6 +450,7 @@ public class Media3SessionPlugin extends Plugin {
 
             } catch (Exception e) {
                 Log.e(TAG, "Error downloading APK", e);
+                nm.cancel(NOTIF_ID);
                 call.reject("Download failed: " + e.getMessage());
             }
         }).start();
