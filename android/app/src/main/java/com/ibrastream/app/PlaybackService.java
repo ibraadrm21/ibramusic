@@ -1,10 +1,7 @@
 package com.ibrastream.app;
 
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
-import android.net.wifi.WifiManager;
-import android.os.PowerManager;
 import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.media3.common.AudioAttributes;
@@ -21,23 +18,12 @@ public class PlaybackService extends MediaSessionService {
     public static float userVolume = 1f;
     private MediaSession mediaSession = null;
     private ExoPlayer player = null;
-    private PowerManager.WakeLock wakeLock = null;
-    private WifiManager.WifiLock wifiLock = null;
 
     @Override
     public void onCreate() {
         super.onCreate();
         Log.e(TAG, "PlaybackService CREATED");
-        
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (pm != null) {
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:ServiceWakeLock");
-        }
-        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        if (wm != null) {
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "IbraStream:WifiLock");
-        }
-        
+
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -58,7 +44,6 @@ public class PlaybackService extends MediaSessionService {
                 .setAudioAttributes(audioAttributes, true)
                 .setHandleAudioBecomingNoisy(true)
                 .setMediaSourceFactory(mediaSourceFactory)
-                .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
         
         player.addListener(new Player.Listener() {
@@ -68,11 +53,7 @@ public class PlaybackService extends MediaSessionService {
                 if (state == Player.STATE_IDLE) stateStr = "IDLE";
                 else if (state == Player.STATE_BUFFERING) stateStr = "BUFFERING";
                 else if (state == Player.STATE_READY) stateStr = "READY";
-                else if (state == Player.STATE_ENDED) {
-                    stateStr = "ENDED";
-                    Log.e(TAG, "ExoPlayer: Playback ended, sending auto-advance broadcast");
-                    sendMediaCommand("next");
-                }
+                else if (state == Player.STATE_ENDED) stateStr = "ENDED";
                 Log.e(TAG, "ExoPlayer: onPlaybackStateChanged=" + stateStr);
             }
 
@@ -89,13 +70,6 @@ public class PlaybackService extends MediaSessionService {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 Log.e(TAG, "ExoPlayer: onIsPlayingChanged=" + isPlaying);
-                if (isPlaying) {
-                    if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
-                    if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
-                } else {
-                    if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-                    if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
-                }
             }
         });
         
@@ -128,50 +102,22 @@ public class PlaybackService extends MediaSessionService {
                     public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controllerInfo, int playerCommand) {
                         if (playerCommand == Player.COMMAND_SEEK_TO_NEXT) {
                             Log.e(TAG, "Callback: Intercepted skip to next");
-                            sendMediaCommand("next");
+                            Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
+                            intent.putExtra("command", "next");
+                            sendBroadcast(intent);
                             return SessionResult.RESULT_SUCCESS;
                         }
                         if (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS) {
                             Log.e(TAG, "Callback: Intercepted skip to previous");
-                            sendMediaCommand("previous");
+                            Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
+                            intent.putExtra("command", "previous");
+                            sendBroadcast(intent);
                             return SessionResult.RESULT_SUCCESS;
                         }
                         return MediaSession.Callback.super.onPlayerCommandRequest(session, controllerInfo, playerCommand);
                     }
                 })
                 .build();
-    }
-
-    private void sendMediaCommand(String command) {
-        Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-        intent.putExtra("command", command);
-        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
-        sendBroadcast(intent);
-
-        // Acquire a temporary WakeLock to ensure the CPU stays on long enough
-        // for the WebView/Capacitor to receive the broadcast and start loading the next track.
-        try {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null) {
-                PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:MediaCommandWakeLock");
-                wakeLock.acquire(15000); // Increased to 15 seconds
-                Log.e(TAG, "Acquired temporary WakeLock for command: " + command);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to acquire wake lock", e);
-        }
-    }
-
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        super.onStartCommand(intent, flags, startId);
-        return START_STICKY;
-    }
-
-    @Override
-    public void onTaskRemoved(Intent rootIntent) {
-        super.onTaskRemoved(rootIntent);
-        // Do not stop the service when the task is removed
     }
 
     @Nullable
@@ -184,8 +130,6 @@ public class PlaybackService extends MediaSessionService {
     @Override
     public void onDestroy() {
         Log.e(TAG, "PlaybackService DESTROYED");
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         customPlayer = null;
         if (mediaSession != null) {
             if (player != null) {

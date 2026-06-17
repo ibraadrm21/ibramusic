@@ -54,8 +54,14 @@ public class Media3SessionPlugin extends Plugin {
                             JSObject ret = new JSObject();
                             ret.put("ended", true);
                             notifyListeners("onPlaybackEnded", ret);
-                            // Note: The actual auto-advance broadcast is now sent from PlaybackService.java
-                            // to ensure it works reliably when the app is in the background.
+                            // Also send a broadcast so auto-advance works when
+                            // the app is backgrounded and the WebView is throttled.
+                            // The BroadcastReceiver (commandReceiver) will queue the
+                            // "next" command and deliver it when JS resumes.
+                            android.content.Intent nextIntent =
+                                new android.content.Intent("com.ibrastream.app.MEDIA_COMMAND");
+                            nextIntent.putExtra("command", "next");
+                            getContext().sendBroadcast(nextIntent);
                         } else if (playbackState == Player.STATE_READY) {
                             JSObject ret = new JSObject();
                             ret.put("ready", true);
@@ -86,17 +92,18 @@ public class Media3SessionPlugin extends Plugin {
         commandReceiver = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(android.content.Context context, android.content.Intent intent) {
-                // Wake up the CPU for the Plugin as well
+                // Acquire a temporary WakeLock to ensure the CPU stays on long enough
+                // for the notification to be delivered to JavaScript.
                 PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
-                PowerManager.WakeLock wl = null;
+                PowerManager.WakeLock wakeLock = null;
                 if (pm != null) {
-                    wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:ReceiverWakeLock");
-                    wl.acquire(10000);
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:PluginReceiverWakeLock");
+                    wakeLock.acquire(10000); // 10 seconds
                 }
 
                 String command = intent.getStringExtra("command");
                 if (command != null) {
-                    Log.e(TAG, "Plugin: Received broadcast command: " + command + " (App foreground: " + MainActivity.isAppInForeground + ")");
+                    Log.e(TAG, "Plugin: RECEIVED COMMAND: " + command + " (Listeners: " + (hasListeners("onNotificationCommand") ? "YES" : "NO") + ")");
                     JSObject ret = new JSObject();
                     ret.put("command", command);
                     if ("seek".equals(command)) {
@@ -107,10 +114,8 @@ public class Media3SessionPlugin extends Plugin {
                     getBridge().getWebView().post(() -> {
                         try {
                             if (!MainActivity.isAppInForeground) {
-                                Log.e(TAG, "Plugin: Poking WebView timers/state for background command");
+                                Log.e(TAG, "Plugin: Poking WebView timers for background command: " + command);
                                 getBridge().getWebView().resumeTimers();
-                                // We don't call onResume() as it might have side effects, 
-                                // but resumeTimers() is often enough for JS.
                             }
                             notifyListeners("onNotificationCommand", ret);
                         } catch (Exception e) {
@@ -118,9 +123,9 @@ public class Media3SessionPlugin extends Plugin {
                         }
                     });
                 }
-                
-                if (wl != null && wl.isHeld()) {
-                    wl.release();
+
+                if (wakeLock != null && wakeLock.isHeld()) {
+                    wakeLock.release();
                 }
             }
         };

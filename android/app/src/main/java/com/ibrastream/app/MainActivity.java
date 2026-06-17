@@ -1,8 +1,13 @@
 package com.ibrastream.app;
 
 import android.content.ComponentName;
+import android.graphics.Color;
 import android.os.Bundle;
+import android.view.Window;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
 import androidx.core.splashscreen.SplashScreen;
+import androidx.core.view.WindowCompat;
 import androidx.media3.session.MediaController;
 import androidx.media3.session.SessionToken;
 import com.getcapacitor.BridgeActivity;
@@ -34,6 +39,24 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(Media3SessionPlugin.class);
         SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
+
+        // Enable edge-to-edge display
+        Window window = getWindow();
+        WindowCompat.setDecorFitsSystemWindows(window, false);
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.setNavigationBarContrastEnforced(false);
+        }
+
+        // Disable WebView zoom
+        WebView webView = getBridge().getWebView();
+        if (webView != null) {
+            WebSettings settings = webView.getSettings();
+            settings.setSupportZoom(false);
+            settings.setBuiltInZoomControls(false);
+            settings.setDisplayZoomControls(false);
+        }
 
         // Explicitly start the PlaybackService so it runs independently of Activity lifecycle
         try {

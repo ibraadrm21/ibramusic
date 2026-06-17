@@ -100,7 +100,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="group relative flex flex-col items-center gap-3 p-3.5 rounded-2xl glass-card cursor-pointer select-none"
+        className="group relative flex flex-col gap-2 rounded-xl cursor-pointer select-none"
       >
         {/* Cover Art Container */}
         <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
@@ -114,26 +114,24 @@ export const TrackCard: React.FC<TrackCardProps> = ({
             <button
               onClick={handlePlayClick}
               disabled={isCurrent && isLoading}
-              className={`p-3.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black transition-all duration-300 glow-accent ${isCurrent && isLoading ? "translate-y-0" : "transform translate-y-3 group-hover:translate-y-0"}`}
+              className={`p-3 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black transition-all duration-300 glow-accent ${isCurrent && isLoading ? "translate-y-0" : "transform translate-y-3 group-hover:translate-y-0"}`}
             >
               {isCurrent && isLoading ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : isCurrent && isPlaying ? (
-                <Pause className="w-5 h-5 fill-current" />
+                <Pause className="w-4 h-4 fill-current" />
               ) : (
-                <Play className="w-5 h-5 fill-current ml-0.5" />
+                <Play className="w-4 h-4 fill-current ml-0.5" />
               )}
             </button>
           </div>
 
-          {/* Playing/Loading indicator strip */}
+          {/* Playing indicator strip */}
           {isCurrent && (isPlaying || isLoading) && (
-            <div className="absolute bottom-2 left-2 right-2 bg-brand-accent/90 backdrop-blur-md px-2 py-0.5 rounded-md flex items-center justify-between text-[10px] text-white">
-              <span className="font-medium tracking-wide">{isLoading ? "Loading..." : "Playing"}</span>
-              {isLoading ? (
-                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-              ) : (
-                <div className="flex items-end gap-0.5 h-3">
+            <div className="absolute bottom-1.5 left-1.5 right-1.5 bg-brand-accent/90 backdrop-blur-md px-2 py-0.5 rounded-md flex items-center justify-between text-[9px] text-white">
+              <span className="font-medium truncate mr-1">{isLoading ? "Loading..." : "Playing"}</span>
+              {!isLoading && (
+                <div className="flex items-end gap-0.5 h-2.5">
                   <span className="w-0.5 bg-white wave-bar" style={{ animationDelay: "0.1s" }}></span>
                   <span className="w-0.5 bg-white wave-bar" style={{ animationDelay: "0.4s" }}></span>
                   <span className="w-0.5 bg-white wave-bar" style={{ animationDelay: "0.2s" }}></span>
@@ -142,7 +140,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
             </div>
           )}
 
-          {/* 3-Dots actions button for mobile */}
+          {/* 3-Dots actions button */}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -150,21 +148,18 @@ export const TrackCard: React.FC<TrackCardProps> = ({
                 onContextMenu(e, track);
               }
             }}
-            className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-gray-300 hover:text-white transition-all z-20"
-            title="Options"
+            className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/50 hover:bg-black/70 text-gray-300 transition-all z-20"
           >
-            <MoreVertical className="w-4 h-4" />
+            <MoreVertical className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Metadata */}
-        <div className="w-full text-center min-w-0">
-          <h3 
-            className="font-semibold text-sm text-white truncate transition-colors duration-200"
-          >
+        {/* Metadata - Now below the image */}
+        <div className="w-full px-0.5 min-w-0">
+          <h3 className="font-medium text-xs text-white truncate leading-tight">
             {track.title}
           </h3>
-          <div className="text-[11px] text-gray-400 truncate mt-0.5 flex flex-wrap justify-center gap-x-1 select-none">
+          <div className="text-[10px] text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
             {track.artists && track.artists.length > 0 ? (
               track.artists.map((art, i) => (
                 <React.Fragment key={art.id}>
@@ -175,7 +170,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
                         onOpenArtist({ id: art.id, name: art.name, thumbnail: track.thumbnail });
                       }
                     }}
-                    className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+                    className="hover:text-brand-accent transition-colors"
                   >
                     {art.name}
                   </span>
@@ -190,7 +185,7 @@ export const TrackCard: React.FC<TrackCardProps> = ({
                     onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
                   }
                 }}
-                className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
+                className="hover:text-brand-accent transition-colors"
               >
                 {track.artist}
               </span>

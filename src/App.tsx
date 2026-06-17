@@ -1716,7 +1716,7 @@ const MainLayout: React.FC = () => {
 
 
         {/* ═══ MOBILE STICKY TOP BAR ═══ */}
-        <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-brand-darkBg/95 backdrop-blur-md border-b border-white/5">
+        <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-brand-darkBg/95 backdrop-blur-md border-b border-white/5 pt-[env(safe-area-inset-top)]">
           {mobileSearchOpen ? (
             <div className="flex items-center gap-3 px-4 py-3">
               <form onSubmit={handleSearchSubmit} className="flex-1">
@@ -1802,7 +1802,7 @@ const MainLayout: React.FC = () => {
         {/* Mobile expanded player is handled by the PlayerPanel overlay below */}
 
         {/* Main Panel Content */}
-        <main className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
+        <main className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[calc(76px+env(safe-area-inset-top))] px-4 pb-[calc(148px+env(safe-area-inset-bottom))] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
 
           {/* Desktop-only Top Header Bar */}
           <header className="hidden md:flex items-center justify-between gap-4 mb-8">
@@ -4087,36 +4087,26 @@ const MainLayout: React.FC = () => {
                 </div>
               )}
 
-              {/* Recent Section / 2x4 Quick Access Grid */}
+              {/* Good Afternoon Section */}
               {homeRecommendations.length > 0 && (
                 <div className="animate-[fadeIn_0.3s_ease]">
                   <h2 className="text-2xl font-bold text-white tracking-wide mb-4 pl-1">
                     Good Afternoon
                   </h2>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {/* 8 quick-access cards */}
-                    {homeRecommendations.slice(0, 8).map((track) => (
-                      <div
-                        key={`quick-${track.id}`}
-                        onClick={() => playTrack(track, homeRecommendations)}
-                        className="group relative flex items-center gap-4 bg-white/5 hover:bg-white/10 rounded-lg overflow-hidden cursor-pointer transition-all border border-white/5 select-none pr-12"
-                      >
-                        <img src={track.thumbnail} className="w-20 h-20 object-cover shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <span className="font-bold text-sm text-white truncate block group-hover:text-brand-accent transition-colors">
-                            {track.title}
-                          </span>
-                          <span className="text-xs text-gray-400 truncate block mt-0.5">
-                            {track.artist}
-                          </span>
-                        </div>
-                        {/* Tiny hover play button on the right */}
-                        <button
-                          className="absolute right-4 p-2.5 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black shadow-lg shadow-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center scale-95 hover:scale-105 active:scale-95"
-                        >
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
-                        </button>
-                      </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    {/* 8 quick-access cards using square variant */}
+                    {homeRecommendations.slice(0, 8).map((track, idx) => (
+                      <TrackCard
+                        key={`quick-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={homeRecommendations}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -5234,7 +5224,7 @@ const MainLayout: React.FC = () => {
 
       {/* ═══ MOBILE MINI-PLAYER (above bottom nav) ═══ */}
       {currentTrack && (
-        <div className="md:hidden fixed bottom-16 left-0 right-0 z-40 px-3">
+        <div className="md:hidden fixed bottom-[calc(64px+env(safe-area-inset-bottom))] left-0 right-0 z-40 px-3 pb-2">
           <div
             onClick={() => setShowMobilePlayer(true)}
             className="flex items-center gap-3 glass-panel rounded-2xl px-3 py-2.5 shadow-xl shadow-black/30 cursor-pointer select-none"
