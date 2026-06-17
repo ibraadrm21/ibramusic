@@ -2,6 +2,7 @@ package com.ibrastream.app;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.PowerManager;
 import android.util.Log;
 import androidx.media3.common.C;
 import androidx.media3.common.ForwardingPlayer;
@@ -45,10 +46,7 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
         this.lastUpdateMs = System.currentTimeMillis();
         
         // Broadcast the seek command to the web app
-        Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-        intent.putExtra("command", "seek");
-        intent.putExtra("position", positionMs / 1000.0);
-        context.sendBroadcast(intent);
+        sendMediaCommand("seek", positionMs / 1000.0);
 
         super.seekTo(mediaItemIndex, positionMs);
     }
@@ -64,17 +62,34 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
     @Override
     public void seekToNext() {
         Log.e(TAG, "CustomPlayerWrapper: seekToNext");
-        Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-        intent.putExtra("command", "next");
-        context.sendBroadcast(intent);
+        sendMediaCommand("next", null);
     }
 
     @Override
     public void seekToPrevious() {
         Log.e(TAG, "CustomPlayerWrapper: seekToPrevious");
+        sendMediaCommand("previous", null);
+    }
+
+    private void sendMediaCommand(String command, Double position) {
         Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-        intent.putExtra("command", "previous");
+        intent.putExtra("command", command);
+        if (position != null) {
+            intent.putExtra("position", position);
+        }
         context.sendBroadcast(intent);
+
+        // Acquire a temporary WakeLock to help the WebView process the command
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:CustomPlayerWakeLock");
+                wakeLock.acquire(5000); // 5 seconds
+                Log.e(TAG, "CustomPlayerWrapper: Acquired WakeLock for " + command);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to acquire wake lock", e);
+        }
     }
 
     @Override

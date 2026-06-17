@@ -53,14 +53,8 @@ public class Media3SessionPlugin extends Plugin {
                             JSObject ret = new JSObject();
                             ret.put("ended", true);
                             notifyListeners("onPlaybackEnded", ret);
-                            // Also send a broadcast so auto-advance works when
-                            // the app is backgrounded and the WebView is throttled.
-                            // The BroadcastReceiver (commandReceiver) will queue the
-                            // "next" command and deliver it when JS resumes.
-                            android.content.Intent nextIntent =
-                                new android.content.Intent("com.ibrastream.app.MEDIA_COMMAND");
-                            nextIntent.putExtra("command", "next");
-                            getContext().sendBroadcast(nextIntent);
+                            // Note: The actual auto-advance broadcast is now sent from PlaybackService.java
+                            // to ensure it works reliably when the app is in the background.
                         } else if (playbackState == Player.STATE_READY) {
                             JSObject ret = new JSObject();
                             ret.put("ready", true);

@@ -1,7 +1,9 @@
 package com.ibrastream.app;
 
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
+import android.os.PowerManager;
 import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.media3.common.AudioAttributes;
@@ -53,7 +55,11 @@ public class PlaybackService extends MediaSessionService {
                 if (state == Player.STATE_IDLE) stateStr = "IDLE";
                 else if (state == Player.STATE_BUFFERING) stateStr = "BUFFERING";
                 else if (state == Player.STATE_READY) stateStr = "READY";
-                else if (state == Player.STATE_ENDED) stateStr = "ENDED";
+                else if (state == Player.STATE_ENDED) {
+                    stateStr = "ENDED";
+                    Log.e(TAG, "ExoPlayer: Playback ended, sending auto-advance broadcast");
+                    sendMediaCommand("next");
+                }
                 Log.e(TAG, "ExoPlayer: onPlaybackStateChanged=" + stateStr);
             }
 
@@ -102,22 +108,37 @@ public class PlaybackService extends MediaSessionService {
                     public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controllerInfo, int playerCommand) {
                         if (playerCommand == Player.COMMAND_SEEK_TO_NEXT) {
                             Log.e(TAG, "Callback: Intercepted skip to next");
-                            Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-                            intent.putExtra("command", "next");
-                            sendBroadcast(intent);
+                            sendMediaCommand("next");
                             return SessionResult.RESULT_SUCCESS;
                         }
                         if (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS) {
                             Log.e(TAG, "Callback: Intercepted skip to previous");
-                            Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
-                            intent.putExtra("command", "previous");
-                            sendBroadcast(intent);
+                            sendMediaCommand("previous");
                             return SessionResult.RESULT_SUCCESS;
                         }
                         return MediaSession.Callback.super.onPlayerCommandRequest(session, controllerInfo, playerCommand);
                     }
                 })
                 .build();
+    }
+
+    private void sendMediaCommand(String command) {
+        Intent intent = new Intent("com.ibrastream.app.MEDIA_COMMAND");
+        intent.putExtra("command", command);
+        sendBroadcast(intent);
+
+        // Acquire a temporary WakeLock to ensure the CPU stays on long enough
+        // for the WebView/Capacitor to receive the broadcast and start loading the next track.
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:MediaCommandWakeLock");
+                wakeLock.acquire(10000); // 10 seconds
+                Log.e(TAG, "Acquired temporary WakeLock for command: " + command);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to acquire wake lock", e);
+        }
     }
 
     @Nullable
