@@ -96,13 +96,27 @@ public class Media3SessionPlugin extends Plugin {
 
                 String command = intent.getStringExtra("command");
                 if (command != null) {
-                    Log.e(TAG, "Plugin: Received broadcast command: " + command);
+                    Log.e(TAG, "Plugin: Received broadcast command: " + command + " (App foreground: " + MainActivity.isAppInForeground + ")");
                     JSObject ret = new JSObject();
                     ret.put("command", command);
                     if ("seek".equals(command)) {
                         ret.put("position", intent.getDoubleExtra("position", 0.0));
                     }
-                    notifyListeners("onNotificationCommand", ret);
+                    
+                    // Poke the WebView to ensure it's not suspended
+                    getBridge().getWebView().post(() -> {
+                        try {
+                            if (!MainActivity.isAppInForeground) {
+                                Log.e(TAG, "Plugin: Poking WebView timers/state for background command");
+                                getBridge().getWebView().resumeTimers();
+                                // We don't call onResume() as it might have side effects, 
+                                // but resumeTimers() is often enough for JS.
+                            }
+                            notifyListeners("onNotificationCommand", ret);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error notifying listeners", e);
+                        }
+                    });
                 }
                 
                 if (wl != null && wl.isHeld()) {

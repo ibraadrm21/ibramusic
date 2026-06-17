@@ -3,6 +3,7 @@ package com.ibrastream.app;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.net.wifi.WifiManager;
 import android.os.PowerManager;
 import android.util.Log;
 import androidx.annotation.Nullable;
@@ -20,11 +21,22 @@ public class PlaybackService extends MediaSessionService {
     public static float userVolume = 1f;
     private MediaSession mediaSession = null;
     private ExoPlayer player = null;
+    private PowerManager.WakeLock wakeLock = null;
+    private WifiManager.WifiLock wifiLock = null;
 
     @Override
     public void onCreate() {
         super.onCreate();
         Log.e(TAG, "PlaybackService CREATED");
+        
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:ServiceWakeLock");
+        }
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm != null) {
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "IbraStream:WifiLock");
+        }
         
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -46,6 +58,7 @@ public class PlaybackService extends MediaSessionService {
                 .setAudioAttributes(audioAttributes, true)
                 .setHandleAudioBecomingNoisy(true)
                 .setMediaSourceFactory(mediaSourceFactory)
+                .setWakeMode(C.WAKE_MODE_NETWORK)
                 .build();
         
         player.addListener(new Player.Listener() {
@@ -76,6 +89,13 @@ public class PlaybackService extends MediaSessionService {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 Log.e(TAG, "ExoPlayer: onIsPlayingChanged=" + isPlaying);
+                if (isPlaying) {
+                    if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
+                    if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+                } else {
+                    if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+                    if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+                }
             }
         });
         
@@ -142,6 +162,18 @@ public class PlaybackService extends MediaSessionService {
         }
     }
 
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        super.onStartCommand(intent, flags, startId);
+        return START_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        // Do not stop the service when the task is removed
+    }
+
     @Nullable
     @Override
     public MediaSession onGetSession(MediaSession.ControllerInfo controllerInfo) {
@@ -152,6 +184,8 @@ public class PlaybackService extends MediaSessionService {
     @Override
     public void onDestroy() {
         Log.e(TAG, "PlaybackService DESTROYED");
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         customPlayer = null;
         if (mediaSession != null) {
             if (player != null) {
