@@ -25,7 +25,7 @@ import {
 import type { Track, Album, Artist } from "./services/musicApi";
 import AlbumCard from "./components/AlbumCard";
 import ArtistCard from "./components/ArtistCard";
-import { checkForUpdates, redirectToUpdate } from "./services/updateChecker";
+import { checkForUpdates, redirectToUpdate, startAutoUpdatePolling } from "./services/updateChecker";
 import type { UpdateInfo } from "./services/updateChecker";
 import { signUp, signIn, signOut, saveUserData, getUserData } from "./services/authSync";
 import { supabase } from "./services/supabaseClient";
@@ -1173,6 +1173,7 @@ const MainLayout: React.FC = () => {
         setShowUpdateModal(true);
       }
     });
+    startAutoUpdatePolling(30); // Check every 30 minutes
     fetchFeaturedContent();
   }, []);
 
@@ -5227,7 +5228,7 @@ const MainLayout: React.FC = () => {
         <div className="md:hidden fixed bottom-[calc(64px+env(safe-area-inset-bottom))] left-0 right-0 z-40 px-3 pb-2">
           <div
             onClick={() => setShowMobilePlayer(true)}
-            className="flex items-center gap-3 glass-panel rounded-2xl px-3 py-2.5 shadow-xl shadow-black/30 cursor-pointer select-none"
+            className="flex items-center gap-3 bg-brand-darkBg/90 backdrop-blur-xl border border-white/10 rounded-2xl px-3 py-2.5 shadow-xl shadow-black/50 cursor-pointer select-none"
           >
             {/* Album thumb */}
             <div className="relative shrink-0">

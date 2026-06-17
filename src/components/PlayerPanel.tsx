@@ -202,7 +202,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   };
 
   return (
-    <div className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none">
+    <div className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-[calc(1.5rem+env(safe-area-inset-bottom))] glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none">
       
       {/* Header Controls */}
       <div className="flex items-center justify-between mb-6 shrink-0">

@@ -35,7 +35,7 @@ function isNewerVersion(current: string, latest: string): boolean {
 /**
  * Checks for updates on GitHub releases.
  */
-export async function checkForUpdates(): Promise<UpdateInfo | null> {
+export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateInfo | null> {
   try {
     let currentVersion = '1.0.0';
 
@@ -43,11 +43,11 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
       const info = await App.getInfo();
       currentVersion = info.version;
     } else {
-      // For development/browser testing, we can check localStorage or use a default
       currentVersion = localStorage.getItem('ibrastream_mock_version') || '1.0.0';
     }
 
-    const response = await fetch('https://api.github.com/repos/ibraadrm21/ibramusic/releases/latest');
+    // Add timestamp to avoid caching
+    const response = await fetch(`https://api.github.com/repos/ibraadrm21/ibramusic/releases/latest?t=${Date.now()}`);
     if (!response.ok) {
       throw new Error(`GitHub API returned status: ${response.status}`);
     }
@@ -69,7 +69,7 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
       }
     }
 
-    return {
+    const updateInfo: UpdateInfo = {
       hasUpdate,
       currentVersion,
       latestVersion,
@@ -77,10 +77,35 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
       releaseNotes: data.body,
       apkUrl: apkUrl || data.html_url
     };
+
+    // If auto-update is enabled and we are on Android, trigger download immediately
+    const lastAttempt = localStorage.getItem('ibrastream_last_update_attempt');
+    if (isAuto && hasUpdate && apkUrl && Capacitor.getPlatform() === 'android' && lastAttempt !== latestVersion) {
+      console.log("Auto-update triggered: Downloading new version...");
+      localStorage.setItem('ibrastream_last_update_attempt', latestVersion);
+      Media3Session.downloadAndInstallApk({ url: apkUrl }).catch((err: any) => {
+        console.error("Auto-update download failed:", err);
+      });
+    }
+
+    return updateInfo;
   } catch (error) {
     console.error('Update check failed:', error);
     return null;
   }
+}
+
+/**
+ * Starts a background interval to check for updates periodically.
+ */
+export function startAutoUpdatePolling(intervalMinutes: number = 30) {
+  // Initial check
+  setTimeout(() => checkForUpdates(true), 5000);
+
+  // Periodic check
+  setInterval(() => {
+    checkForUpdates(true);
+  }, intervalMinutes * 60 * 1000);
 }
 
 export async function redirectToUpdate(url: string): Promise<void> {
