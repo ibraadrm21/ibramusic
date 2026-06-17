@@ -1,6 +1,35 @@
 import React from "react";
 import { Home, Search, Heart, Music, ListMusic, Sparkles } from "lucide-react";
 
+const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg
+    viewBox="0 0 512 512"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    {...props}
+  >
+    <defs>
+      <linearGradient id="logo_grad" x1="50" y1="100" x2="462" y2="412" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#D1D1D1"/>
+        <stop offset="0.5" stopColor="#FFFFFF"/>
+        <stop offset="1" stopColor="#A1A1A1"/>
+      </linearGradient>
+    </defs>
+    <path
+      d="M80 320C120 240 180 340 240 260C280 200 240 120 280 80C320 40 380 80 400 120C420 160 380 220 320 240C260 260 200 340 260 400C320 460 400 420 440 360"
+      stroke="url(#logo_grad)"
+      strokeWidth="50"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M260 50C285 30 305 50 285 80C265 110 245 90 260 50Z"
+      fill="url(#logo_grad)"
+    />
+    <path d="M245 235L295 265L245 295V235Z" fill="white" />
+  </svg>
+);
+
 const Github: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
     viewBox="0 0 24 24"
@@ -111,8 +140,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {/* Logo */}
           <div className="flex items-center gap-3 shrink-0">
-            <div className="w-9 h-9 bg-white/8 border border-white/10 rounded-xl flex items-center justify-center">
-              <Music className="w-4.5 h-4.5 text-white" />
+            <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center p-1.5 overflow-hidden">
+              <Logo className="w-full h-full" />
             </div>
             <div>
               <span className="text-base font-semibold tracking-tight text-white">

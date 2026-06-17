@@ -10,6 +10,36 @@ import { Capacitor } from "@capacitor/core";
 
 const isAndroid = Capacitor.getPlatform() === "android";
 import Sidebar from "./components/Sidebar";
+
+const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg
+    viewBox="0 0 512 512"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    {...props}
+  >
+    <defs>
+      <linearGradient id="logo_grad_main" x1="50" y1="100" x2="462" y2="412" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#D1D1D1"/>
+        <stop offset="0.5" stopColor="#FFFFFF"/>
+        <stop offset="1" stopColor="#A1A1A1"/>
+      </linearGradient>
+    </defs>
+    <path
+      d="M80 320C120 240 180 340 240 260C280 200 240 120 280 80C320 40 380 80 400 120C420 160 380 220 320 240C260 260 200 340 260 400C320 460 400 420 440 360"
+      stroke="url(#logo_grad_main)"
+      strokeWidth="50"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M260 50C285 30 305 50 285 80C265 110 245 90 260 50Z"
+      fill="url(#logo_grad_main)"
+    />
+    <path d="M245 235L295 265L245 295V235Z" fill="white" />
+  </svg>
+);
+
 import PlayerPanel from "./components/PlayerPanel";
 import TrackCard from "./components/TrackCard";
 import TrackContextMenu from "./components/TrackContextMenu";
@@ -1750,7 +1780,12 @@ const MainLayout: React.FC = () => {
             </div>
           ) : (
             <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-base font-semibold text-white tracking-tight">ibrastream</span>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center p-1 overflow-hidden">
+                  <Logo className="w-full h-full" />
+                </div>
+                <span className="text-base font-semibold text-white tracking-tight">ibrastream</span>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setMobileSearchOpen(true)}
@@ -5107,8 +5142,8 @@ const MainLayout: React.FC = () => {
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full bg-brand-accent/20 blur-3xl pointer-events-none" />
 
                 {/* Logo / icon */}
-                <div className="relative w-14 h-14 rounded-2xl bg-brand-accent flex items-center justify-center shadow-lg shadow-brand-accent/40 mb-4">
-                  <Sparkles className="w-7 h-7 text-black" />
+                <div className="relative w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-lg p-2 overflow-hidden mb-4">
+                  <Logo className="w-full h-full" />
                 </div>
 
                 <h3 className="text-2xl font-black text-white tracking-tight">
