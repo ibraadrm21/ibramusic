@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from "r
 import type { Track } from "../services/musicApi";
 import { getYouTubeVideoId } from "../services/musicApi";
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import { App } from "@capacitor/app";
 import { supabase } from "../services/supabaseClient";
 
 declare global {
@@ -1158,6 +1159,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       Media3Session.removeAllListeners().catch(() => {});
     };
+  }, []);
+
+  // Android: when the app returns to foreground, check if we should be playing
+  // but the native player stopped (e.g. track ended while JS was throttled).
+  useEffect(() => {
+    if (!isAndroid) return;
+
+    let handle: any;
+    App.addListener("appStateChange", ({ isActive }) => {
+      if (!isActive) return; // going to background — ignore
+      // Give the WebView a moment to un-throttle, then check state
+      setTimeout(() => {
+        Media3Session.getPlaybackInfo().then((info: any) => {
+          const stoppedOrEnded = !info.isPlaying;
+          const hasQueue = queueRef.current.length > 0;
+          const hasTrack = !!currentTrackRef.current;
+          // If we have a queue but nothing is playing, advance to next track
+          if (stoppedOrEnded && hasQueue && hasTrack) {
+            // Only auto-advance if position is near the end (>95% done)
+            // to avoid accidentally skipping a user-paused track
+            const pos = info.position || 0;
+            const dur = info.duration || 0;
+            const nearEnd = dur > 0 && pos / dur > 0.95;
+            if (nearEnd) {
+              nextTrackRef.current();
+            }
+          }
+        }).catch(() => {});
+      }, 600);
+    }).then((h) => { handle = h; });
+
+    return () => { handle?.remove?.(); };
   }, []);
 
   return (

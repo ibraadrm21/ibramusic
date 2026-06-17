@@ -326,6 +326,7 @@ const MainLayout: React.FC = () => {
   const listenTogetherDropdownRef = React.useRef<HTMLDivElement>(null);
   const [showAccountDropdown, setShowAccountDropdown] = useState<boolean>(false);
   const accountDropdownRef = React.useRef<HTMLDivElement>(null);
+  const mobileAccountOverlayRef = React.useRef<HTMLDivElement>(null);
   const [username, setUsername] = useState<string>(() => {
     return localStorage.getItem("ibrastream_username") || "Guest";
   });
@@ -441,28 +442,36 @@ const MainLayout: React.FC = () => {
 
   // Close header dropdown on clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      const target = (event as TouchEvent).touches
+        ? (event as TouchEvent).touches[0]?.target as Node
+        : (event as MouseEvent).target as Node;
+
       if (
         listenTogetherDropdownRef.current &&
-        !listenTogetherDropdownRef.current.contains(event.target as Node)
+        !listenTogetherDropdownRef.current.contains(target)
       ) {
         setShowListenTogetherDropdown(false);
       }
       if (
         accountDropdownRef.current &&
-        !accountDropdownRef.current.contains(event.target as Node)
+        !accountDropdownRef.current.contains(target) &&
+        // Don't close when tapping inside the mobile full-screen overlay
+        !(mobileAccountOverlayRef.current && mobileAccountOverlayRef.current.contains(target))
       ) {
         setShowAccountDropdown(false);
       }
       // Close bulk playlist picker if click is outside the toolbar
       const toolbar = document.getElementById("bulk-action-toolbar");
-      if (toolbar && !toolbar.contains(event.target as Node)) {
+      if (toolbar && !toolbar.contains(target)) {
         setShowBulkPlaylistPicker(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside as EventListener, { passive: true });
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside as EventListener);
     };
   }, []);
 
@@ -1793,7 +1802,7 @@ const MainLayout: React.FC = () => {
         {/* Mobile expanded player is handled by the PlayerPanel overlay below */}
 
         {/* Main Panel Content */}
-        <main className="flex-1 overflow-y-auto pt-[60px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
+        <main className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
 
           {/* Desktop-only Top Header Bar */}
           <header className="hidden md:flex items-center justify-between gap-4 mb-8">
@@ -4569,8 +4578,8 @@ const MainLayout: React.FC = () => {
 
         {/* Mobile Account / Settings Overlay */}
         {showAccountDropdown && (
-          <div className="md:hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-md animate-fadeIn">
-            <div className="glass-panel w-full max-w-sm rounded-[var(--app-radius-xl)] p-5 flex flex-col gap-4 relative shadow-2xl text-left">
+          <div ref={mobileAccountOverlayRef} className="md:hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-md animate-fadeIn">
+            <div className="glass-panel w-full max-w-sm rounded-[var(--app-radius-xl)] p-5 flex flex-col gap-4 relative shadow-2xl text-left max-h-[85vh] overflow-y-auto">
               <button 
                 onClick={() => setShowAccountDropdown(false)}
                 className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 hover:bg-white/5 rounded-full transition-all"
