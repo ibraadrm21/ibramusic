@@ -4,6 +4,7 @@ import { getYouTubeVideoId } from "../services/musicApi";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { supabase } from "../services/supabaseClient";
+import { downloadService } from "../services/downloadService";
 
 declare global {
   interface Window {
@@ -14,6 +15,9 @@ declare global {
 
 const isAndroid = Capacitor.getPlatform() === "android";
 const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
+
+// Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
+const resolutionCache = new Map<string, { videoId: string; streamUrl?: string; timestamp: number }>();
 
 interface AudioContextType {
   currentTrack: Track | null;
@@ -53,6 +57,7 @@ interface AudioContextType {
   createRoom: () => void;
   joinRoom: (roomId: string) => void;
   leaveRoom: () => void;
+  closeRoom: () => void;
   updateUserIdentity: (name: string, pfp?: string) => void;
 }
 
@@ -136,8 +141,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const userNameRef = useRef<string>(`User-${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
   const userPfpRef = useRef<string>("");
   const lastBroadcastRef = useRef<number>(0);
-
-  const updateUserIdentity = (name: string, pfp?: string) => {
+  const updateUserIdentity = React.useCallback((name: string, pfp?: string) => {
     if (name.trim()) userNameRef.current = name.trim();
     if (pfp !== undefined) userPfpRef.current = pfp;
 
@@ -148,9 +152,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         joinedAt: Date.now()
       }).catch((err: any) => console.error("Failed to update presence info:", err));
     }
-  };
+  }, [isConnected]);
   const roomIdRef = useRef<string | null>(null);
   const isHostRef = useRef<boolean>(false);
+  const myJoinedAtRef = useRef<number>(Date.now());
   const currentTrackRef = useRef<Track | null>(null);
   const isPlayingRef = useRef<boolean>(false);
   const queueRef = useRef<Track[]>([]);
@@ -188,6 +193,26 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.removeItem("ibrastream_current_track");
     }
   }, [queue, originalQueue, currentIndex, currentTrack]);
+
+  // Trigger pre-resolution of the next song in the queue
+  useEffect(() => {
+    if (!currentTrack || queue.length === 0) return;
+    const idx = queue.findIndex(t => t.id === currentTrack.id);
+    if (idx !== -1 && idx + 1 < queue.length) {
+      const nextTrack = queue[idx + 1];
+      const abortController = new AbortController();
+      
+      // Delay pre-resolution slightly to not block startup network/CPU
+      const timer = setTimeout(() => {
+        preResolveTrack(nextTrack, abortController.signal).catch(() => {});
+      }, 3000);
+      
+      return () => {
+        clearTimeout(timer);
+        abortController.abort();
+      };
+    }
+  }, [currentTrack, queue]);
 
   const [toast, setToast] = useState<{ message: string; type: "info" | "success" | "error" } | null>(null);
 
@@ -506,14 +531,55 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsPlaying(false);
     setIsLoading(true);
 
+    // 1. Check for Offline Local File first
+    if (isAndroid) {
+      const localUri = await downloadService.getLocalUri(track.id);
+      if (localUri) {
+        console.log(`Playing offline version for: ${track.title}`);
+        await Media3Session.updateMetadata({
+          title: track.title,
+          artist: track.artist,
+          artwork: track.thumbnail,
+          duration: track.duration,
+          streamUrl: localUri,
+          mediaId: track.id
+        });
+        await Media3Session.setPlaybackState({ isPlaying: true });
+        return;
+      }
+    }
+
     // Broadcast immediately if host
     if (roomIdRef.current && isHostRef.current) {
       broadcastState(0, true, track);
     }
 
     try {
-      const videoId = await getYouTubeVideoId(track, abortController.signal);
-      if (abortController.signal.aborted) return;
+      let videoId = "";
+      let streamUrl = "";
+      
+      const cached = resolutionCache.get(track.id);
+      if (cached && cached.videoId) {
+        console.log(`[Cache Hit] Playing pre-resolved track: ${track.title}`);
+        videoId = cached.videoId;
+        if (isAndroid) {
+          if (cached.streamUrl) {
+            streamUrl = cached.streamUrl;
+          } else {
+            streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+            if (abortController.signal.aborted) return;
+            cached.streamUrl = streamUrl;
+          }
+        }
+      } else {
+        videoId = await getYouTubeVideoId(track, abortController.signal);
+        if (abortController.signal.aborted) return;
+        if (isAndroid) {
+          streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+          if (abortController.signal.aborted) return;
+        }
+        resolutionCache.set(track.id, { videoId, streamUrl, timestamp: Date.now() });
+      }
 
       // Asynchronously fetch YouTube views count
       import("../services/musicApi").then(async ({ getYoutubeClient }) => {
@@ -538,15 +604,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
 
       if (isAndroid) {
-        // Build a stream URL via Piped for Android native player
-        const streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-        if (abortController.signal.aborted) return;
         await Media3Session.updateMetadata({
           title: track.title,
           artist: track.artist,
           artwork: track.thumbnail,
           duration: track.duration,
-          streamUrl
+          streamUrl,
+          mediaId: track.id
         });
         await Media3Session.setPlaybackState({ isPlaying: true });
       } else {
@@ -620,6 +684,42 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     throw new Error("Failed to get playback stream URL.");
+  };
+
+  const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
+    if (!track) return;
+    if (resolutionCache.has(track.id)) return;
+    try {
+      console.log(`[Pre-Resolve] Pre-resolving track: ${track.title}`);
+      
+      // Fetch lyrics in parallel in background
+      import("../services/musicApi").then(({ getLyricsForTrack }) => {
+        if (signal?.aborted) return;
+        getLyricsForTrack(track).catch(() => {});
+      });
+
+      const videoId = await getYouTubeVideoId(track, signal);
+      if (signal?.aborted) return;
+      let streamUrl: string | undefined;
+      
+      if (isAndroid) {
+        streamUrl = await getAndroidStreamUrl(videoId, track, signal);
+      }
+      if (signal?.aborted) return;
+      
+      resolutionCache.set(track.id, {
+        videoId,
+        streamUrl,
+        timestamp: Date.now()
+      });
+      console.log(`[Pre-Resolve] Pre-resolved track: ${track.title}`);
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        console.log(`[Pre-Resolve] Aborted pre-resolution for track: ${track.title}`);
+      } else {
+        console.warn(`[Pre-Resolve] Failed to pre-resolve track: ${track.title}`, err);
+      }
+    }
   };
 
   const togglePlay = () => {
@@ -973,6 +1073,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast("Left Listen Together room", "info");
   };
 
+  const closeRoom = () => {
+    if (channelRef.current && isHostRef.current) {
+      channelRef.current.send({
+        type: "broadcast",
+        event: "room_closed",
+        payload: {}
+      });
+      // Small delay to let the broadcast send before unsubscribing
+      setTimeout(() => {
+        leaveRoom();
+      }, 300);
+    } else {
+      leaveRoom();
+    }
+  };
+
   const createRoom = () => {
     if (!currentUser) {
       showToast("Please login to create a Listen Together room", "error");
@@ -980,7 +1096,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     leaveRoom();
-    const newRoomId = `ROOM-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomId(newRoomId);
     setIsHost(true);
     joinChannel(newRoomId, true);
@@ -1010,39 +1126,73 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     channel
       .on("broadcast", { event: "state_change" }, (msg: any) => {
-        if (hostFlag) return;
+        if (isHostRef.current) return;
         handleRemoteState(msg.payload);
       })
       .on("broadcast", { event: "request_state" }, (_msg: any) => {
-        if (!hostFlag) return;
+        if (!isHostRef.current) return;
         broadcastState(undefined, undefined, currentTrackRef.current);
+      })
+      .on("broadcast", { event: "room_closed" }, () => {
+        if (!isHostRef.current) {
+          showToast("Host has closed the room", "info");
+          leaveRoom();
+        }
       });
 
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState();
-      const users: { id: string; name: string; pfp?: string }[] = [];
+      const users: { id: string; name: string; pfp?: string; isHost?: boolean; joinedAt: number }[] = [];
       Object.keys(state).forEach(key => {
         const presences = state[key] as any;
         if (presences && presences.length > 0) {
-          // Take the latest presence for this client ID to avoid duplicates
           const p = presences[presences.length - 1];
           users.push({
             id: key,
             name: p.name || `User ${key.substring(0, 4)}`,
-            pfp: p.pfp || ""
+            pfp: p.pfp || "",
+            isHost: p.isHost || false,
+            joinedAt: p.joinedAt || Date.now()
           });
         }
       });
       setParticipants(users);
+
+      // Check if there is any active host in the presence list
+      const hasHost = users.some(u => u.isHost === true);
+      
+      // If we have other users but no host, promote the oldest listener
+      if (users.length > 0 && !hasHost) {
+        const sorted = [...users].sort((a, b) => a.joinedAt - b.joinedAt);
+        const oldest = sorted[0];
+        
+        if (oldest.id === clientIdRef.current && !isHostRef.current) {
+          showToast("Host left. You are now the host of the room!", "success");
+          setIsHost(true);
+          // Re-track our presence info indicating we are now the host
+          channel.track({
+            name: userNameRef.current,
+            pfp: userPfpRef.current,
+            joinedAt: myJoinedAtRef.current,
+            isHost: true
+          }).catch((err: any) => console.error("Failed to track host promotion:", err));
+          
+          // Immediately broadcast current state
+          broadcastState(undefined, undefined, currentTrackRef.current);
+        }
+      }
     });
 
     channel.subscribe((status: string) => {
       if (status === "SUBSCRIBED") {
         setIsConnected(true);
+        const joinTime = Date.now();
+        myJoinedAtRef.current = joinTime;
         channel.track({
           name: userNameRef.current,
           pfp: userPfpRef.current,
-          joinedAt: Date.now()
+          joinedAt: joinTime,
+          isHost: hostFlag
         }).catch(() => {});
         showToast(`Connected to room ${roomName}`, "success");
         if (!hostFlag) {
@@ -1232,6 +1382,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         createRoom,
         joinRoom,
         leaveRoom,
+        closeRoom,
         updateUserIdentity,
       }}
     >

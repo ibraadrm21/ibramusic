@@ -8,6 +8,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.core.splashscreen.SplashScreen;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.session.MediaController;
 import androidx.media3.session.SessionToken;
 import com.getcapacitor.BridgeActivity;
@@ -49,6 +50,11 @@ public class MainActivity extends BridgeActivity {
             window.setNavigationBarContrastEnforced(false);
         }
 
+        // Set status bar icons to light (since app is dark)
+        WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(false);
+        controller.setAppearanceLightNavigationBars(false);
+
         // Disable WebView zoom
         WebView webView = getBridge().getWebView();
         if (webView != null) {
@@ -82,12 +88,20 @@ public class MainActivity extends BridgeActivity {
     public void onPause() {
         super.onPause();
         isAppInForeground = false;
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().onResume();
+            getBridge().getWebView().resumeTimers();
+        }
     }
 
     @Override
     public void onStop() {
         super.onStop();
         isAppInForeground = false;
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().onResume();
+            getBridge().getWebView().resumeTimers();
+        }
     }
 
     @Override

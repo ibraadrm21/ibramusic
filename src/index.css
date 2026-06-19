@@ -20,6 +20,23 @@
   --radius-sm: var(--app-radius-sm, 6px);
 }
 
+:root {
+  --safe-top: 0px;
+  --safe-bottom: 0px;
+}
+
+body.is-native {
+  --safe-top: 32px;
+  --safe-bottom: 24px;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  body.is-native {
+    --safe-top: max(32px, env(safe-area-inset-top));
+    --safe-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+}
+
 @layer base {
   body {
     @apply text-gray-200 font-sans overflow-x-hidden antialiased;
@@ -145,24 +162,23 @@
   background: rgba(255, 255, 255, 0.25);
 }
 
-/* ─── Glass panels ───────────────────────────────────────────── */
+/* ─── Glass panels (GPU optimized) ───────────────────────────── */
 .glass-panel {
-  background: color-mix(in srgb, var(--app-bg-color-val, #0f0f0f) 70%, transparent);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  background: color-mix(in srgb, var(--app-bg-color-val, #0f0f0f) 75%, transparent);
+  backdrop-filter: blur(12px) saturate(110%);
+  -webkit-backdrop-filter: blur(12px) saturate(110%);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* Glass card (no blur filter to ensure 60fps scrolling in grids/lists) */
 .glass-card {
-  background: color-mix(in srgb, var(--app-bg-color-val, #161616) 60%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: color-mix(in srgb, var(--app-bg-color-val, #161616) 80%, transparent);
   border: 1px solid rgba(255, 255, 255, 0.05);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .glass-card:hover {
-  background: color-mix(in srgb, var(--app-bg-color-val, #1e1e1e) 80%, transparent);
+  background: color-mix(in srgb, var(--app-bg-color-val, #1e1e1e) 90%, transparent);
   border-color: rgba(255, 255, 255, 0.12);
   transform: translateY(-1px);
 }

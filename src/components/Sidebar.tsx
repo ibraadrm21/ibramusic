@@ -1,5 +1,5 @@
 import React from "react";
-import { Home, Search, Heart, Music, ListMusic, Sparkles } from "lucide-react";
+import { Home, Search, Heart, ListMusic, Sparkles } from "lucide-react";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -258,7 +258,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </aside>
 
       {/* Mobile Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 h-[calc(64px+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#0f0f0f]/96 backdrop-blur-xl border-t border-white/5 flex items-center justify-around px-2 z-40 select-none">
+      <nav
+        className="md:hidden fixed bottom-0 left-0 right-0 bg-[#0f0f0f]/96 backdrop-blur-xl border-t border-white/5 flex items-center justify-around px-2 z-40 select-none"
+        style={{
+          height: 'calc(64px + var(--safe-bottom))',
+          paddingBottom: 'var(--safe-bottom)'
+        }}
+      >
         {[
           { id: "home",      icon: Home,      label: "Home" },
           { id: "search",    icon: Search,    label: "Search" },

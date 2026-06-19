@@ -50,15 +50,12 @@ public class Media3SessionPlugin extends Plugin {
 
                     @Override
                     public void onPlaybackStateChanged(int playbackState) {
-                        if (playbackState == Player.STATE_ENDED) {
-                            JSObject ret = new JSObject();
-                            ret.put("ended", true);
-                            notifyListeners("onPlaybackEnded", ret);
-                        } else if (playbackState == Player.STATE_READY) {
+                        if (playbackState == Player.STATE_READY) {
                             JSObject ret = new JSObject();
                             ret.put("ready", true);
                             notifyListeners("onPlaybackReady", ret);
                         }
+                        // Note: Auto-advance is handled via Broadcast in PlaybackService
                     }
 
                     @Override
@@ -84,29 +81,27 @@ public class Media3SessionPlugin extends Plugin {
         commandReceiver = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(android.content.Context context, android.content.Intent intent) {
-                // Acquire a temporary WakeLock to ensure the CPU stays on long enough
-                // for the notification to be delivered to JavaScript.
                 PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
                 PowerManager.WakeLock wakeLock = null;
                 if (pm != null) {
                     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:PluginReceiverWakeLock");
-                    wakeLock.acquire(10000); // 10 seconds
+                    wakeLock.acquire(20000); // 20 seconds to process command
                 }
 
                 String command = intent.getStringExtra("command");
                 if (command != null) {
-                    Log.e(TAG, "Plugin: RECEIVED COMMAND: " + command + " (Listeners: " + (hasListeners("onNotificationCommand") ? "YES" : "NO") + ")");
+                    Log.e(TAG, "Plugin: RECEIVED COMMAND: " + command);
                     JSObject ret = new JSObject();
                     ret.put("command", command);
                     if ("seek".equals(command)) {
                         ret.put("position", intent.getDoubleExtra("position", 0.0));
                     }
                     
-                    // Poke the WebView to ensure it's not suspended
                     getBridge().getWebView().post(() -> {
                         try {
                             if (!MainActivity.isAppInForeground) {
-                                Log.e(TAG, "Plugin: Poking WebView timers for background command: " + command);
+                                Log.e(TAG, "Plugin: Waking WebView JS and timers for command: " + command);
+                                getBridge().getWebView().onResume();
                                 getBridge().getWebView().resumeTimers();
                             }
                             notifyListeners("onNotificationCommand", ret);
@@ -146,7 +141,7 @@ public class Media3SessionPlugin extends Plugin {
         String artwork = call.getString("artwork");
         Double duration = call.getDouble("duration");
         String streamUrl = call.getString("streamUrl");
-        Log.e(TAG, "Plugin: updateMetadata: " + title + ", streamUrl=" + streamUrl + ", duration=" + duration);
+        String mediaId = call.getString("mediaId", "remote_audio");
 
         MainActivity activity = (MainActivity) getActivity();
         if (activity.getControllerFuture() == null) {
@@ -175,7 +170,7 @@ public class Media3SessionPlugin extends Plugin {
                         }
                         
                         MediaItem.Builder mediaItemBuilder = new MediaItem.Builder()
-                                .setMediaId("remote_audio")
+                                .setMediaId(mediaId)
                                 .setMediaMetadata(metaBuilder.build());
 
                         if (streamUrl != null && !streamUrl.isEmpty()) {
@@ -202,8 +197,6 @@ public class Media3SessionPlugin extends Plugin {
     @PluginMethod
     public void setPlaybackState(PluginCall call) {
         Boolean isPlaying = call.getBoolean("isPlaying", false);
-        Log.e(TAG, "Plugin: setPlaybackState=" + isPlaying);
-
         MainActivity activity = (MainActivity) getActivity();
         if (activity.getControllerFuture() == null) {
             call.reject("Controller future is null");

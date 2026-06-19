@@ -98,6 +98,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   // Fetch artist actual profile picture, monthly listeners, and lyrics
   useEffect(() => {
     if (!currentTrack) return;
+    let active = true;
+
     setArtistPic(""); // Reset
     setMonthlyListeners(undefined);
     setLyrics([]);
@@ -106,7 +108,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
     // Fetch artist picture and stats
     import("../services/musicApi").then(({ searchArtists, getSpotifyArtistStats }) => {
+      if (!active) return;
       searchArtists(currentTrack.artist).then((artists) => {
+        if (!active) return;
         if (artists && artists.length > 0) {
           const match = artists.find(a => a.name.toLowerCase() === currentTrack.artist.toLowerCase()) || artists[0];
           if (match && match.thumbnail) {
@@ -118,6 +122,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       });
 
       getSpotifyArtistStats(currentTrack.artist).then((stats) => {
+        if (!active) return;
         if (stats && stats.monthlyListeners) {
           setMonthlyListeners(stats.monthlyListeners);
         }
@@ -126,33 +131,33 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       });
     });
 
-    // Fetch lyrics from LRCLIB
-    const trackTitle = currentTrack.title
-      .replace(/\(feat\..*?\)/i, "")
-      .replace(/\[feat\..*?\]/i, "")
-      .replace(/\(with.*?\)/i, "")
-      .trim();
+    // Fetch lyrics from cache or network in parallel
+    import("../services/musicApi").then(({ getLyricsForTrack }) => {
+      if (!active) return;
+      getLyricsForTrack(currentTrack)
+        .then(data => {
+          if (!active) return;
+          if (data.syncedLyrics) {
+            setLyrics(parseLRC(data.syncedLyrics));
+          } else if (data.plainLyrics) {
+            setPlainLyrics(data.plainLyrics);
+          }
+        })
+        .catch(err => {
+          if (active) {
+            console.warn("All lyrics sources failed:", err);
+          }
+        })
+        .finally(() => {
+          if (active) {
+            setIsLoadingLyrics(false);
+          }
+        });
+    });
 
-    const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackTitle)}&artist_name=${encodeURIComponent(currentTrack.artist)}&duration=${Math.floor(currentTrack.duration)}`;
-    
-    fetch(url)
-      .then(res => {
-        if (!res.ok) throw new Error("Lyrics not found");
-        return res.json();
-      })
-      .then(data => {
-        if (data.syncedLyrics) {
-          setLyrics(parseLRC(data.syncedLyrics));
-        } else if (data.plainLyrics) {
-          setPlainLyrics(data.plainLyrics);
-        }
-      })
-      .catch(err => {
-        console.warn("Failed to fetch lyrics:", err);
-      })
-      .finally(() => {
-        setIsLoadingLyrics(false);
-      });
+    return () => {
+      active = false;
+    };
   }, [currentTrack]);
 
   const activeLineIndex = lyrics.reduce((acc, line, idx) => {
@@ -168,6 +173,11 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         activeEl.scrollIntoView({
           behavior: "smooth",
           block: "center"
+        });
+      } else if (activeLineIndex === -1) {
+        lyricsContainerRef.current.scrollTo({
+          top: 0,
+          behavior: "smooth"
         });
       }
     }
@@ -202,7 +212,13 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   };
 
   return (
-    <div className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-[calc(1.5rem+env(safe-area-inset-bottom))] glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none">
+    <div
+      className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none"
+      style={{
+        paddingTop: 'calc(1.5rem + var(--safe-top))',
+        paddingBottom: 'calc(1.5rem + var(--safe-bottom))'
+      }}
+    >
       
       {/* Header Controls */}
       <div className="flex items-center justify-between mb-6 shrink-0">

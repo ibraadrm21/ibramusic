@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
-  User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star
+  User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download
 } from "lucide-react";
 import { AudioProvider, useAudio } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
+import { downloadService } from "./services/downloadService";
+import { App as CapApp } from "@capacitor/app";
 
 const isAndroid = Capacitor.getPlatform() === "android";
 import Sidebar from "./components/Sidebar";
@@ -176,6 +178,12 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTh
 };
 
 const MainLayout: React.FC = () => {
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      document.body.classList.add("is-native");
+    }
+  }, []);
+
   const {
     currentTrack, isPlaying, togglePlay, playTrack,
     queue, currentIndex, removeFromQueue, clearQueue, reorderQueue,
@@ -188,13 +196,15 @@ const MainLayout: React.FC = () => {
     playingPlaylistId,
     roomId,
     isHost,
-    updateUserIdentity
+    updateUserIdentity,
+    joinRoom
   } = useAudio();
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
   const [tabDirection, setTabDirection] = useState<"forward" | "backward" | "none">("none");
 
   // Tab order for directional transition detection
   const TAB_ORDER = ["home", "search", "favorites", "playlists", "dashboard", "github"];
+  const isCloudLoadingRef = useRef<boolean>(false);
   const prevTabRef = React.useRef<string>(activeTab);
 
   const navigateTab = React.useCallback((tab: string) => {
@@ -1162,6 +1172,15 @@ const MainLayout: React.FC = () => {
     clearSelection();
   };
 
+  const handleBulkRemoveFromFavorites = (trackIds: string[]) => {
+    const idSet = new Set(trackIds);
+    const updated = favorites.filter(t => !idSet.has(t.id));
+    setFavorites(updated);
+    localStorage.setItem("ibrastream_favorites", JSON.stringify(updated));
+    showToast(`Removed ${trackIds.length} track${trackIds.length > 1 ? "s" : ""} from Favorites`, "info");
+    clearSelection();
+  };
+
   // Fetch home recommendations only once on mount
   useEffect(() => {
     const loadHomeRecs = async () => {
@@ -1228,6 +1247,83 @@ const MainLayout: React.FC = () => {
     }
   }, []);
 
+  // Listen for deep link room codes and query params
+  useEffect(() => {
+    // 1. Handle runtime URL open events (deep links)
+    const handleUrlOpen = (event: { url: string }) => {
+      console.log("App opened with URL:", event.url);
+      try {
+        const url = new URL(event.url);
+        let roomCode = "";
+        
+        if (url.protocol === "ibrastream:") {
+          roomCode = url.searchParams.get("room") || "";
+          if (!roomCode) {
+            const parts = url.pathname.split("/").filter(Boolean);
+            if (parts.length > 0) {
+              roomCode = parts[parts.length - 1];
+            } else if (url.host) {
+              roomCode = url.host;
+            }
+          }
+        } else {
+          roomCode = url.searchParams.get("room") || "";
+        }
+        
+        if (roomCode) {
+          const targetRoom = roomCode.trim().toUpperCase();
+          showToast(`Joining room: ${targetRoom}`, "info");
+          joinRoom(targetRoom);
+        }
+      } catch (err) {
+        console.error("Failed to parse app URL open event:", err);
+      }
+    };
+
+    // 2. Setup Capacitor deep link listener if native
+    let listenerPromise: Promise<{ remove: () => void }> | null = null;
+    if (Capacitor.isNativePlatform()) {
+      const setupListener = async () => {
+        const listener = await CapApp.addListener("appUrlOpen", handleUrlOpen);
+        try {
+          const launchUrl = await CapApp.getLaunchUrl();
+          if (launchUrl && launchUrl.url) {
+            handleUrlOpen({ url: launchUrl.url });
+          }
+        } catch (err) {
+          console.error("Failed to get launch URL:", err);
+        }
+        return listener;
+      };
+      listenerPromise = setupListener();
+    }
+
+    // 3. Handle standard web query params on initial load
+    const params = new URLSearchParams(window.location.search);
+    const roomParam = params.get("room");
+    if (roomParam) {
+      const targetRoom = roomParam.trim().toUpperCase();
+      const timer = setTimeout(() => {
+        showToast(`Joining Listen Together room: ${targetRoom}`, "info");
+        joinRoom(targetRoom);
+        // Clear the URL parameter without reloading
+        const newUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState(null, "", newUrl);
+      }, 1000);
+      return () => {
+        clearTimeout(timer);
+        if (listenerPromise) {
+          listenerPromise.then((l) => l.remove());
+        }
+      };
+    }
+
+    return () => {
+      if (listenerPromise) {
+        listenerPromise.then((l) => l.remove());
+      }
+    };
+  }, [joinRoom]);
 
   // Listen to auth state changes and get current session
   useEffect(() => {
@@ -1261,6 +1357,7 @@ const MainLayout: React.FC = () => {
   useEffect(() => {
     if (!user) return;
 
+    isCloudLoadingRef.current = true;
     getUserData().then((cloudData) => {
       if (cloudData) {
         if (cloudData.favorites) {
@@ -1294,12 +1391,14 @@ const MainLayout: React.FC = () => {
       }
     }).catch((err) => {
       console.error("Failed to fetch cloud sync data on login:", err);
+    }).finally(() => {
+      isCloudLoadingRef.current = false;
     });
   }, [user]);
 
   // Debounced cloud sync on settings change
   useEffect(() => {
-    if (!user) return;
+    if (!user || isCloudLoadingRef.current) return;
 
     const timer = setTimeout(() => {
       const syncData = {
@@ -1747,7 +1846,10 @@ const MainLayout: React.FC = () => {
 
 
         {/* ═══ MOBILE STICKY TOP BAR ═══ */}
-        <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-brand-darkBg/95 backdrop-blur-md border-b border-white/5 pt-[env(safe-area-inset-top)]">
+        <div
+          className="md:hidden fixed top-0 left-0 right-0 z-30 bg-brand-darkBg/95 backdrop-blur-md border-b border-white/5"
+          style={{ paddingTop: 'var(--safe-top)' }}
+        >
           {mobileSearchOpen ? (
             <div className="flex items-center gap-3 px-4 py-3">
               <form onSubmit={handleSearchSubmit} className="flex-1">
@@ -1802,12 +1904,18 @@ const MainLayout: React.FC = () => {
                       setShowAuthModal(true);
                     }
                   }}
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all overflow-hidden ${
                     user ? "bg-brand-accent/10 text-brand-accent border border-brand-accent/20" : "bg-white/5 text-gray-400 hover:text-white"
                   }`}
                   title={user ? `Signed in as ${user.email} (Click to sign out)` : "Sign in to sync"}
                 >
-                  <User className="w-4.5 h-4.5" />
+                  {user && pfp ? (
+                    <img src={pfp} className="w-full h-full object-cover" alt="Profile" />
+                  ) : user ? (
+                    <span className="text-[11px] font-bold text-white uppercase">{username.slice(0, 2)}</span>
+                  ) : (
+                    <User className="w-4.5 h-4.5" />
+                  )}
                 </button>
                 <button
                   onClick={() => setShowListenTogetherOverlay(true)}
@@ -1838,7 +1946,9 @@ const MainLayout: React.FC = () => {
         {/* Mobile expanded player is handled by the PlayerPanel overlay below */}
 
         {/* Main Panel Content */}
-        <main className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[calc(76px+env(safe-area-inset-top))] px-4 pb-[calc(148px+env(safe-area-inset-bottom))] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300">
+        <main
+          className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300"
+        >
 
           {/* Desktop-only Top Header Bar */}
           <header className="hidden md:flex items-center justify-between gap-4 mb-8">
@@ -2218,20 +2328,110 @@ const MainLayout: React.FC = () => {
                     <p className="text-center py-12 text-gray-500 text-sm">No tracks found for this artist.</p>
                   ) : (
                     <div className="flex flex-col gap-3 animate-[fadeIn_0.3s_ease]">
-                      {artistTracks.slice(0, visibleArtistTracksCount).map((track, idx) => (
-                        <TrackCard
-                          key={`${track.id}-${idx}`}
-                          track={track}
-                          variant="row"
-                          tracksQueue={artistTracks}
-                          onToggleFavorite={handleToggleFavorite}
-                          isFavorite={favorites.some((f) => f.id === track.id)}
+                      {/* Bulk Action Toolbar */}
+                      {isSelecting && (
+                        <div id="bulk-action-toolbar" className="sticky top-0 z-30 flex items-center gap-2 px-4 py-2.5 mb-2 rounded-2xl bg-brand-accent/10 border border-brand-accent/30 backdrop-blur-xl animate-[fadeIn_0.2s_ease]">
+                          <button
+                            onClick={() => handleSelectAll(artistTracks.slice(0, visibleArtistTracksCount))}
+                            className="text-xs text-brand-accent hover:underline font-semibold shrink-0"
+                          >
+                            {selectedTrackIds.size === artistTracks.slice(0, visibleArtistTracksCount).length ? "Deselect all" : "Select all"}
+                          </button>
+                          <span className="text-gray-500 text-xs shrink-0">{selectedTrackIds.size} selected</span>
+                          <div className="flex-1" />
+                          <button
+                            onClick={() => {
+                              const sel = artistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
+                              handleBulkAddToFavorites(sel);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-300 hover:text-red-400 text-xs font-medium transition-all"
+                          >
+                            <Heart className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Favorites</span>
+                          </button>
+                          <div className="relative">
+                            <button
+                              onClick={() => setShowBulkPlaylistPicker(prev => !prev)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Add to playlist</span>
+                            </button>
+                            {showBulkPlaylistPicker && (
+                              <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
+                                {playlists.length === 0 ? (
+                                  <div className="px-4 py-3 text-xs text-gray-500 italic text-center">No playlists yet</div>
+                                ) : (
+                                  playlists.map(pl => (
+                                    <button
+                                      key={pl.id}
+                                      onClick={() => {
+                                        const sel = artistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
+                                        handleBulkAddToPlaylist(pl.id, sel);
+                                      }}
+                                      className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
+                                    >
+                                      <ListMusic className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                      <span className="truncate">{pl.name}</span>
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={clearSelection}
+                            className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/5 text-gray-500 hover:text-white text-xs transition-all"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
 
-                          onOpenArtist={handleOpenArtist}
-                          onAddToPlaylist={setTrackToAddToPlaylist}
-                          onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                        />
-                      ))}
+                      {artistTracks.slice(0, visibleArtistTracksCount).map((track, idx) => {
+                        const isChecked = selectedTrackIds.has(track.id);
+                        return (
+                          <div
+                            key={`${track.id}-${idx}`}
+                            className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
+                          >
+                            {isSelecting && (
+                              <div
+                                className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                                onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                                title={isChecked ? "Deselect" : "Select"}
+                              >
+                                <div
+                                  className={`rounded-md border-2 flex items-center justify-center transition-all
+                                    ${isChecked
+                                      ? "border-brand-accent bg-brand-accent"
+                                      : "border-white/80 bg-black"
+                                    }`}
+                                  style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                                >
+                                  {isChecked && (
+                                    <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="1,4 3.5,7 9,1" />
+                                    </svg>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <TrackCard
+                                track={track}
+                                variant="row"
+                                tracksQueue={artistTracks}
+                                onToggleFavorite={handleToggleFavorite}
+                                isFavorite={favorites.some((f) => f.id === track.id)}
+                                onOpenArtist={handleOpenArtist}
+                                onAddToPlaylist={setTrackToAddToPlaylist}
+                                onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
                       {artistTracks.length > visibleArtistTracksCount && (
                         <button
                           onClick={() => setVisibleArtistTracksCount(prev => prev + 10)}
@@ -2340,20 +2540,112 @@ const MainLayout: React.FC = () => {
                 ) : albumTracks.length === 0 ? (
                   <p className="text-center py-12 text-gray-500 text-sm">No tracks found for this album.</p>
                 ) : (
-                  albumTracks.map((track, idx) => (
-                    <TrackCard
-                      key={`${track.id}-${idx}`}
-                      track={track}
-                      variant="row"
-                      tracksQueue={albumTracks}
-                      onToggleFavorite={handleToggleFavorite}
-                      isFavorite={favorites.some((f) => f.id === track.id)}
+                  <>
+                    {/* Bulk Action Toolbar */}
+                    {isSelecting && (
+                      <div id="bulk-action-toolbar" className="sticky top-0 z-30 flex items-center gap-2 px-4 py-2.5 mb-2 rounded-2xl bg-brand-accent/10 border border-brand-accent/30 backdrop-blur-xl animate-[fadeIn_0.2s_ease]">
+                        <button
+                          onClick={() => handleSelectAll(albumTracks)}
+                          className="text-xs text-brand-accent hover:underline font-semibold shrink-0"
+                        >
+                          {selectedTrackIds.size === albumTracks.length ? "Deselect all" : "Select all"}
+                        </button>
+                        <span className="text-gray-500 text-xs shrink-0">{selectedTrackIds.size} selected</span>
+                        <div className="flex-1" />
+                        <button
+                          onClick={() => {
+                            const sel = albumTracks.filter(t => selectedTrackIds.has(t.id));
+                            handleBulkAddToFavorites(sel);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-300 hover:text-red-400 text-xs font-medium transition-all"
+                        >
+                          <Heart className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Favorites</span>
+                        </button>
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowBulkPlaylistPicker(prev => !prev)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Add to playlist</span>
+                          </button>
+                          {showBulkPlaylistPicker && (
+                            <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
+                              {playlists.length === 0 ? (
+                                <div className="px-4 py-3 text-xs text-gray-500 italic text-center">No playlists yet</div>
+                              ) : (
+                                playlists.map(pl => (
+                                  <button
+                                    key={pl.id}
+                                    onClick={() => {
+                                      const sel = albumTracks.filter(t => selectedTrackIds.has(t.id));
+                                      handleBulkAddToPlaylist(pl.id, sel);
+                                    }}
+                                    className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
+                                  >
+                                    <ListMusic className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                    <span className="truncate">{pl.name}</span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={clearSelection}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/5 text-gray-500 hover:text-white text-xs transition-all"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
 
-                      onOpenArtist={handleOpenArtist}
-                      onAddToPlaylist={setTrackToAddToPlaylist}
-                      onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                    />
-                  ))
+                    {albumTracks.map((track, idx) => {
+                      const isChecked = selectedTrackIds.has(track.id);
+                      return (
+                        <div
+                          key={`${track.id}-${idx}`}
+                          className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
+                        >
+                          {isSelecting && (
+                            <div
+                              className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                              onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                              title={isChecked ? "Deselect" : "Select"}
+                            >
+                              <div
+                                className={`rounded-md border-2 flex items-center justify-center transition-all
+                                  ${isChecked
+                                    ? "border-brand-accent bg-brand-accent"
+                                    : "border-white/80 bg-black"
+                                  }`}
+                                style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                              >
+                                {isChecked && (
+                                  <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="1,4 3.5,7 9,1" />
+                                  </svg>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <TrackCard
+                              track={track}
+                              variant="row"
+                              tracksQueue={albumTracks}
+                              onToggleFavorite={handleToggleFavorite}
+                              isFavorite={favorites.some((f) => f.id === track.id)}
+                              onOpenArtist={handleOpenArtist}
+                              onAddToPlaylist={setTrackToAddToPlaylist}
+                              onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
                 )}
               </div>
             </section>
@@ -2531,6 +2823,31 @@ const MainLayout: React.FC = () => {
                         <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                           <Plus className="w-6 h-6 text-white mb-1" />
                           <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
+                          <button
+                            onClick={async () => {
+                              if (!selectedPlaylist) return;
+                              if (!selectedPlaylist.tracks.length) return;
+                              showToast(`Iniciando descarga de ${selectedPlaylist.tracks.length} canciones...`, "info");
+                              const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+                              for (const track of selectedPlaylist.tracks) {
+                                try {
+                                  if (!downloadService.isTrackDownloaded(track.id)) {
+                                    await downloadService.downloadTrack(track, async () => {
+                                      const videoId = await getYouTubeVideoId(track);
+                                      return await getYouTubeAudioStream(videoId);
+                                    });
+                                  }
+                                } catch (e) {
+                                  console.warn(`Error descargando ${track.title}`, e);
+                                }
+                              }
+                              showToast("Descarga de lista completada", "success");
+                            }}
+                            className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/10 active:scale-95 shrink-0"
+                            title="Download playlist"
+                          >
+                            <Download className="w-5 h-5" />
+                          </button>
                         </div>
                       )}
                     </div>
@@ -2615,6 +2932,33 @@ const MainLayout: React.FC = () => {
                           >
                             <Shuffle className="w-5 h-5" />
                           </button>
+                          {Capacitor.isNativePlatform() && (
+                            <button
+                              onClick={async () => {
+                                if (!selectedPlaylist) return;
+                                if (!selectedPlaylist.tracks.length) return;
+                                showToast(`Iniciando descarga de ${selectedPlaylist.tracks.length} canciones...`, "info");
+                                const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+                                for (const track of selectedPlaylist.tracks) {
+                                  try {
+                                    if (!downloadService.isTrackDownloaded(track.id)) {
+                                      await downloadService.downloadTrack(track, async () => {
+                                        const videoId = await getYouTubeVideoId(track);
+                                        return await getYouTubeAudioStream(videoId);
+                                      });
+                                    }
+                                  } catch (e) {
+                                    console.warn(`Error descargando ${track.title}`, e);
+                                  }
+                                }
+                                showToast("Descarga de lista completada", "success");
+                              }}
+                              className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/10 active:scale-95 shrink-0"
+                              title="Download playlist"
+                            >
+                              <Download className="w-5 h-5" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3182,21 +3526,113 @@ const MainLayout: React.FC = () => {
                       </div>
                     ) : (
                       <div className="flex flex-col gap-6">
-                        <div className="flex flex-col gap-3">
-                          {searchResults.map((track, idx) => (
-                            <TrackCard
-                              key={`${track.id}-${idx}`}
-                              track={track}
-                              variant="row"
-                              tracksQueue={searchResults}
-                              onToggleFavorite={handleToggleFavorite}
-                              isFavorite={favorites.some((f) => f.id === track.id)}
+                        {/* Bulk Action Toolbar */}
+                        {isSelecting && (
+                          <div id="bulk-action-toolbar" className="sticky top-0 z-30 flex items-center gap-2 px-4 py-2.5 mb-2 rounded-2xl bg-brand-accent/10 border border-brand-accent/30 backdrop-blur-xl animate-[fadeIn_0.2s_ease]">
+                            <button
+                              onClick={() => handleSelectAll([...searchResults, ...searchRecommendations])}
+                              className="text-xs text-brand-accent hover:underline font-semibold shrink-0"
+                            >
+                              {selectedTrackIds.size === (searchResults.length + searchRecommendations.length) ? "Deselect all" : "Select all"}
+                            </button>
+                            <span className="text-gray-500 text-xs shrink-0">{selectedTrackIds.size} selected</span>
+                            <div className="flex-1" />
+                            <button
+                              onClick={() => {
+                                const combined = [...searchResults, ...searchRecommendations];
+                                const sel = combined.filter(t => selectedTrackIds.has(t.id));
+                                handleBulkAddToFavorites(sel);
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-300 hover:text-red-400 text-xs font-medium transition-all"
+                            >
+                              <Heart className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Favorites</span>
+                            </button>
+                            <div className="relative">
+                              <button
+                                onClick={() => setShowBulkPlaylistPicker(prev => !prev)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span className="hidden sm:inline">Add to playlist</span>
+                              </button>
+                              {showBulkPlaylistPicker && (
+                                <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
+                                  {playlists.length === 0 ? (
+                                    <div className="px-4 py-3 text-xs text-gray-500 italic text-center">No playlists yet</div>
+                                  ) : (
+                                    playlists.map(pl => (
+                                      <button
+                                        key={pl.id}
+                                        onClick={() => {
+                                          const combined = [...searchResults, ...searchRecommendations];
+                                          const sel = combined.filter(t => selectedTrackIds.has(t.id));
+                                          handleBulkAddToPlaylist(pl.id, sel);
+                                        }}
+                                        className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
+                                      >
+                                        <ListMusic className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                        <span className="truncate">{pl.name}</span>
+                                      </button>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              onClick={clearSelection}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/5 text-gray-500 hover:text-white text-xs transition-all"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
 
-                              onOpenArtist={handleOpenArtist}
-                              onAddToPlaylist={setTrackToAddToPlaylist}
-                              onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                            />
-                          ))}
+                        <div className="flex flex-col gap-3">
+                          {searchResults.map((track, idx) => {
+                            const isChecked = selectedTrackIds.has(track.id);
+                            return (
+                              <div
+                                key={`${track.id}-${idx}`}
+                                className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
+                              >
+                                {isSelecting && (
+                                  <div
+                                    className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                                    onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                                    title={isChecked ? "Deselect" : "Select"}
+                                  >
+                                    <div
+                                      className={`rounded-md border-2 flex items-center justify-center transition-all
+                                        ${isChecked
+                                          ? "border-brand-accent bg-brand-accent"
+                                          : "border-white/80 bg-black"
+                                        }`}
+                                      style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                                    >
+                                      {isChecked && (
+                                        <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                          <polyline points="1,4 3.5,7 9,1" />
+                                        </svg>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <TrackCard
+                                    track={track}
+                                    variant="row"
+                                    tracksQueue={searchResults}
+                                    onToggleFavorite={handleToggleFavorite}
+                                    isFavorite={favorites.some((f) => f.id === track.id)}
+                                    onOpenArtist={handleOpenArtist}
+                                    onAddToPlaylist={setTrackToAddToPlaylist}
+                                    onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                         {searchRecommendations.length > 0 && (
                           <div className="mt-4 border-t border-white/5 pt-6 animate-[fadeIn_0.3s_ease]">
@@ -3204,20 +3640,50 @@ const MainLayout: React.FC = () => {
                               Related to your search
                             </h3>
                             <div className="flex flex-col gap-3">
-                              {searchRecommendations.map((track, idx) => (
-                                <TrackCard
-                                  key={`${track.id}-${idx}`}
-                                  track={track}
-                                  variant="row"
-                                  tracksQueue={searchRecommendations}
-                                  onToggleFavorite={handleToggleFavorite}
-                                  isFavorite={favorites.some((f) => f.id === track.id)}
-
-                                  onOpenArtist={handleOpenArtist}
-                                  onAddToPlaylist={setTrackToAddToPlaylist}
-                                  onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                                />
-                              ))}
+                              {searchRecommendations.map((track, idx) => {
+                                const isChecked = selectedTrackIds.has(track.id);
+                                return (
+                                  <div
+                                    key={`${track.id}-${idx}`}
+                                    className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
+                                  >
+                                    {isSelecting && (
+                                      <div
+                                        className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                                        onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                                        title={isChecked ? "Deselect" : "Select"}
+                                      >
+                                        <div
+                                          className={`rounded-md border-2 flex items-center justify-center transition-all
+                                            ${isChecked
+                                              ? "border-brand-accent bg-brand-accent"
+                                              : "border-white/80 bg-black"
+                                            }`}
+                                          style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                                        >
+                                          {isChecked && (
+                                            <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                              <polyline points="1,4 3.5,7 9,1" />
+                                            </svg>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                      <TrackCard
+                                        track={track}
+                                        variant="row"
+                                        tracksQueue={searchRecommendations}
+                                        onToggleFavorite={handleToggleFavorite}
+                                        isFavorite={favorites.some((f) => f.id === track.id)}
+                                        onOpenArtist={handleOpenArtist}
+                                        onAddToPlaylist={setTrackToAddToPlaylist}
+                                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -3432,21 +3898,111 @@ const MainLayout: React.FC = () => {
                 }
                 return (
                   <div className="flex flex-col gap-3">
-                    {filtered.map((track) => (
-                      <TrackCard
-                        key={track.id}
-                        track={track}
-                        variant="row"
-                        tracksQueue={filtered}
-                        onToggleFavorite={handleToggleFavorite}
-                        isFavorite={true}
+                    {/* Bulk Action Toolbar */}
+                    {isSelecting && (
+                      <div id="bulk-action-toolbar" className="sticky top-0 z-30 flex items-center gap-2 px-4 py-2.5 mb-2 rounded-2xl bg-brand-accent/10 border border-brand-accent/30 backdrop-blur-xl animate-[fadeIn_0.2s_ease]">
+                        <button
+                          onClick={() => handleSelectAll(filtered)}
+                          className="text-xs text-brand-accent hover:underline font-semibold shrink-0"
+                        >
+                          {selectedTrackIds.size === filtered.length ? "Deselect all" : "Select all"}
+                        </button>
+                        <span className="text-gray-500 text-xs shrink-0">{selectedTrackIds.size} selected</span>
+                        <div className="flex-1" />
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowBulkPlaylistPicker(prev => !prev)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Add to playlist</span>
+                          </button>
+                          {showBulkPlaylistPicker && (
+                            <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
+                              {playlists.length === 0 ? (
+                                <div className="px-4 py-3 text-xs text-gray-500 italic text-center">No playlists yet</div>
+                              ) : (
+                                playlists.map(pl => (
+                                  <button
+                                    key={pl.id}
+                                    onClick={() => {
+                                      const sel = filtered.filter(t => selectedTrackIds.has(t.id));
+                                      handleBulkAddToPlaylist(pl.id, sel);
+                                    }}
+                                    className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
+                                  >
+                                    <ListMusic className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                    <span className="truncate">{pl.name}</span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {/* Bulk Remove from Favorites */}
+                        <button
+                          onClick={() => {
+                            handleBulkRemoveFromFavorites(Array.from(selectedTrackIds));
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-400 hover:text-red-400 text-xs font-medium transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Remove</span>
+                        </button>
+                        <button
+                          onClick={clearSelection}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/5 text-gray-500 hover:text-white text-xs transition-all"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
 
-                        onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
-                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                        playlistId="favorites"
-                      />
-                    ))}
+                    {filtered.map((track, idx) => {
+                      const isChecked = selectedTrackIds.has(track.id);
+                      return (
+                        <div
+                          key={`${track.id}-${idx}`}
+                          className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
+                        >
+                          {isSelecting && (
+                            <div
+                              className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
+                              onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
+                              title={isChecked ? "Deselect" : "Select"}
+                            >
+                              <div
+                                className={`rounded-md border-2 flex items-center justify-center transition-all
+                                  ${isChecked
+                                    ? "border-brand-accent bg-brand-accent"
+                                    : "border-white/80 bg-black"
+                                  }`}
+                                style={{ width: "18px", height: "18px", minWidth: "18px" }}
+                              >
+                                {isChecked && (
+                                  <svg viewBox="0 0 10 8" style={{ width: "11px", height: "9px" }} fill="none" stroke="black" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="1,4 3.5,7 9,1" />
+                                  </svg>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <TrackCard
+                              track={track}
+                              variant="row"
+                              tracksQueue={filtered}
+                              onToggleFavorite={handleToggleFavorite}
+                              isFavorite={true}
+                              onOpenArtist={handleOpenArtist}
+                              onAddToPlaylist={setTrackToAddToPlaylist}
+                              onContextMenu={(e) => handleTrackContextMenu(e, track, "favorites")}
+                              playlistId="favorites"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })()}
@@ -3560,7 +4116,8 @@ const MainLayout: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <input 
+
+                    <input
                       type="file" 
                       id="admin-pl-pfp" 
                       accept="image/*" 
@@ -3743,7 +4300,12 @@ const MainLayout: React.FC = () => {
                         { name: "Sunset Sparkle", class: "from-orange-500/20 via-rose-500/15 to-transparent" },
                         { name: "Cyberpunk Violet", class: "from-purple-600/20 via-fuchsia-500/15 to-transparent" },
                         { name: "Emerald Aurora", class: "from-emerald-500/20 via-teal-500/10 to-transparent" },
-                        { name: "Ocean Breeze", class: "from-blue-600/20 via-cyan-500/15 to-transparent" }
+                        { name: "Ocean Breeze", class: "from-blue-600/20 via-cyan-500/15 to-transparent" },
+                        { name: "Midnight Sapphire", class: "from-indigo-900/40 via-blue-900/20 to-transparent" },
+                        { name: "Neon Lime", class: "from-lime-500/20 via-green-500/10 to-transparent" },
+                        { name: "Sakura Pink", class: "from-pink-400/20 via-rose-300/10 to-transparent" },
+                        { name: "Golden Hour", class: "from-amber-500/20 via-yellow-600/10 to-transparent" },
+                        { name: "Crimson Shadow", class: "from-red-600/25 via-rose-900/15 to-transparent" }
                       ].map((preset) => (
                         <button
                           key={preset.name}
@@ -3773,12 +4335,16 @@ const MainLayout: React.FC = () => {
                   {/* Text Color Presets */}
                   <div className="flex flex-col gap-2">
                     <label className="text-xs text-gray-400">Title & Subtitle Color Preset</label>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {[
                         { name: "Pure White", class: "text-white" },
                         { name: "Brand Accent", class: "text-brand-accent" },
                         { name: "Muted Silver", class: "text-gray-300" },
-                        { name: "Rose Pink", class: "text-rose-400" }
+                        { name: "Rose Pink", class: "text-rose-400" },
+                        { name: "Cyber Green", class: "text-emerald-400" },
+                        { name: "Sky Blue", class: "text-sky-400" },
+                        { name: "Neon Purple", class: "text-purple-400" },
+                        { name: "Gold", class: "text-amber-400" }
                       ].map((color) => (
                         <button
                           key={color.name}
@@ -4106,18 +4672,43 @@ const MainLayout: React.FC = () => {
 
                     {/* Featured Songs */}
                     {featuredSongs.map((track, idx) => (
-                      <TrackCard
-                        key={`feat-song-${track.id}-${idx}`}
-                        track={track}
-                        variant="square"
-                        tracksQueue={featuredSongs}
-                        onToggleFavorite={handleToggleFavorite}
-                        isFavorite={favorites.some((f) => f.id === track.id)}
+                      <div key={`feat-song-container-${track.id}-${idx}`} className="flex flex-col gap-2">
+                        <TrackCard
+                          key={`feat-song-${track.id}-${idx}`}
+                          track={track}
+                          variant="square"
+                          tracksQueue={featuredSongs}
+                          onToggleFavorite={handleToggleFavorite}
+                          isFavorite={favorites.some((f) => f.id === track.id)}
 
-                        onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
-                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                      />
+                          onOpenArtist={handleOpenArtist}
+                          onAddToPlaylist={setTrackToAddToPlaylist}
+                          onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                        />
+                        {Capacitor.isNativePlatform() && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!downloadService.isTrackDownloaded(track.id)) {
+                                try {
+                                  const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+                                  await downloadService.downloadTrack(track, async () => {
+                                    const videoId = await getYouTubeVideoId(track);
+                                    return await getYouTubeAudioStream(videoId);
+                                  });
+                                  showToast(`Descargado: ${track.title}`, "success");
+                                } catch (err) {
+                                  showToast("Error al descargar", "error");
+                                }
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] text-gray-400 flex items-center justify-center gap-1 transition-all"
+                          >
+                            <Download className="w-3 h-3" />
+                            {downloadService.isTrackDownloaded(track.id) ? "Guardado" : "Bajar"}
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -4132,17 +4723,42 @@ const MainLayout: React.FC = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {/* 8 quick-access cards using square variant */}
                     {homeRecommendations.slice(0, 8).map((track, idx) => (
-                      <TrackCard
-                        key={`quick-${track.id}-${idx}`}
-                        track={track}
-                        variant="square"
-                        tracksQueue={homeRecommendations}
-                        onToggleFavorite={handleToggleFavorite}
-                        isFavorite={favorites.some((f) => f.id === track.id)}
-                        onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
-                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                      />
+                      <div key={`quick-container-${track.id}-${idx}`} className="flex flex-col gap-2">
+                        <TrackCard
+                          key={`quick-${track.id}-${idx}`}
+                          track={track}
+                          variant="square"
+                          tracksQueue={homeRecommendations}
+                          onToggleFavorite={handleToggleFavorite}
+                          isFavorite={favorites.some((f) => f.id === track.id)}
+                          onOpenArtist={handleOpenArtist}
+                          onAddToPlaylist={setTrackToAddToPlaylist}
+                          onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                        />
+                        {Capacitor.isNativePlatform() && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!downloadService.isTrackDownloaded(track.id)) {
+                                try {
+                                  const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+                                  await downloadService.downloadTrack(track, async () => {
+                                    const videoId = await getYouTubeVideoId(track);
+                                    return await getYouTubeAudioStream(videoId);
+                                  });
+                                  showToast(`Descargado: ${track.title}`, "success");
+                                } catch (err) {
+                                  showToast("Error al descargar", "error");
+                                }
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] text-gray-400 flex items-center justify-center gap-1 transition-all"
+                          >
+                            <Download className="w-3 h-3" />
+                            {downloadService.isTrackDownloaded(track.id) ? "Guardado" : "Bajar"}
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -4596,7 +5212,7 @@ const MainLayout: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
               <div className="p-6 overflow-y-auto">
-                <ListenTogether />
+                <ListenTogether alwaysOpen={true} />
               </div>
             </div>
           </div>
@@ -5260,7 +5876,10 @@ const MainLayout: React.FC = () => {
 
       {/* ═══ MOBILE MINI-PLAYER (above bottom nav) ═══ */}
       {currentTrack && (
-        <div className="md:hidden fixed bottom-[calc(64px+env(safe-area-inset-bottom))] left-0 right-0 z-40 px-3 pb-2">
+        <div
+          className="md:hidden fixed left-0 right-0 z-40 px-3 pb-2 bottom-20"
+          style={{ bottom: 'calc(64px + var(--safe-bottom))' }}
+        >
           <div
             onClick={() => setShowMobilePlayer(true)}
             className="flex items-center gap-3 bg-brand-darkBg/90 backdrop-blur-xl border border-white/10 rounded-2xl px-3 py-2.5 shadow-xl shadow-black/50 cursor-pointer select-none"
@@ -5518,11 +6137,7 @@ const MainLayout: React.FC = () => {
               ? () => handleRemoveTrackFromPlaylist(contextMenu.currentPlaylistId!, contextMenu.track.id)
               : undefined
           }
-          onSelect={
-            contextMenu.currentPlaylistId && playlists.some(p => p.id === contextMenu.currentPlaylistId)
-              ? () => handleSelectTrack(contextMenu.track.id)
-              : undefined
-          }
+          onSelect={() => handleSelectTrack(contextMenu.track.id)}
         />
       )}
     </div>

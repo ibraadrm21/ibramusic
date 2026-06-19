@@ -56,6 +56,8 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
         return super.getAvailableCommands().buildUpon()
                 .add(COMMAND_SEEK_TO_NEXT)
                 .add(COMMAND_SEEK_TO_PREVIOUS)
+                .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .build();
     }
 

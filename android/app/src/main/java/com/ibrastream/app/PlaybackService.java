@@ -64,33 +64,16 @@ public class PlaybackService extends MediaSessionService {
         player.addListener(new Player.Listener() {
             @Override
             public void onPlaybackStateChanged(int state) {
-                String stateStr = "UNKNOWN";
-                if (state == Player.STATE_IDLE) stateStr = "IDLE";
-                else if (state == Player.STATE_BUFFERING) stateStr = "BUFFERING";
-                else if (state == Player.STATE_READY) stateStr = "READY";
-                else if (state == Player.STATE_ENDED) {
-                    stateStr = "ENDED";
-                    Log.e(TAG, "ExoPlayer: Playback ended, sending auto-advance broadcast");
+                if (state == Player.STATE_ENDED) {
+                    Log.e(TAG, "ExoPlayer: Track ENDED. Sending auto-advance broadcast.");
                     sendMediaCommand("next");
                 }
-                Log.e(TAG, "ExoPlayer: onPlaybackStateChanged=" + stateStr);
-            }
-
-            @Override
-            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
-                Log.e(TAG, "ExoPlayer: onPlayWhenReadyChanged=" + playWhenReady + ", reason=" + reason);
-            }
-
-            @Override
-            public void onPlayerError(androidx.media3.common.PlaybackException error) {
-                Log.e(TAG, "ExoPlayer: onPlayerError=" + error.getMessage(), error);
             }
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
-                Log.e(TAG, "ExoPlayer: onIsPlayingChanged=" + isPlaying);
                 if (isPlaying) {
-                    if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(1000 * 60 * 60); // 1 hour safety timeout
+                    if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(1000 * 60 * 60); // 1 hour safety
                     if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
                 } else {
                     if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
@@ -117,6 +100,8 @@ public class PlaybackService extends MediaSessionService {
                         Player.Commands playerCommands = connectionResult.availablePlayerCommands.buildUpon()
                                 .add(Player.COMMAND_SEEK_TO_NEXT)
                                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                                 .build();
                         return new MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                                 .setAvailableSessionCommands(sessionCommands)
@@ -126,13 +111,11 @@ public class PlaybackService extends MediaSessionService {
 
                     @Override
                     public int onPlayerCommandRequest(MediaSession session, MediaSession.ControllerInfo controllerInfo, int playerCommand) {
-                        if (playerCommand == Player.COMMAND_SEEK_TO_NEXT) {
-                            Log.e(TAG, "Callback: Intercepted skip to next");
+                        if (playerCommand == Player.COMMAND_SEEK_TO_NEXT || playerCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) {
                             sendMediaCommand("next");
                             return SessionResult.RESULT_SUCCESS;
                         }
-                        if (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS) {
-                            Log.e(TAG, "Callback: Intercepted skip to previous");
+                        if (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS || playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
                             sendMediaCommand("previous");
                             return SessionResult.RESULT_SUCCESS;
                         }
@@ -151,7 +134,6 @@ public class PlaybackService extends MediaSessionService {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        // Do not stop the service when the task is removed
     }
 
     private void sendMediaCommand(String command) {
@@ -160,37 +142,31 @@ public class PlaybackService extends MediaSessionService {
         intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         sendBroadcast(intent);
 
-        // Acquire a temporary WakeLock to ensure the CPU stays on long enough
-        // for the WebView/Capacitor to receive the broadcast and start loading the next track.
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
-                PowerManager.WakeLock wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:MediaCommandWakeLock");
-                wakeLock.acquire(15000); // 15 seconds
-                Log.e(TAG, "Acquired temporary WakeLock for command: " + command);
+                PowerManager.WakeLock transitionWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IbraStream:TransitionWakeLock");
+                transitionWakeLock.acquire(30000); // 30 seconds for network + JS
+                Log.e(TAG, "Acquired 30s transition WakeLock for: " + command);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to acquire wake lock", e);
+            Log.e(TAG, "Failed to acquire transition wake lock", e);
         }
     }
 
     @Nullable
     @Override
     public MediaSession onGetSession(MediaSession.ControllerInfo controllerInfo) {
-        Log.e(TAG, "onGetSession requested by " + controllerInfo.getPackageName());
         return mediaSession;
     }
 
     @Override
     public void onDestroy() {
-        Log.e(TAG, "PlaybackService DESTROYED");
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         customPlayer = null;
         if (mediaSession != null) {
-            if (player != null) {
-                player.release();
-            }
+            if (player != null) player.release();
             mediaSession.release();
             mediaSession = null;
         }

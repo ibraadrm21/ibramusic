@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Play, Heart, ListPlus, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare } from "lucide-react";
+import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Download, CloudOff, ListPlus } from "lucide-react";
 import type { Track } from "../services/musicApi";
+import { downloadService } from "../services/downloadService";
+import { Capacitor } from "@capacitor/core";
 
 interface TrackContextMenuProps {
   x: number;
@@ -43,6 +45,33 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   const [adjustedCoords, setAdjustedCoords] = useState({ left: x, top: y });
   const [showPlaylistSubmenu, setShowPlaylistSubmenu] = useState(false);
   const submenuTimeoutRef = useRef<number | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState(downloadService.getStatus(track.id));
+
+  // Sync download status
+  useEffect(() => {
+    const handleStatusChange = () => {
+      setDownloadStatus(downloadService.getStatus(track.id));
+    };
+    window.addEventListener('ibrastream_download_status_change', handleStatusChange);
+    return () => window.removeEventListener('ibrastream_download_status_change', handleStatusChange);
+  }, [track.id]);
+
+  const handleDownload = async () => {
+    if (downloadStatus.isDownloaded) {
+      await downloadService.removeDownload(track.id);
+    } else {
+      try {
+        const { getYouTubeAudioStream, getYouTubeVideoId } = await import("../services/musicApi");
+        await downloadService.downloadTrack(track, async () => {
+          const videoId = await getYouTubeVideoId(track);
+          return await getYouTubeAudioStream(videoId);
+        });
+      } catch (err) {
+        console.error("Download failed", err);
+      }
+    }
+    onClose();
+  };
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -131,6 +160,26 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         >
           <CheckSquare className="w-4 h-4 text-brand-accent" />
           <span className="text-brand-accent font-medium">Select</span>
+        </button>
+      )}
+
+      {/* Download option */}
+      {Capacitor.isNativePlatform() && (
+        <button
+          onClick={handleDownload}
+          disabled={downloadStatus.isDownloading}
+          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
+        >
+          {downloadStatus.isDownloading ? (
+            <div className="w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+          ) : downloadStatus.isDownloaded ? (
+            <CloudOff className="w-4 h-4 text-red-400" />
+          ) : (
+            <Download className="w-4 h-4 text-gray-400" />
+          )}
+          <span>
+            {downloadStatus.isDownloading ? "Descargando..." : downloadStatus.isDownloaded ? "Eliminar descarga" : "Descargar canción"}
+          </span>
         </button>
       )}
 

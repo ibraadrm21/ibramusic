@@ -70,6 +70,36 @@ export const switchToNextInstance = () => {
 export async function searchTracks(query: string): Promise<Track[]> {
   if (!query.trim()) return MOCK_LIBRARY;
 
+  // Regex to match YouTube video URLs (standard, mobile, shorts, y2u.be, etc.)
+  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
+  const ytMatch = query.match(ytRegex);
+  if (ytMatch) {
+    const videoId = ytMatch[1];
+    try {
+      console.log(`Resolving direct YouTube link for videoId: ${videoId}`);
+      const yt = await getYoutubeClient();
+      const info = await yt.getBasicInfo(videoId);
+      
+      const title = info.basic_info.title || "YouTube Track";
+      const artist = info.basic_info.author || "YouTube Channel";
+      const duration = info.basic_info.duration || 180;
+      const thumbnail = info.basic_info.thumbnail?.[0]?.url || "";
+      
+      const track: Track = {
+        id: `yt-${videoId}`,
+        title,
+        artist,
+        duration,
+        thumbnail,
+        audioUrl: "",
+        youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`
+      };
+      return [track];
+    } catch (err) {
+      console.error("Failed to resolve direct YouTube search:", err);
+    }
+  }
+
   let retries = 3;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();
@@ -124,6 +154,9 @@ export async function searchTracks(query: string): Promise<Track[]> {
 }
 
 export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Promise<string> {
+  if (track.id.startsWith("yt-")) {
+    return track.id.substring(3);
+  }
   // Clean query to remove featuring suffixes and parentheses
   const cleanTitle = track.title
     .replace(/\(feat\..*?\)/i, "")
@@ -947,6 +980,73 @@ export async function getPublicPlaylistTracks(playlistId: string): Promise<Track
 
   console.error(`[getPublicPlaylistTracks] All sources failed for playlist ${playlistId}`);
   return [];
+}
+
+export interface LyricsData {
+  syncedLyrics?: string;
+  plainLyrics?: string;
+}
+
+const lyricsCache = new Map<string, LyricsData>();
+
+export async function getLyricsForTrack(track: Track): Promise<LyricsData> {
+  const cacheKey = track.id;
+  if (lyricsCache.has(cacheKey)) {
+    return lyricsCache.get(cacheKey)!;
+  }
+
+  const trackTitle = track.title
+    .replace(/\(feat\..*?\)/i, "")
+    .replace(/\[feat\..*?\]/i, "")
+    .replace(/\(with.*?\)/i, "")
+    .trim();
+
+  // 1. Try with duration (most accurate)
+  const urlWithDuration = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackTitle)}&artist_name=${encodeURIComponent(track.artist)}&duration=${Math.floor(track.duration)}`;
+  try {
+    const res = await fetch(urlWithDuration);
+    if (res.ok) {
+      const data = await res.json();
+      const lyricsData = { syncedLyrics: data.syncedLyrics, plainLyrics: data.plainLyrics };
+      lyricsCache.set(cacheKey, lyricsData);
+      return lyricsData;
+    }
+  } catch (e) {
+    console.warn("Failed exact duration lyrics match:", e);
+  }
+
+  // 2. Try without duration (lenient match)
+  const urlWithoutDuration = `https://lrclib.net/api/get?track_name=${encodeURIComponent(trackTitle)}&artist_name=${encodeURIComponent(track.artist)}`;
+  try {
+    const res = await fetch(urlWithoutDuration);
+    if (res.ok) {
+      const data = await res.json();
+      const lyricsData = { syncedLyrics: data.syncedLyrics, plainLyrics: data.plainLyrics };
+      lyricsCache.set(cacheKey, lyricsData);
+      return lyricsData;
+    }
+  } catch (e) {
+    console.warn("Failed exact title/artist lyrics match:", e);
+  }
+
+  // 3. Try search fallback (most lenient)
+  const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(track.artist + " " + trackTitle)}`;
+  try {
+    const res = await fetch(searchUrl);
+    if (res.ok) {
+      const results = await res.json();
+      if (Array.isArray(results) && results.length > 0) {
+        const bestMatch = results.find(r => r.syncedLyrics) || results[0];
+        const lyricsData = { syncedLyrics: bestMatch.syncedLyrics, plainLyrics: bestMatch.plainLyrics };
+        lyricsCache.set(cacheKey, lyricsData);
+        return lyricsData;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed search query lyrics match:", e);
+  }
+
+  throw new Error("Lyrics not found");
 }
 
 

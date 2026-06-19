@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useAudio } from "../context/AudioContext";
-import { Copy, Check, LogOut, Radio, Plus, ChevronDown, ChevronUp } from "lucide-react";
+import { Copy, Check, LogOut, Radio, Plus, ChevronDown, ChevronUp, Share2, X } from "lucide-react";
 
-export const ListenTogether: React.FC = () => {
+interface ListenTogetherProps {
+  alwaysOpen?: boolean;
+}
+
+export const ListenTogether: React.FC<ListenTogetherProps> = ({ alwaysOpen = false }) => {
   const {
     roomId,
     isHost,
@@ -11,19 +15,21 @@ export const ListenTogether: React.FC = () => {
     createRoom,
     joinRoom,
     leaveRoom,
+    closeRoom,
     showToast
   } = useAudio();
 
   const [inputRoomId, setInputRoomId] = useState("");
   const [copied, setCopied] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [isOpen, setIsOpen] = useState(alwaysOpen || false);
 
-  // Auto-expand when joining/creating a room
+  // Auto-expand when joining/creating a room or if alwaysOpen is true
   useEffect(() => {
-    if (roomId) {
+    if (roomId || alwaysOpen) {
       setIsOpen(true);
     }
-  }, [roomId]);
+  }, [roomId, alwaysOpen]);
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -35,9 +41,54 @@ export const ListenTogether: React.FC = () => {
     }
   };
 
+  const handleCopyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (roomId) {
+      const origin = window.location.origin.includes("localhost") || window.location.origin.includes("127.0.0.1") 
+        ? window.location.origin 
+        : "https://ibrastream.vercel.app";
+      const shareUrl = `${origin}/?room=${roomId}`;
+      navigator.clipboard.writeText(shareUrl);
+      setLinkCopied(true);
+      showToast("Room link copied to clipboard", "success");
+      setTimeout(() => setLinkCopied(false), 2000);
+    }
+  };
+
+  const handleShareLink = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (roomId) {
+      const origin = window.location.origin.includes("localhost") || window.location.origin.includes("127.0.0.1") 
+        ? window.location.origin 
+        : "https://ibrastream.vercel.app";
+      const shareUrl = `${origin}/?room=${roomId}`;
+      
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: "Join my Listen Together room on IbraStream",
+            text: `Join my Listen Together room ${roomId} on IbraStream!`,
+            url: shareUrl,
+          });
+        } catch (err) {
+          if ((err as Error).name !== "AbortError") {
+            handleCopyLink(e);
+          }
+        }
+      } else {
+        handleCopyLink(e);
+      }
+    }
+  };
+
   const handleLeave = (e: React.MouseEvent) => {
     e.stopPropagation();
     leaveRoom();
+  };
+
+  const handleClose = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    closeRoom();
   };
 
   const handleJoin = (e: React.FormEvent) => {
@@ -52,8 +103,8 @@ export const ListenTogether: React.FC = () => {
     <div className="bg-white/4 border border-white/5 rounded-2xl p-4.5 flex flex-col gap-4 select-none backdrop-blur-md transition-all">
       {/* Header (Clickable to toggle collapse) */}
       <div 
-        onClick={() => setIsOpen(!isOpen)} 
-        className="flex items-center justify-between cursor-pointer group"
+        onClick={() => !alwaysOpen && setIsOpen(!isOpen)} 
+        className={`flex items-center justify-between group ${alwaysOpen ? "cursor-default" : "cursor-pointer"}`}
       >
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
@@ -67,11 +118,13 @@ export const ListenTogether: React.FC = () => {
           </div>
         </div>
         
-        <div className="flex items-center gap-1.5">
-          <div className="text-gray-400 group-hover:text-white transition-colors">
-            {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        {!alwaysOpen && (
+          <div className="flex items-center gap-1.5">
+            <div className="text-gray-400 group-hover:text-white transition-colors">
+              {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Main Content (visible only when expanded) */}
@@ -125,12 +178,22 @@ export const ListenTogether: React.FC = () => {
                 
                 <div className="flex items-center justify-between gap-3 bg-black/20 border border-white/5 rounded-lg px-3 py-2">
                   <span className="text-xs font-bold text-white tracking-widest uppercase">{roomId}</span>
-                  <button
-                    onClick={handleCopy}
-                    className="p-1 rounded hover:bg-white/5 text-gray-400 hover:text-white transition-all cursor-pointer"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={handleCopy}
+                      title="Copy Code"
+                      className="p-1 rounded hover:bg-white/5 text-gray-400 hover:text-white transition-all cursor-pointer"
+                    >
+                      {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      onClick={handleShareLink}
+                      title="Share Link"
+                      className="p-1 rounded hover:bg-white/5 text-gray-400 hover:text-white transition-all cursor-pointer"
+                    >
+                      {linkCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -162,14 +225,33 @@ export const ListenTogether: React.FC = () => {
                 </div>
               </div>
 
-              {/* Leave Room Action */}
-              <button
-                onClick={handleLeave}
-                className="w-full mt-1.5 py-2 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-red-400 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                Leave Room
-              </button>
+              {/* Leave / Close Room Action */}
+              {isHost ? (
+                <div className="flex gap-2 w-full mt-1.5 animate-fadeIn">
+                  <button
+                    onClick={handleLeave}
+                    className="flex-1 py-2 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-red-400 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Leave
+                  </button>
+                  <button
+                    onClick={handleClose}
+                    className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-red-600/10"
+                  >
+                    <X className="w-3.5 h-3.5 stroke-[2.5]" />
+                    Close Room
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleLeave}
+                  className="w-full mt-1.5 py-2 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-red-400 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer animate-fadeIn"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Leave Room
+                </button>
+              )}
             </div>
           )}
         </div>
