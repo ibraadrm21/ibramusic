@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
-  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X
+  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
@@ -73,7 +73,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     currentIndex,
     playTrack,
     roomId,
-    isHost
+    isHost,
+    visualizerStyle,
+    sleepTimerRemaining
   } = useAudio();
 
 
@@ -89,6 +91,151 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
 
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (visualizerStyle === "none" || !canvasRef.current || view !== "info") return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let animationId: number;
+    let t = 0;
+    const numBands = 64;
+    const bands = new Array(numBands).fill(0);
+
+    const resizeCanvas = () => {
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      canvas.width = (rect?.width || 350) * window.devicePixelRatio;
+      canvas.height = (rect?.height || 350) * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    };
+
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    const render = () => {
+      const width = canvas.width / window.devicePixelRatio;
+      const height = canvas.height / window.devicePixelRatio;
+
+      // Dark background fill with motion trail
+      ctx.fillStyle = "rgba(15, 15, 15, 0.18)";
+      ctx.fillRect(0, 0, width, height);
+
+      if (isPlaying) {
+        t += 0.06;
+      }
+
+      for (let i = 0; i < numBands; i++) {
+        let target = 0;
+        if (isPlaying) {
+          const wave1 = Math.sin(t * 1.5 + i * 0.2) * 20;
+          const wave2 = Math.cos(t * 0.7 - i * 0.4) * 15;
+          const wave3 = Math.sin(t * 2.8 + i * 0.8) * 8;
+          const multiplier = Math.max(0.1, 1 - (i / numBands));
+          target = Math.abs(wave1 + wave2 + wave3) * multiplier * (volume + 0.25);
+          
+          if (Math.random() > 0.85) {
+            target += Math.random() * 10 * multiplier;
+          }
+        }
+        bands[i] = bands[i] * 0.8 + target * 0.2;
+      }
+
+      const centerX = width / 2;
+      const centerY = height / 2;
+
+      if (visualizerStyle === "circle") {
+        const baseRadius = Math.min(width, height) * 0.3 + (bands[2] || 0) * 0.25;
+        
+        const glowGrad = ctx.createRadialGradient(centerX, centerY, baseRadius * 0.8, centerX, centerY, baseRadius * 1.6);
+        glowGrad.addColorStop(0, "rgba(255, 51, 102, 0)");
+        glowGrad.addColorStop(0.5, `rgba(255, 51, 102, ${0.12 * (volume + 0.15)})`);
+        glowGrad.addColorStop(1, "rgba(51, 255, 204, 0)");
+        
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, baseRadius * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        const totalPoints = 72;
+        for (let j = 0; j < totalPoints; j++) {
+          const angle = (j / totalPoints) * Math.PI * 2;
+          const bandIndex = Math.floor((j / totalPoints) * numBands);
+          const val = bands[bandIndex] || 0;
+          const outerRadius = baseRadius + val * 0.85;
+
+          const startX = centerX + Math.cos(angle) * baseRadius;
+          const startY = centerY + Math.sin(angle) * baseRadius;
+          const endX = centerX + Math.cos(angle) * outerRadius;
+          const endY = centerY + Math.sin(angle) * outerRadius;
+
+          const hue = (j / totalPoints) * 360 + (t * 8);
+          ctx.strokeStyle = `hsla(${hue}, 80%, 60%, 0.8)`;
+          ctx.lineWidth = 2.5;
+          ctx.lineCap = "round";
+          
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+        }
+      } else if (visualizerStyle === "bars") {
+        const barWidth = (width / numBands) * 0.75;
+        const gap = (width / numBands) * 0.25;
+
+        for (let i = 0; i < numBands; i++) {
+          const val = bands[i] || 0;
+          const barHeight = Math.max(3, val * 2.2);
+          const x = i * (barWidth + gap);
+          
+          const grad = ctx.createLinearGradient(x, height, x, height - barHeight);
+          grad.addColorStop(0, "rgba(51, 255, 204, 0.7)");
+          grad.addColorStop(0.5, "rgba(180, 51, 255, 0.7)");
+          grad.addColorStop(1, "rgba(255, 51, 102, 0.85)");
+
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.roundRect(x, height - barHeight, barWidth, barHeight, 3);
+          ctx.fill();
+        }
+      } else if (visualizerStyle === "wave") {
+        ctx.lineWidth = 3;
+        for (let w = 0; w < 3; w++) {
+          ctx.beginPath();
+          const opacity = 0.3 + (w * 0.25);
+          const colorShift = w * 120 + (t * 12);
+          ctx.strokeStyle = `hsla(${colorShift}, 85%, 60%, ${opacity})`;
+          
+          const speedMultiplier = 0.8 + w * 0.4;
+          
+          for (let x = 0; x < width; x++) {
+            const ratio = x / width;
+            const bandIndex = Math.floor(ratio * numBands);
+            const val = bands[bandIndex] || 0;
+            const waveY = centerY + Math.sin(x * 0.015 * speedMultiplier + t * speedMultiplier + w) * (val * 1.1);
+
+            if (x === 0) {
+              ctx.moveTo(x, waveY);
+            } else {
+              ctx.lineTo(x, waveY);
+            }
+          }
+          ctx.stroke();
+        }
+      }
+
+      animationId = requestAnimationFrame(render);
+    };
+
+    render();
+
+    return () => {
+      window.removeEventListener("resize", resizeCanvas);
+      cancelAnimationFrame(animationId);
+    };
+  }, [visualizerStyle, isPlaying, view, currentTrack, volume]);
 
   // Sync internal slider value to currentTime
   useEffect(() => {
@@ -221,7 +368,13 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     >
       
       {/* Header Controls */}
-      <div className="flex items-center justify-between mb-6 shrink-0">
+      <div className="flex items-center justify-between mb-6 shrink-0 relative">
+        {sleepTimerRemaining !== null && (
+          <div className="absolute -top-3.5 left-1/2 transform -translate-x-1/2 bg-brand-accent/20 border border-brand-accent/35 text-white text-[9px] px-2.5 py-0.5 rounded-full font-extrabold flex items-center gap-1.5 animate-pulse shrink-0 backdrop-blur-md">
+            <Clock className="w-2.5 h-2.5 text-brand-accent" />
+            <span>Sleep: {Math.floor(sleepTimerRemaining / 60)}:{(sleepTimerRemaining % 60).toString().padStart(2, "0")}</span>
+          </div>
+        )}
         {onClose && (
           <button 
             onClick={onClose}
@@ -255,9 +408,14 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
       {/* Main Content Area: Album Art or Lyrics */}
       {view === "info" ? (
-        /* Album Artwork Container */
-        <div className="flex-1 shrink-0 flex flex-col items-center justify-center my-4">
-          <div className="relative group w-64 md:w-72 aspect-square rounded-[32px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink-0">
+        <div className="flex-1 shrink-0 flex flex-col items-center justify-center my-4 relative w-full min-h-[300px]">
+          {visualizerStyle !== "none" && (
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full pointer-events-none z-0"
+            />
+          )}
+          <div className="relative group w-64 md:w-72 aspect-square rounded-[32px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink-0 z-10">
             <div className="w-full h-full rounded-[28px] overflow-hidden relative">
               <img
                 src={currentTrack.thumbnail}

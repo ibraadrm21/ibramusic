@@ -63,14 +63,22 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
 
     @Override
     public void seekToNext() {
-        Log.e(TAG, "CustomPlayerWrapper: seekToNext");
-        sendMediaCommand("next", null);
+        Log.e(TAG, "CustomPlayerWrapper: seekToNext. count=" + getMediaItemCount() + ", current=" + getCurrentMediaItemIndex());
+        if (getMediaItemCount() > 1 && getCurrentMediaItemIndex() < getMediaItemCount() - 1) {
+            super.seekToNext();
+        } else {
+            sendMediaCommand("next", null);
+        }
     }
 
     @Override
     public void seekToPrevious() {
-        Log.e(TAG, "CustomPlayerWrapper: seekToPrevious");
-        sendMediaCommand("previous", null);
+        Log.e(TAG, "CustomPlayerWrapper: seekToPrevious. count=" + getMediaItemCount() + ", current=" + getCurrentMediaItemIndex());
+        if (getMediaItemCount() > 1 && getCurrentMediaItemIndex() > 0) {
+            super.seekToPrevious();
+        } else {
+            sendMediaCommand("previous", null);
+        }
     }
 
     private void sendMediaCommand(String command, Double position) {

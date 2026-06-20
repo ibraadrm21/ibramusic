@@ -59,6 +59,16 @@ interface AudioContextType {
   leaveRoom: () => void;
   closeRoom: () => void;
   updateUserIdentity: (name: string, pfp?: string) => void;
+  // Custom Settings & Premium features
+  ambientGlowEnabled: boolean;
+  setAmbientGlowEnabled: (val: boolean) => void;
+  visualizerStyle: "none" | "circle" | "bars" | "wave";
+  setVisualizerStyle: (val: "none" | "circle" | "bars" | "wave") => void;
+  eqPreset: "flat" | "bass" | "vocal" | "electronic";
+  setEqPreset: (val: "flat" | "bass" | "vocal" | "electronic") => void;
+  sleepTimerRemaining: number | null;
+  startSleepTimer: (minutes: number) => void;
+  cancelSleepTimer: () => void;
 }
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
@@ -213,6 +223,83 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     }
   }, [currentTrack, queue]);
+
+  // Settings & Sleep Timer States
+  const [ambientGlowEnabled, setAmbientGlowEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem("ibrastream_ambient_glow");
+    return saved !== "false"; // Default to true
+  });
+  const [visualizerStyle, setVisualizerStyle] = useState<"none" | "circle" | "bars" | "wave" >(() => {
+    return (localStorage.getItem("ibrastream_visualizer_style") as any) || "circle";
+  });
+  const [eqPreset, setEqPreset] = useState<"flat" | "bass" | "vocal" | "electronic">(() => {
+    return (localStorage.getItem("ibrastream_eq_preset") as any) || "flat";
+  });
+  const [sleepTimerRemaining, setSleepTimerRemaining] = useState<number | null>(null);
+  const sleepTimerRef = useRef<number | null>(null);
+  const originalVolumeRef = useRef<number>(volume);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_ambient_glow", String(ambientGlowEnabled));
+  }, [ambientGlowEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_visualizer_style", visualizerStyle);
+  }, [visualizerStyle]);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_eq_preset", eqPreset);
+  }, [eqPreset]);
+
+  const startSleepTimer = (minutes: number) => {
+    originalVolumeRef.current = volume;
+    setSleepTimerRemaining(minutes * 60);
+    showToast(`Sleep timer set for ${minutes} minutes`, "success");
+  };
+
+  const cancelSleepTimer = () => {
+    setSleepTimerRemaining(null);
+    changeVolume(originalVolumeRef.current);
+    showToast("Sleep timer cancelled", "info");
+  };
+
+  useEffect(() => {
+    if (sleepTimerRemaining === null) {
+      if (sleepTimerRef.current) {
+        clearInterval(sleepTimerRef.current);
+        sleepTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (sleepTimerRemaining <= 0) {
+      if (isPlaying) {
+        togglePlay();
+      }
+      setSleepTimerRemaining(null);
+      changeVolume(originalVolumeRef.current);
+      showToast("Sleep timer finished. Music paused.", "info");
+      return;
+    }
+
+    sleepTimerRef.current = window.setInterval(() => {
+      setSleepTimerRemaining(prev => {
+        if (prev === null) return null;
+        const nextVal = prev - 1;
+        if (nextVal <= 30 && nextVal > 0) {
+          const fadeVolume = (nextVal / 30) * originalVolumeRef.current;
+          changeVolume(fadeVolume);
+        }
+        return nextVal;
+      });
+    }, 1000);
+
+    return () => {
+      if (sleepTimerRef.current) {
+        clearInterval(sleepTimerRef.current);
+      }
+    };
+  }, [sleepTimerRemaining, isPlaying]);
 
   const [toast, setToast] = useState<{ message: string; type: "info" | "success" | "error" } | null>(null);
 
@@ -688,7 +775,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
     if (!track) return;
-    if (resolutionCache.has(track.id)) return;
+    
+    // Check if already in cache
+    const cached = resolutionCache.get(track.id);
+    if (cached && cached.videoId && cached.streamUrl) {
+      if (isAndroid) {
+        try {
+          await Media3Session.setNextMetadata({
+            title: track.title,
+            artist: track.artist,
+            artwork: track.thumbnail,
+            duration: track.duration,
+            streamUrl: cached.streamUrl,
+            mediaId: track.id
+          });
+        } catch (e) {
+          console.warn("Failed to set native next metadata:", e);
+        }
+      }
+      return;
+    }
+
     try {
       console.log(`[Pre-Resolve] Pre-resolving track: ${track.title}`);
       
@@ -713,6 +820,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         timestamp: Date.now()
       });
       console.log(`[Pre-Resolve] Pre-resolved track: ${track.title}`);
+
+      if (isAndroid && streamUrl) {
+        try {
+          await Media3Session.setNextMetadata({
+            title: track.title,
+            artist: track.artist,
+            artwork: track.thumbnail,
+            duration: track.duration,
+            streamUrl,
+            mediaId: track.id
+          });
+        } catch (e) {
+          console.warn("Failed to set native next metadata after resolution:", e);
+        }
+      }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         console.log(`[Pre-Resolve] Aborted pre-resolution for track: ${track.title}`);
@@ -1298,6 +1420,28 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       Media3Session.addListener("onPlaybackEnded", () => {
         handleTrackEndedRef.current();
       });
+      Media3Session.addListener("onMediaItemTransition", (data: { mediaId: string }) => {
+        console.log("Native listener: onMediaItemTransition:", data.mediaId);
+        const q = queueRef.current;
+        const targetTrack = q.find(t => t.id === data.mediaId);
+        if (targetTrack) {
+          const idx = q.findIndex(t => t.id === targetTrack.id);
+          setCurrentTrack(targetTrack);
+          setCurrentIndex(idx);
+          setIsPlaying(true);
+          setIsLoading(false);
+          
+          // Also pre-resolve the next track after this natively transitioned track
+          if (idx + 1 < q.length) {
+            const nextTrack = q[idx + 1];
+            setTimeout(() => {
+              if (currentTrackRef.current?.id === targetTrack.id) {
+                preResolveTrack(nextTrack).catch(() => {});
+              }
+            }, 3000);
+          }
+        }
+      });
       Media3Session.addListener("onNotificationCommand", (data: { command: string; position?: number }) => {
         if (data.command === "next") nextTrackRef.current();
         else if (data.command === "previous") prevTrackRef.current();
@@ -1384,6 +1528,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         leaveRoom,
         closeRoom,
         updateUserIdentity,
+        ambientGlowEnabled,
+        setAmbientGlowEnabled,
+        visualizerStyle,
+        setVisualizerStyle,
+        eqPreset,
+        setEqPreset,
+        sleepTimerRemaining,
+        startSleepTimer,
+        cancelSleepTimer,
       }}
     >
       {children}

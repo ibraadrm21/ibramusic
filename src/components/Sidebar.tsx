@@ -1,5 +1,5 @@
 import React from "react";
-import { Home, Search, Heart, ListMusic, Sparkles } from "lucide-react";
+import { Home, Search, Heart, ListMusic, Sparkles, Settings } from "lucide-react";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -69,6 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "search", label: "Search", icon: Search },
     { id: "favorites", label: "Favorites", icon: Heart },
     { id: "playlists", label: "Playlists", icon: ListMusic },
+    { id: "settings", label: "Settings", icon: Settings },
     ...(userEmail === "ibradramee123@gmail.com" ? [{ id: "admin", label: "Dashboard", icon: Sparkles }] : []),
     { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
   ];
@@ -270,6 +271,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           { id: "search",    icon: Search,    label: "Search" },
           { id: "favorites", icon: Heart,     label: "Liked" },
           { id: "playlists", icon: ListMusic, label: "Library" },
+          { id: "settings",  icon: Settings,  label: "Settings" },
           ...(userEmail === "ibradramee123@gmail.com"
             ? [{ id: "admin", icon: Sparkles, label: "Dashboard" }]
             : [{ id: "github", icon: Github, label: "GitHub", url: "https://github.com/ibraadrm21" }])

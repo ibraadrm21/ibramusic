@@ -46,6 +46,7 @@ import PlayerPanel from "./components/PlayerPanel";
 import TrackCard from "./components/TrackCard";
 import TrackContextMenu from "./components/TrackContextMenu";
 import { ListenTogether } from "./components/ListenTogether";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { getHomeRecommendations, getSearchRecommendations } from "./services/recommendationEngine";
 import {
   searchTracks, MOCK_LIBRARY,
@@ -186,6 +187,7 @@ const MainLayout: React.FC = () => {
 
   const {
     currentTrack, isPlaying, togglePlay, playTrack,
+    ambientGlowEnabled,
     queue, currentIndex, removeFromQueue, clearQueue, reorderQueue,
     toast, showToast,
     isLoading, currentTime, duration, volume, isMuted,
@@ -1815,7 +1817,22 @@ const MainLayout: React.FC = () => {
         backgroundAttachment: "fixed",
       }}
     >
-      <div className="flex-1 flex overflow-hidden relative w-full">
+      {/* Ambient Glow Background */}
+      {ambientGlowEnabled && currentTrack && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden z-0 select-none">
+          <div 
+            className="absolute inset-0 scale-125 blur-[100px] md:blur-[140px] opacity-35 transition-all duration-1000 ease-in-out"
+            style={{
+              backgroundImage: `url(${currentTrack.thumbnail})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+            }}
+          />
+          <div className={`absolute inset-0 ${themeSettings.theme === "bright" ? "bg-white/45" : "bg-black/50"}`} />
+        </div>
+      )}
+
+      <div className="flex-1 flex overflow-hidden relative w-full z-10">
 
         {/* Navigation Sidebar */}
         <Sidebar
@@ -4597,6 +4614,8 @@ const MainLayout: React.FC = () => {
                 </div>
               </div>
             </section>
+          ) : activeTab === "settings" ? (
+            <SettingsPanel />
           ) : (
             /* MAIN HOME VIEW */
             <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page">

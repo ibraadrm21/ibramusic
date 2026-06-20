@@ -65,6 +65,19 @@ public class Media3SessionPlugin extends Plugin {
                         ret.put("error", error.getMessage());
                         notifyListeners("onPlaybackError", ret);
                     }
+
+                    @Override
+                    public void onMediaItemTransition(androidx.media3.common.MediaItem mediaItem, int reason) {
+                        Log.e(TAG, "onMediaItemTransition: reason=" + reason + ", item=" + (mediaItem != null ? mediaItem.mediaId : "null"));
+                        if (mediaItem != null) {
+                            JSObject ret = new JSObject();
+                            ret.put("mediaId", mediaItem.mediaId);
+                            if (PlaybackService.customPlayer != null) {
+                                PlaybackService.customPlayer.setMockPosition(0);
+                            }
+                            notifyListeners("onMediaItemTransition", ret);
+                        }
+                    }
                 });
                 isListenerRegistered = true;
                 Log.e(TAG, "Media3 Player.Listener registered successfully.");
@@ -189,6 +202,67 @@ public class Media3SessionPlugin extends Plugin {
                 });
             } catch (Exception e) {
                 Log.e(TAG, "Plugin error in updateMetadata", e);
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void setNextMetadata(PluginCall call) {
+        String title = call.getString("title");
+        String artist = call.getString("artist");
+        String artwork = call.getString("artwork");
+        Double duration = call.getDouble("duration");
+        String streamUrl = call.getString("streamUrl");
+        String mediaId = call.getString("mediaId", "remote_audio");
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                ensureControllerListener(controller);
+                
+                activity.runOnUiThread(() -> {
+                    try {
+                        int currentIndex = controller.getCurrentMediaItemIndex();
+                        int itemCount = controller.getMediaItemCount();
+                        if (itemCount > currentIndex + 1) {
+                            controller.removeMediaItems(currentIndex + 1, itemCount);
+                        }
+
+                        MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder()
+                                .setTitle(title)
+                                .setArtist(artist);
+                        
+                        if (artwork != null && !artwork.isEmpty()) {
+                            metaBuilder.setArtworkUri(android.net.Uri.parse(artwork));
+                        }
+                        
+                        MediaItem.Builder mediaItemBuilder = new MediaItem.Builder()
+                                .setMediaId(mediaId)
+                                .setMediaMetadata(metaBuilder.build());
+
+                        if (streamUrl != null && !streamUrl.isEmpty()) {
+                            mediaItemBuilder.setUri(streamUrl);
+                        } else {
+                            mediaItemBuilder.setUri("android.resource://" + activity.getPackageName() + "/" + R.raw.silent);
+                        }
+                        
+                        controller.addMediaItem(mediaItemBuilder.build());
+                        Log.e(TAG, "Native: added next media item. mediaId=" + mediaId + ", count=" + controller.getMediaItemCount());
+                        call.resolve();
+                    } catch (Exception e) {
+                        Log.e(TAG, "UI Thread error in setNextMetadata", e);
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Plugin error in setNextMetadata", e);
                 call.reject(e.getMessage());
             }
         }, MoreExecutors.directExecutor());
