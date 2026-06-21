@@ -31,12 +31,12 @@ jobs:
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
-                     -workspace ios/App/App.xcworkspace \
+                     -project ios/App/App.xcodeproj \
                      -scheme App
 
       - name: Build Xcode Archive (Unsigned)
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace \
+          xcodebuild -project ios/App/App.xcodeproj \
                      -scheme App \
                      -configuration Release \
                      -sdk iphoneos \
