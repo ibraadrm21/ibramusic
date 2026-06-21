@@ -16,7 +16,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
@@ -28,6 +28,12 @@ jobs:
       - name: Sync Capacitor iOS
         run: npx cap sync ios
 
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+                     -workspace ios/App/App.xcworkspace \
+                     -scheme App
+
       - name: Build Xcode Archive (Unsigned)
         run: |
           xcodebuild -workspace ios/App/App.xcworkspace \
@@ -37,6 +43,8 @@ jobs:
                      -archivePath build/App.xcarchive \
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     PROVISIONING_PROFILE_SPECIFIER="" \
                      clean archive
 
       - name: Package IPA (Unsigned)
