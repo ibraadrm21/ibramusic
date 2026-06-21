@@ -5,7 +5,7 @@ import {
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
   User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download
 } from "lucide-react";
-import { AudioProvider, useAudio } from "./context/AudioContext";
+import { AudioProvider, useAudio, useAudioProgress } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
 import { downloadService } from "./services/downloadService";
 import { App as CapApp } from "@capacitor/app";
@@ -186,18 +186,14 @@ const MainLayout: React.FC = () => {
   }, []);
 
   const {
-    currentTrack, isPlaying, togglePlay, playTrack,
+    currentTrack, playTrack,
     ambientGlowEnabled,
     queue, currentIndex, removeFromQueue, clearQueue, reorderQueue,
     toast, showToast,
-    isLoading, currentTime, duration, volume, isMuted,
-    isShuffle, isRepeat, nextTrack, prevTrack, seek,
-    changeVolume, toggleMute, toggleShuffle, toggleRepeat,
     playNext,
     addToQueue,
     playingPlaylistId,
     roomId,
-    isHost,
     updateUserIdentity,
     joinRoom
   } = useAudio();
@@ -5091,7 +5087,7 @@ const MainLayout: React.FC = () => {
 
         {/* Mobile Full Screen Now Playing — PlayerPanel (has Lyrics, Overview, all controls) */}
         {showMobilePlayer && currentTrack && (
-          <div className="lg:hidden fixed inset-0 bg-brand-darkBg z-50 overflow-hidden flex flex-col animate-[slideUp_0.35s_cubic-bezier(0.32,0.72,0,1)]">
+          <div className="lg:hidden fixed inset-0 bg-brand-darkBg z-50 overflow-hidden flex flex-col animate-[slideUp_0.2s_cubic-bezier(0.16,1,0.3,1)]">
             <PlayerPanel
               onToggleFavorite={handleToggleFavorite}
               isFavorite={favorites.some((f) => f.id === currentTrack.id)}
@@ -5907,224 +5903,22 @@ const MainLayout: React.FC = () => {
 
 
       {/* ═══ MOBILE MINI-PLAYER (above bottom nav) ═══ */}
-      {currentTrack && !showMobilePlayer && (
-        <div
-          className="md:hidden fixed left-0 right-0 z-40 px-3 pb-2 bottom-20"
-          style={{ bottom: 'calc(64px + var(--safe-bottom))' }}
-        >
-          <div
-            onClick={() => setShowMobilePlayer(true)}
-            className="flex items-center gap-3 bg-brand-darkBg/90 backdrop-blur-xl border border-white/10 rounded-2xl px-3 py-2.5 shadow-xl shadow-black/50 cursor-pointer select-none"
-          >
-            {/* Album thumb */}
-            <div className="relative shrink-0">
-              <img
-                src={currentTrack.thumbnail}
-                alt={currentTrack.title}
-                className="w-11 h-11 rounded-xl object-cover"
-              />
-              {isPlaying && (
-                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-white flex items-center justify-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-black animate-pulse" />
-                </div>
-              )}
-            </div>
-
-            {/* Track info */}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-white truncate leading-tight">{currentTrack.title}</p>
-              <p className="text-xs text-gray-500 truncate mt-0.5 leading-tight">{currentTrack.artist}</p>
-              {/* Mini progress bar */}
-              <div className="h-0.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
-                <div
-                  className="h-full bg-brand-accent rounded-full transition-all"
-                  style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : "0%" }}
-                />
-              </div>
-            </div>
-
-            {/* Controls */}
-            <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={() => handleToggleFavorite(currentTrack)}
-                className={`p-2 ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-500"}`}
-              >
-                <Heart className="w-4.5 h-4.5" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
-              </button>
-              <button
-                onClick={togglePlay}
-                disabled={isLoading || (roomId !== null && !isHost)}
-                className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-              >
-                {isLoading ? (
-                  <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                ) : isPlaying ? (
-                  <Pause className="w-4 h-4 fill-current" />
-                ) : (
-                  <Play className="w-4 h-4 fill-current ml-0.5" />
-                )}
-              </button>
-              <button
-                onClick={nextTrack}
-                disabled={roomId !== null && !isHost}
-                className="p-2 text-gray-400 active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <SkipForward className="w-4.5 h-4.5 fill-current" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MobileMiniPlayer
+        favorites={favorites}
+        handleToggleFavorite={handleToggleFavorite}
+        showMobilePlayer={showMobilePlayer}
+        setShowMobilePlayer={setShowMobilePlayer}
+      />
 
       {/* ═══ DESKTOP BOTTOM PLAYBACK BAR ═══ */}
-      {currentTrack && (
-        <footer className="hidden md:flex h-24 bg-brand-darkBg/95 border-t border-white/5 items-center justify-between px-6 fixed bottom-0 left-0 right-0 z-40 select-none backdrop-blur-md">
-          {/* Left: Track Info */}
-          <div className="flex items-center gap-4 w-1/3 min-w-[200px]">
-            <img
-              src={currentTrack.thumbnail}
-              alt={currentTrack.title}
-              className="w-14 h-14 rounded-lg object-cover shadow-md"
-            />
-            <div className="min-w-0 flex-1">
-              <h4
-                onClick={() => {
-                  if (handleOpenAlbum && currentTrack.albumId) {
-                    handleOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-                  }
-                }}
-                className="text-sm font-semibold text-white truncate hover:underline cursor-pointer"
-              >
-                {currentTrack.title}
-              </h4>
-              <div className="text-xs text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
-                {currentTrack.artists && currentTrack.artists.length > 0 ? (
-                  currentTrack.artists.map((art, i) => (
-                    <React.Fragment key={art.id}>
-                      <span
-                        onClick={() => {
-                          if (handleOpenArtist) {
-                            handleOpenArtist({ id: art.id, name: art.name, thumbnail: currentTrack.thumbnail });
-                          }
-                        }}
-                        className="hover:underline cursor-pointer hover:text-brand-accent transition-colors"
-                      >
-                        {art.name}
-                      </span>
-                      {i < currentTrack.artists!.length - 1 && <span>,</span>}
-                    </React.Fragment>
-                  ))
-                ) : (
-                  <span
-                    onClick={() => {
-                      if (handleOpenArtist && currentTrack.artistId) {
-                        handleOpenArtist({ id: currentTrack.artistId, name: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-                      }
-                    }}
-                    className="hover:underline cursor-pointer hover:text-brand-accent transition-colors"
-                  >
-                    {currentTrack.artist}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={() => handleToggleFavorite(currentTrack)}
-              className={`p-2 rounded-full hover:bg-white/5 transition-all ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-400 hover:text-white"}`}
-            >
-              <Heart className="w-4.5 h-4.5" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
-            </button>
-          </div>
-
-          {/* Center: Playback Controls & Slider */}
-          <div className="flex flex-col items-center gap-2 w-1/3 max-w-[600px]">
-            <div className="flex items-center gap-5">
-              <button
-                onClick={toggleShuffle}
-                disabled={roomId !== null && !isHost}
-                className={`p-1.5 transition-all ${isShuffle ? "text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
-                title="Shuffle"
-              >
-                <Shuffle className="w-4 h-4" />
-              </button>
-              <button 
-                onClick={prevTrack} 
-                disabled={roomId !== null && !isHost}
-                className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
-                title="Previous"
-              >
-                <SkipBack className="w-5 h-5 fill-current" />
-              </button>
-              <button
-                onClick={togglePlay}
-                disabled={isLoading || (roomId !== null && !isHost)}
-                className="w-10 h-10 rounded-full bg-white text-black transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
-                title={isPlaying ? "Pause" : "Play"}
-              >
-                {isLoading ? (
-                  <div className="w-4.5 h-4.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                ) : isPlaying ? (
-                  <Pause className="w-4.5 h-4.5 fill-current" />
-                ) : (
-                  <Play className="w-4.5 h-4.5 fill-current ml-0.5" />
-                )}
-              </button>
-              <button 
-                onClick={nextTrack} 
-                disabled={roomId !== null && !isHost}
-                className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
-                title="Next"
-              >
-                <SkipForward className="w-5 h-5 fill-current" />
-              </button>
-              <button
-                onClick={toggleRepeat}
-                disabled={roomId !== null && !isHost}
-                className={`p-1.5 relative transition-all ${isRepeat !== "none" ? "text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
-                title="Repeat"
-              >
-                <Repeat className="w-4 h-4" />
-                {isRepeat === "one" && (
-                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 text-[7px] font-black bg-white text-black rounded-full flex items-center justify-center">1</span>
-                )}
-              </button>
-            </div>
-            <div className="w-full flex items-center gap-3 text-xs text-gray-500 font-medium tabular-nums">
-              <span>{Math.floor(currentTime / 60)}:{Math.floor(currentTime % 60).toString().padStart(2, "0")}</span>
-              <input
-                type="range" min={0} max={duration || 100} value={currentTime}
-                onChange={(e) => seek(parseFloat(e.target.value))}
-                disabled={roomId !== null && !isHost}
-                className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
-              />
-              <span>{Math.floor(duration / 60)}:{Math.floor(duration % 60).toString().padStart(2, "0")}</span>
-            </div>
-          </div>
-
-          {/* Right: Queue / Volume */}
-          <div className="flex items-center justify-end gap-3 w-1/3 min-w-[200px]">
-            <button
-              onClick={() => setShowQueueOverlay(prev => !prev)}
-              className={`p-2 rounded-full hover:bg-white/5 transition-all ${showQueueOverlay ? "text-white bg-white/5" : "text-gray-400 hover:text-white"}`}
-              title="Queue"
-            >
-              <ListMusic className="w-4.5 h-4.5" />
-            </button>
-            {!isAndroid && (
-              <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
-                <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
-                  {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
-                </button>
-                <input
-                  type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
-                  onChange={(e) => changeVolume(parseFloat(e.target.value))}
-                  className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
-                />
-              </div>
-            )}
-          </div>
-        </footer>
-      )}
+      <DesktopPlaybackBar
+        favorites={favorites}
+        handleToggleFavorite={handleToggleFavorite}
+        handleOpenAlbum={handleOpenAlbum}
+        handleOpenArtist={handleOpenArtist}
+        showQueueOverlay={showQueueOverlay}
+        setShowQueueOverlay={setShowQueueOverlay}
+      />
 
       {contextMenu && (
         <TrackContextMenu
@@ -6175,6 +5969,294 @@ const MainLayout: React.FC = () => {
     </div>
   );
 };
+
+interface MobileMiniPlayerProps {
+  favorites: Track[];
+  handleToggleFavorite: (track: Track) => void;
+  showMobilePlayer: boolean;
+  setShowMobilePlayer: (show: boolean) => void;
+}
+
+const MobileMiniPlayer: React.FC<MobileMiniPlayerProps> = React.memo(({
+  favorites,
+  handleToggleFavorite,
+  showMobilePlayer,
+  setShowMobilePlayer
+}) => {
+  const {
+    currentTrack,
+    isPlaying,
+    togglePlay,
+    isLoading,
+    nextTrack,
+    roomId,
+    isHost
+  } = useAudio();
+
+  const { currentTime, duration } = useAudioProgress();
+
+  if (!currentTrack || showMobilePlayer) return null;
+
+  return (
+    <div
+      className="md:hidden fixed left-0 right-0 z-40 px-3 pb-2 bottom-20"
+      style={{ bottom: 'calc(64px + var(--safe-bottom))' }}
+    >
+      <div
+        onClick={() => setShowMobilePlayer(true)}
+        className="flex items-center gap-3 bg-brand-darkBg/90 backdrop-blur-xl border border-white/10 rounded-2xl px-3 py-2.5 shadow-xl shadow-black/50 cursor-pointer select-none"
+      >
+        {/* Album thumb */}
+        <div className="relative shrink-0">
+          <img
+            src={currentTrack.thumbnail}
+            alt={currentTrack.title}
+            className="w-11 h-11 rounded-xl object-cover"
+          />
+          {isPlaying && (
+            <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-white flex items-center justify-center">
+              <span className="w-1.5 h-1.5 rounded-full bg-black animate-pulse" />
+            </div>
+          )}
+        </div>
+
+        {/* Track info */}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-white truncate leading-tight">{currentTrack.title}</p>
+          <p className="text-xs text-gray-500 truncate mt-0.5 leading-tight">{currentTrack.artist}</p>
+          {/* Mini progress bar */}
+          <div className="h-0.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+            <div
+              className="h-full bg-brand-accent rounded-full transition-all"
+              style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : "0%" }}
+            />
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => handleToggleFavorite(currentTrack)}
+            className={`p-2 ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-500"}`}
+          >
+            <Heart className="w-4.5 h-4.5" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
+          </button>
+          <button
+            onClick={togglePlay}
+            disabled={isLoading || (roomId !== null && !isHost)}
+            className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+          >
+            {isLoading ? (
+              <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-4.5 h-4.5 fill-current" />
+            ) : (
+              <Play className="w-4.5 h-4.5 fill-current ml-0.5" />
+            )}
+          </button>
+          <button
+            onClick={nextTrack}
+            disabled={roomId !== null && !isHost}
+            className="p-2 text-gray-400 active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <SkipForward className="w-4.5 h-4.5 fill-current" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface DesktopPlaybackBarProps {
+  favorites: Track[];
+  handleToggleFavorite: (track: Track) => void;
+  handleOpenAlbum: (album: Album) => void;
+  handleOpenArtist: (artist: Artist) => void;
+  showQueueOverlay: boolean;
+  setShowQueueOverlay: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
+  favorites,
+  handleToggleFavorite,
+  handleOpenAlbum,
+  handleOpenArtist,
+  showQueueOverlay,
+  setShowQueueOverlay
+}) => {
+  const {
+    currentTrack,
+    isPlaying,
+    isLoading,
+    volume,
+    isMuted,
+    isShuffle,
+    isRepeat,
+    togglePlay,
+    nextTrack,
+    prevTrack,
+    seek,
+    changeVolume,
+    toggleMute,
+    toggleShuffle,
+    toggleRepeat,
+    roomId,
+    isHost
+  } = useAudio();
+
+  const { currentTime, duration } = useAudioProgress();
+
+  if (!currentTrack) return null;
+
+  return (
+    <footer className="hidden md:flex h-24 bg-brand-darkBg/95 border-t border-white/5 items-center justify-between px-6 fixed bottom-0 left-0 right-0 z-40 select-none backdrop-blur-md">
+      {/* Left: Track Info */}
+      <div className="flex items-center gap-4 w-1/3 min-w-[200px]">
+        <img
+          src={currentTrack.thumbnail}
+          alt={currentTrack.title}
+          className="w-14 h-14 rounded-lg object-cover shadow-md"
+        />
+        <div className="min-w-0 flex-1">
+          <h4
+            onClick={() => {
+              if (handleOpenAlbum && currentTrack.albumId) {
+                handleOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
+              }
+            }}
+            className="text-sm font-semibold text-white truncate hover:underline cursor-pointer"
+          >
+            {currentTrack.title}
+          </h4>
+          <div className="text-xs text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
+            {currentTrack.artists && currentTrack.artists.length > 0 ? (
+              currentTrack.artists.map((art, i) => (
+                <React.Fragment key={art.id}>
+                  <span
+                    onClick={() => {
+                      if (handleOpenArtist) {
+                        handleOpenArtist({ id: art.id, name: art.name, thumbnail: currentTrack.thumbnail });
+                      }
+                    }}
+                    className="hover:underline cursor-pointer hover:text-brand-accent transition-colors"
+                  >
+                    {art.name}
+                  </span>
+                  {i < currentTrack.artists!.length - 1 && <span>,</span>}
+                </React.Fragment>
+              ))
+            ) : (
+              <span
+                onClick={() => {
+                  if (handleOpenArtist && currentTrack.artistId) {
+                    handleOpenArtist({ id: currentTrack.artistId, name: currentTrack.artist, thumbnail: currentTrack.thumbnail });
+                  }
+                }}
+                className="hover:underline cursor-pointer hover:text-brand-accent transition-colors"
+              >
+                {currentTrack.artist}
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={() => handleToggleFavorite(currentTrack)}
+          className={`p-2 rounded-full hover:bg-white/5 transition-all ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-400 hover:text-white"}`}
+        >
+          <Heart className="w-4.5 h-4.5" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
+        </button>
+      </div>
+
+      {/* Center: Playback Controls & Slider */}
+      <div className="flex flex-col items-center gap-2 w-1/3 max-w-[600px]">
+        <div className="flex items-center gap-5">
+          <button
+            onClick={toggleShuffle}
+            disabled={roomId !== null && !isHost}
+            className={`p-1.5 transition-all ${isShuffle ? "text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
+            title="Shuffle"
+          >
+            <Shuffle className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={prevTrack} 
+            disabled={roomId !== null && !isHost}
+            className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
+            title="Previous"
+          >
+            <SkipBack className="w-5 h-5 fill-current" />
+          </button>
+          <button
+            onClick={togglePlay}
+            disabled={isLoading || (roomId !== null && !isHost)}
+            className="w-10 h-10 rounded-full bg-white text-black transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
+            title={isPlaying ? "Pause" : "Play"}
+          >
+            {isLoading ? (
+              <div className="w-4.5 h-4.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-4.5 h-4.5 fill-current" />
+            ) : (
+              <Play className="w-4.5 h-4.5 fill-current ml-0.5" />
+            )}
+          </button>
+          <button 
+            onClick={nextTrack} 
+            disabled={roomId !== null && !isHost}
+            className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
+            title="Next"
+          >
+            <SkipForward className="w-5 h-5 fill-current" />
+          </button>
+          <button
+            onClick={toggleRepeat}
+            disabled={roomId !== null && !isHost}
+            className={`p-1.5 relative transition-all ${isRepeat !== "none" ? "text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
+            title="Repeat"
+          >
+            <Repeat className="w-4 h-4" />
+            {isRepeat === "one" && (
+              <span className="absolute -top-0.5 -right-0.5 w-3 h-3 text-[7px] font-black bg-white text-black rounded-full flex items-center justify-center">1</span>
+            )}
+          </button>
+        </div>
+        <div className="w-full flex items-center gap-3 text-xs text-gray-500 font-medium tabular-nums">
+          <span>{Math.floor(currentTime / 60)}:{Math.floor(currentTime % 60).toString().padStart(2, "0")}</span>
+          <input
+            type="range" min={0} max={duration || 100} value={currentTime}
+            onChange={(e) => seek(parseFloat(e.target.value))}
+            disabled={roomId !== null && !isHost}
+            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
+          />
+          <span>{Math.floor(duration / 60)}:{Math.floor(duration % 60).toString().padStart(2, "0")}</span>
+        </div>
+      </div>
+
+      {/* Right: Queue / Volume */}
+      <div className="flex items-center justify-end gap-3 w-1/3 min-w-[200px]">
+        <button
+          onClick={() => setShowQueueOverlay(prev => !prev)}
+          className={`p-2 rounded-full hover:bg-white/5 transition-all ${showQueueOverlay ? "text-white bg-white/5" : "text-gray-400 hover:text-white"}`}
+          title="Queue"
+        >
+          <ListMusic className="w-4.5 h-4.5" />
+        </button>
+        {!isAndroid && (
+          <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
+            <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
+              {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
+            </button>
+            <input
+              type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
+              onChange={(e) => changeVolume(parseFloat(e.target.value))}
+              className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+            />
+          </div>
+        )}
+      </div>
+    </footer>
+  );
+});
 
 export const App: React.FC = () => {
   return (

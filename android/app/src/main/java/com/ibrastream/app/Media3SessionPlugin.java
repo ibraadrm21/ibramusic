@@ -449,6 +449,7 @@ public class Media3SessionPlugin extends Plugin {
     @PluginMethod
     public void downloadAndInstallApk(PluginCall call) {
         String urlString = call.getString("url");
+        String token = call.getString("token");
         if (urlString == null || urlString.isEmpty()) {
             call.reject("URL is required");
             return;
@@ -475,6 +476,10 @@ public class Media3SessionPlugin extends Plugin {
                 HttpURLConnection c = (HttpURLConnection) url.openConnection();
                 c.setInstanceFollowRedirects(false);
                 c.setRequestProperty("User-Agent", "IbraStream-Updater/1.0");
+                if (token != null && !token.isEmpty()) {
+                    c.setRequestProperty("Authorization", "Bearer " + token);
+                    c.setRequestProperty("Accept", "application/octet-stream");
+                }
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(60000);
                 c.connect();
@@ -490,6 +495,7 @@ public class Media3SessionPlugin extends Plugin {
                     c = (HttpURLConnection) url.openConnection();
                     c.setInstanceFollowRedirects(false);
                     c.setRequestProperty("User-Agent", "IbraStream-Updater/1.0");
+                    // Note: S3 CDN does not accept GitHub token, so do NOT set authorization header on redirected request.
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(60000);
                     c.connect();
@@ -543,6 +549,18 @@ public class Media3SessionPlugin extends Plugin {
 
                 activity.runOnUiThread(() -> {
                     try {
+                        // On Android 8.0+, verify REQUEST_INSTALL_PACKAGES permission
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            if (!activity.getPackageManager().canRequestPackageInstalls()) {
+                                Uri packageUri = Uri.parse("package:" + activity.getPackageName());
+                                Intent settingsIntent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, packageUri);
+                                settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                activity.startActivity(settingsIntent);
+                                call.reject("Install permission required. Please enable it in the system settings screen that just opened and trigger the update again.");
+                                return;
+                            }
+                        }
+
                         Uri apkUri = FileProvider.getUriForFile(
                             activity,
                             activity.getPackageName() + ".fileprovider",
@@ -583,7 +601,7 @@ public class Media3SessionPlugin extends Plugin {
                 java.net.URL url = new java.net.URL(urlString);
                 java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
                 c.setInstanceFollowRedirects(false);
-                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                c.setRequestProperty("User-Agent", "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)");
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(60000);
                 c.connect();
@@ -597,7 +615,7 @@ public class Media3SessionPlugin extends Plugin {
                     url = new java.net.URL(newUrl);
                     c = (java.net.HttpURLConnection) url.openConnection();
                     c.setInstanceFollowRedirects(false);
-                    c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                    c.setRequestProperty("User-Agent", "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)");
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(60000);
                     c.connect();

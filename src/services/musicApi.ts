@@ -153,95 +153,6 @@ export async function searchTracks(query: string): Promise<Track[]> {
   return [];
 }
 
-export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Promise<string> {
-  if (track.id.startsWith("yt-")) {
-    return track.id.substring(3);
-  }
-  const lowercaseTitle = track.title.toLowerCase();
-  const lowercaseArtist = track.artist.toLowerCase();
-  if (
-    (lowercaseTitle.includes("soleao") || lowercaseTitle.includes("soleado")) &&
-    lowercaseArtist.includes("myke towers")
-  ) {
-    console.log(`[Override] Returning correct videoId JgqsAvvwZAQ for Myke Towers - Soleao`);
-    return "JgqsAvvwZAQ";
-  }
-  // Clean query to remove featuring suffixes and parentheses
-  const cleanTitle = track.title
-    .replace(/\(feat\..*?\)/i, "")
-    .replace(/\[feat\..*?\]/i, "")
-    .replace(/\(with.*?\)/i, "")
-    .replace(/\(.*?\)/g, "")
-    .trim();
-  const query = `${track.artist} ${cleanTitle}`;
-  
-  try {
-    console.log(`Searching video ID for "${query}" via Innertube Music...`);
-    const yt = await getYoutubeClient();
-    const search = await yt.music.search(query, { type: 'song' });
-    const songs = search.songs?.contents || [];
-    if (songs.length > 0 && songs[0].id) {
-      console.log(`Resolved videoId via Innertube Music: ${songs[0].title} (${songs[0].id})`);
-      return songs[0].id;
-    }
-  } catch (e) {
-    console.warn("Innertube music search failed, trying general search:", e);
-  }
-
-  try {
-    console.log(`Searching video ID for "${query}" via Innertube general search...`);
-    const yt = await getYoutubeClient();
-    const search = await yt.search(query, { type: 'video' });
-    const videos = search.videos || [];
-    if (videos.length > 0 && (videos[0] as any).id) {
-      const videoId = (videos[0] as any).id;
-      console.log(`Resolved videoId via Innertube general: ${(videos[0] as any).title} (${videoId})`);
-      return videoId;
-    }
-  } catch (e) {
-    console.warn("Innertube general search failed:", e);
-  }
-
-  // Last-resort fallback to public Piped instances if Innertube search fails
-  const PIPED_HOSTS = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.private.coffee",
-    "https://pipedapi.lvk.li",
-    "https://api.piped.yt"
-  ];
-
-  for (const baseUrl of PIPED_HOSTS) {
-    try {
-      const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
-      const searchResponse = await fetchWithTimeout(searchUrl, { 
-        signal,
-        headers: {
-          'Referer': 'https://piped.video/',
-          'Origin': 'https://piped.video'
-        }
-      });
-      if (!searchResponse.ok) continue;
-      const searchData = await searchResponse.json();
-      const items = searchData.items || searchData.relatedStreams || [];
-      if (Array.isArray(items) && items.length > 0) {
-        const streamItem = items.find((item: any) => item.type === "stream" || item.url);
-        if (streamItem) {
-          const videoIdMatch = streamItem.url?.match(/[?&]v=([^&]+)/) || streamItem.url?.match(/v=([^&]+)/);
-          const videoId = videoIdMatch ? videoIdMatch[1] : streamItem.url?.replace("/watch?v=", "");
-          if (videoId) {
-            console.log(`Resolved videoId via Piped fallback ${baseUrl}: ${streamItem.title} (${videoId})`);
-            return videoId;
-          }
-        }
-      }
-    } catch (e) {
-      if (e instanceof Error && e.name === "AbortError") throw e;
-      console.warn(`Piped fallback ${baseUrl} failed:`, e);
-    }
-  }
-
-  throw new Error("Failed to retrieve video ID for this track.");
-}
 
 export async function searchAlbums(query: string): Promise<Album[]> {
   if (!query.trim()) return [];
@@ -668,72 +579,135 @@ const fetchWithTimeout = async (url: string, options: any = {}, timeoutMs: numbe
 let youtubeClientPromise: Promise<Innertube> | null = null;
 let youtubeWebClientPromise: Promise<Innertube> | null = null;
 
+const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
+  
+  // 1. Resolve relative URLs (e.g. /youtubei/v1/player) or localhost-resolved URLs back to absolute youtube.com URLs
+  if (url.startsWith("http://localhost") || url.startsWith("https://localhost") || url.startsWith("http://127.0.0.1") || url.startsWith("https://127.0.0.1")) {
+    url = url.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, "https://www.youtube.com");
+  } else if (url.startsWith("/")) {
+    url = `https://www.youtube.com${url}`;
+  }
+
+  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
+    if (url.startsWith("https://www.youtube.com")) {
+      url = url.replace("https://www.youtube.com", "/youtube-com");
+    } else if (url.startsWith("https://youtubei.googleapis.com")) {
+      url = url.replace("https://youtubei.googleapis.com", "/youtubei-googleapis");
+    }
+  }
+
+  let method = "GET";
+  let headers: Record<string, string> = {};
+  let body: any = null;
+
+  if (input instanceof Request) {
+    method = input.method;
+    for (const [key, val] of input.headers.entries()) {
+      headers[key] = val;
+    }
+    if (method !== "GET" && method !== "HEAD") {
+      body = await input.clone().text();
+    }
+  }
+
+  if (init) {
+    if (init.method) method = init.method;
+    if (init.headers) {
+      const initHeaders = new Headers(init.headers as any);
+      for (const [key, val] of initHeaders.entries()) {
+        headers[key] = val;
+      }
+    }
+    if (init.body !== undefined) {
+      body = init.body;
+    }
+  }
+
+  if (isNative) {
+    // 2. Parse JSON bodies case-insensitively so CapacitorHttp can serialize them natively
+    let dataPayload = body;
+    const getHeader = (headersMap: any, name: string): string | undefined => {
+      if (!headersMap) return undefined;
+      const lowerName = name.toLowerCase();
+      for (const key of Object.keys(headersMap)) {
+        if (key.toLowerCase() === lowerName) {
+          return headersMap[key];
+        }
+      }
+      return undefined;
+    };
+    const contentType = getHeader(headers, 'content-type');
+    if (typeof body === 'string' && contentType?.includes('application/json')) {
+      try {
+        dataPayload = JSON.parse(body);
+      } catch (e) {}
+    }
+
+    // Set correct User-Agent matching the request's target client type to prevent 404/403 errors on YouTube
+    if (url.includes("youtubei.googleapis.com") || url.includes("youtube.com")) {
+      const isIOSClient = (typeof body === 'string' && body.includes('"clientName":"IOS"')) || 
+                          (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'IOS');
+      if (isIOSClient) {
+        headers["User-Agent"] = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
+      } else {
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+      }
+    }
+
+    const { CapacitorHttp } = await import('@capacitor/core');
+    const response = await CapacitorHttp.request({
+      url,
+      method,
+      headers,
+      data: dataPayload,
+      responseType: 'text'
+    });
+
+    const responseHeaders = new Headers();
+    if (response.headers) {
+      for (const [key, val] of Object.entries(response.headers)) {
+        responseHeaders.set(key, val as string);
+      }
+    }
+
+    const responseInstance = new Response(
+      typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
+      {
+        status: response.status,
+        headers: responseHeaders
+      }
+    );
+
+    // Mock the read-only response.url property so library error handlers print the failing URL
+    Object.defineProperty(responseInstance, 'url', {
+      value: url,
+      writable: false,
+      configurable: true,
+      enumerable: true
+    });
+
+    return responseInstance;
+  }
+
+  const upperMethod = method.toUpperCase();
+  if (upperMethod === "GET" || upperMethod === "HEAD") {
+    body = null;
+  }
+
+  return fetch(url, {
+    method,
+    headers,
+    body
+  } as any);
+};
+
 export const getYoutubeClient = (): Promise<Innertube> => {
   if (!youtubeClientPromise) {
-    const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
-      
-      const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-      if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
-        if (url.startsWith("https://www.youtube.com")) {
-          url = url.replace("https://www.youtube.com", "/youtube-com");
-        } else if (url.startsWith("https://youtubei.googleapis.com")) {
-          url = url.replace("https://youtubei.googleapis.com", "/youtubei-googleapis");
-        }
-      }
-
-      let method = "GET";
-      let headers: Record<string, string> = {};
-      let body: any = null;
-      let credentials = undefined;
-      let mode = undefined;
-
-      if (input instanceof Request) {
-        method = input.method;
-        credentials = input.credentials;
-        mode = input.mode;
-        for (const [key, val] of input.headers.entries()) {
-          headers[key] = val;
-        }
-        if (method !== "GET" && method !== "HEAD") {
-          body = await input.clone().text();
-        }
-      }
-
-      if (init) {
-        if (init.method) method = init.method;
-        if (init.credentials) credentials = init.credentials;
-        if (init.mode) mode = init.mode;
-
-        if (init.headers) {
-          const initHeaders = new Headers(init.headers as any);
-          for (const [key, val] of initHeaders.entries()) {
-            headers[key] = val;
-          }
-        }
-
-        if (init.body !== undefined) {
-          body = init.body;
-        }
-      }
-
-      const upperMethod = method.toUpperCase();
-      if (upperMethod === "GET" || upperMethod === "HEAD") {
-        body = null;
-      }
-
-      return fetch(url, {
-        method,
-        headers,
-        body,
-        credentials,
-        mode
-      } as any);
-    };
-
     youtubeClientPromise = Innertube.create({
-      client_type: 'ANDROID_VR' as any,
-      fetch: customFetch
+      client_type: 'IOS' as any,
+      fetch: sharedCustomFetch
     });
   }
   return youtubeClientPromise;
@@ -742,95 +716,354 @@ export const getYoutubeClient = (): Promise<Innertube> => {
 // Separate WEB client for playlist browsing (ANDROID_VR does not support playlist page)
 const getYoutubeWebClient = (): Promise<Innertube> => {
   if (!youtubeWebClientPromise) {
-    const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
-      const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-      if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
-        if (url.startsWith("https://www.youtube.com")) url = url.replace("https://www.youtube.com", "/youtube-com");
-        else if (url.startsWith("https://youtubei.googleapis.com")) url = url.replace("https://youtubei.googleapis.com", "/youtubei-googleapis");
-      }
-      let method = "GET", headers: Record<string, string> = {}, body: any = null, credentials: any = undefined, mode: any = undefined;
-      if (input instanceof Request) {
-        method = input.method; credentials = input.credentials; mode = input.mode;
-        for (const [k, v] of input.headers.entries()) headers[k] = v;
-        if (method !== "GET" && method !== "HEAD") body = await input.clone().text();
-      }
-      if (init) {
-        if (init.method) method = init.method;
-        if (init.credentials) credentials = init.credentials;
-        if (init.mode) mode = init.mode;
-        if (init.headers) { const h = new Headers(init.headers as any); for (const [k,v] of h.entries()) headers[k]=v; }
-        if (init.body !== undefined) body = init.body;
-      }
-      if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") body = null;
-      return fetch(url, { method, headers, body, credentials, mode } as any);
-    };
-    youtubeWebClientPromise = Innertube.create({ fetch: customFetch });
+    youtubeWebClientPromise = Innertube.create({ fetch: sharedCustomFetch });
   }
   return youtubeWebClientPromise;
 };
 
-export async function getYouTubeAudioStream(videoId: string): Promise<string> {
-  // 1. Try Piped API hosts first for extremely fast download speed (proxied streams bypass YouTube's client throttling)
+let cachedCobaltHosts: string[] = [];
+let lastCobaltFetchTime = 0;
+
+async function getHealthyCobaltHosts(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedCobaltHosts.length > 0 && (now - lastCobaltFetchTime < 1000 * 60 * 15)) {
+    return cachedCobaltHosts;
+  }
+  try {
+    const res = await fetchNative("https://cobalt.directory/api/working?type=api");
+    if (res.ok) {
+      const data = await res.json();
+      const hosts = data.data?.youtube || [];
+      if (Array.isArray(hosts) && hosts.length > 0) {
+        const formatted = hosts.map((h: string) => h.endsWith("/") ? h : h + "/");
+        cachedCobaltHosts = formatted;
+        lastCobaltFetchTime = now;
+        return formatted;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to fetch dynamic Cobalt instances list:", e);
+  }
+  return [
+    "https://api.qwkuns.me/",
+    "https://cobaltapi.squair.xyz/",
+    "https://rue-cobalt.xenon.zone/",
+    "https://apicobalt.mgytr.top/",
+    "https://fox.kittycat.boo/",
+    "https://api.cobalt.tools/"
+  ];
+}
+
+let cachedPipedHosts: string[] = [];
+let lastPipedFetchTime = 0;
+
+async function getHealthyPipedHosts(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedPipedHosts.length > 0 && (now - lastPipedFetchTime < 1000 * 60 * 15)) {
+    return cachedPipedHosts;
+  }
+  try {
+    const res = await fetchNative("https://piped-instances.kavin.rocks");
+    if (res.ok) {
+      const data = await res.json();
+      const healthy = data
+        .filter((inst: any) => inst.uptime_24h > 90 && (inst.api_url || inst.api))
+        .map((inst: any) => (inst.api_url || inst.api).replace(/\/$/, ""));
+      if (healthy.length > 0) {
+        cachedPipedHosts = healthy;
+        lastPipedFetchTime = now;
+        return healthy;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to fetch dynamic Piped instances list:", e);
+  }
+  return [
+    "https://api.piped.private.coffee",
+    "https://pipedapi.lvk.li",
+    "https://pipedapi.kavin.rocks"
+  ];
+}
+
+let cachedInvidiousHosts: string[] = [];
+let lastInvidiousFetchTime = 0;
+
+async function getHealthyInvidiousHosts(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedInvidiousHosts.length > 0 && (now - lastInvidiousFetchTime < 1000 * 60 * 15)) {
+    return cachedInvidiousHosts;
+  }
+  try {
+    const res = await fetchNative("https://api.invidious.io/instances.json?sort_by=type,health");
+    if (res.ok) {
+      const data = await res.json();
+      const healthy = data
+        .filter((item: any) => item[1] && item[1].type === "https" && item[1].monitor && item[1].monitor.uptime > 0.90)
+        .map((item: any) => `https://${item[0]}`);
+      if (healthy.length > 0) {
+        cachedInvidiousHosts = healthy;
+        lastInvidiousFetchTime = now;
+        return healthy;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to fetch dynamic Invidious instances list:", e);
+  }
+  return [
+    "https://invidious.privacydev.net",
+    "https://inv.thepixora.com",
+    "https://invidious.f5.si"
+  ];
+}
+
+// Helper to perform native-first requests to bypass CORS and auto-patching issues on Android
+async function fetchNative(url: string, options: any = {}) {
+  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  if (isNative) {
+    const { CapacitorHttp } = await import('@capacitor/core');
+    const headers = options.headers || {};
+    let dataPayload = options.body;
+    if (typeof options.body === 'string') {
+      try {
+        dataPayload = JSON.parse(options.body);
+      } catch (e) {}
+    }
+    const response = await CapacitorHttp.request({
+      url,
+      method: options.method || 'GET',
+      headers,
+      data: dataPayload,
+      responseType: 'text'
+    });
+    const responseHeaders = new Headers();
+    if (response.headers) {
+      for (const [key, val] of Object.entries(response.headers)) {
+        responseHeaders.set(key, val as string);
+      }
+    }
+    const res = new Response(
+      typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
+      {
+        status: response.status,
+        headers: responseHeaders
+      }
+    );
+    Object.defineProperty(res, 'url', { value: url });
+    return res;
+  } else {
+    return fetch(url, options);
+  }
+}
+
+export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Promise<string> {
+  if (track.id.startsWith("yt-")) {
+    return track.id.substring(3);
+  }
+  const lowercaseTitle = track.title.toLowerCase();
+  const lowercaseArtist = track.artist.toLowerCase();
+  if (
+    (lowercaseTitle.includes("soleao") || lowercaseTitle.includes("soleado")) &&
+    lowercaseArtist.includes("myke towers")
+  ) {
+    console.log(`[Override] Returning correct videoId JgqsAvvwZAQ for Myke Towers - Soleao`);
+    return "JgqsAvvwZAQ";
+  }
+  if (
+    lowercaseTitle.includes("negocio") &&
+    lowercaseArtist.includes("atb norte")
+  ) {
+    console.log(`[Override] Returning correct videoId 9RNoiWDlD_U for ATB NORTE - Negocio`);
+    return "9RNoiWDlD_U";
+  }
+  
+  const cleanTitle = track.title
+    .replace(/\(feat\..*?\)/i, "")
+    .replace(/\[feat\..*?\]/i, "")
+    .replace(/\(with.*?\)/i, "")
+    .replace(/\(.*?\)/g, "")
+    .trim();
+  const query = `${track.artist} ${cleanTitle}`;
+
+  // Robust fallback to public Piped API search
   const PIPED_HOSTS = [
     "https://pipedapi.kavin.rocks",
     "https://api.piped.private.coffee",
     "https://pipedapi.lvk.li",
+    "https://api.piped.yt"
   ];
 
-  for (const host of PIPED_HOSTS) {
+  for (const baseUrl of PIPED_HOSTS) {
     try {
-      console.log(`Resolving audio stream from Piped instance: ${host} for fast download...`);
-      const requestUrl = resolveUrl(`${host}/streams/${videoId}`);
-      const r = await fetch(requestUrl, {
-        headers: { "Accept": "application/json" }
+      console.log(`Searching video ID for "${query}" via Piped API: ${baseUrl}...`);
+      const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
+      const searchResponse = await fetchNative(searchUrl, { 
+        signal,
+        headers: {
+          'Referer': 'https://piped.video/',
+          'Origin': 'https://piped.video'
+        }
       });
-      if (r.ok) {
-        const data = await r.json();
-        const audio = (data.audioStreams || [])
-          .filter((s: any) => s.mimeType?.includes("audio"))
-          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        if (audio?.url) {
-          console.log(`Got fast proxy stream URL from Piped host: ${host}`);
-          return audio.url;
+      if (!searchResponse.ok) continue;
+      const searchData = await searchResponse.json();
+      const items = searchData.items || searchData.relatedStreams || [];
+      if (Array.isArray(items) && items.length > 0) {
+        const streamItem = items.find((item: any) => item.type === "stream" || item.url);
+        if (streamItem) {
+          const videoIdMatch = streamItem.url?.match(/[?&]v=([^&]+)/) || streamItem.url?.match(/v=([^&]+)/);
+          const videoId = videoIdMatch ? videoIdMatch[1] : streamItem.url?.replace("/watch?v=", "");
+          if (videoId) {
+            console.log(`Resolved videoId via Piped API ${baseUrl}: ${streamItem.title} (${videoId})`);
+            return videoId;
+          }
         }
       }
     } catch (e) {
-      console.warn(`Piped host ${host} failed during download stream resolution:`, e);
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      console.warn(`Piped search fallback ${baseUrl} failed:`, e);
     }
   }
 
-  // 2. Fallback to direct deciphering via youtubei.js (usually throttled to 128kbps / ~16KB/s by Google)
+  throw new Error("Failed to retrieve video ID for this track.");
+}
+
+export async function getYouTubeAudioStream(videoId: string): Promise<string> {
+  // 0. Try Cobalt APIs first for high-performance direct audio stream URLs
+  let cobaltEndpoints: string[] = [];
   try {
-    console.log(`Resolving direct audio stream for videoId: ${videoId} via Innertube (Fallback)...`);
-    const yt = await getYoutubeClient();
-    const info = await yt.getBasicInfo(videoId);
-    
-    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-    if (!format) {
-      throw new Error("No suitable audio format found");
+    cobaltEndpoints = await getHealthyCobaltHosts();
+  } catch (err) {
+    console.warn("Failed to get healthy Cobalt hosts, falling back:", err);
+    cobaltEndpoints = [
+      "https://api.qwkuns.me/",
+      "https://cobaltapi.squair.xyz/",
+      "https://rue-cobalt.xenon.zone/",
+      "https://apicobalt.mgytr.top/",
+      "https://fox.kittycat.boo/",
+      "https://api.cobalt.tools/"
+    ];
+  }
+  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+
+  for (const endpoint of cobaltEndpoints) {
+    try {
+      console.log(`[Downloader] Attempting stream resolution via Cobalt: ${endpoint}...`);
+      let responseData: any = null;
+
+      if (isNative) {
+        const { CapacitorHttp } = await import('@capacitor/core');
+        const response = await CapacitorHttp.request({
+          url: endpoint,
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Origin': 'https://cobalt.tools',
+            'Referer': 'https://cobalt.tools/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          data: JSON.stringify({
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            downloadMode: 'audio',
+            audioFormat: 'mp3'
+          })
+        });
+        if (response.status === 200 && response.data) {
+          responseData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+        }
+      } else {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Origin': 'https://cobalt.tools',
+            'Referer': 'https://cobalt.tools/'
+          },
+          body: JSON.stringify({
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            downloadMode: 'audio',
+            audioFormat: 'mp3'
+          })
+        });
+        if (response.ok) {
+          responseData = await response.json();
+        }
+      }
+
+      if (responseData && responseData.url) {
+        console.log(`[Downloader] Cobalt successfully resolved stream: ${responseData.url}`);
+        return responseData.url;
+      }
+    } catch (err) {
+      console.warn(`[Downloader] Cobalt endpoint ${endpoint} failed:`, err);
     }
-    
-    let url = await format.decipher(yt.session.player);
-    if (!url) {
-      throw new Error("Failed to decipher stream URL");
-    }
-    
-    // In local browser development, rewrite googlevideo URLs to route through Vite proxy to avoid CORS/403 Forbidden
-    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-    if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
-      const match = url.match(/https:\/\/([^.]+)\.googlevideo\.com\/(.+)/);
-      if (match) {
-        url = `/googlevideo/${match[1]}/${match[2]}`;
+  }
+
+  // 1. Try Piped API hosts first for extremely fast download speed
+  try {
+    const pipedHosts = await getHealthyPipedHosts();
+    for (const host of pipedHosts.slice(0, 5)) {
+      try {
+        console.log(`Resolving audio stream from Piped instance: ${host}...`);
+        const requestUrl = `${host}/streams/${videoId}`;
+        const r = await fetchNative(requestUrl, {
+          headers: { 
+            "Accept": "application/json",
+            "Referer": "https://piped.video/",
+            "Origin": "https://piped.video"
+          }
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const audio = (data.audioStreams || [])
+            .filter((s: any) => s.mimeType?.includes("audio"))
+            .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+          if (audio?.url) {
+            console.log(`Got stream URL from Piped host: ${host}`);
+            return audio.url;
+          }
+        }
+      } catch (e) {
+        console.warn(`Piped host ${host} failed during stream resolution:`, e);
       }
     }
-    
-    console.log(`Successfully deciphered audio stream for ${videoId}`);
-    return url;
-  } catch (e: any) {
-    console.error(`Failed to get stream from youtubei.js:`, e);
-    throw e;
+  } catch (err) {
+    console.warn("Piped stream resolution failure:", err);
   }
+
+  // 2. Try Invidious API hosts for proxy stream URLs
+  try {
+    const invidiousHosts = await getHealthyInvidiousHosts();
+    for (const host of invidiousHosts.slice(0, 5)) {
+      try {
+        console.log(`Resolving audio stream from Invidious instance: ${host}...`);
+        const r = await fetchNative(`${host}/api/v1/videos/${videoId}`);
+        if (r.ok) {
+          const data = await r.json();
+          const adaptiveFormats = data.adaptiveFormats || [];
+          const audioStreams = adaptiveFormats.filter((f: any) => f.type?.includes("audio"));
+          if (audioStreams.length > 0) {
+            audioStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+            let streamUrl = audioStreams[0].url;
+            if (!streamUrl.includes("local=true")) {
+              streamUrl += streamUrl.includes("?") ? "&local=true" : "?local=true";
+            }
+            if (streamUrl.startsWith("/")) {
+              streamUrl = host + streamUrl;
+            }
+            console.log(`Got stream URL from Invidious host: ${host}`);
+            return streamUrl;
+          }
+        }
+      } catch (e) {
+        console.warn(`Invidious host ${host} failed during stream resolution:`, e);
+      }
+    }
+  } catch (err) {
+    console.warn("Invidious stream resolution failure:", err);
+  }
+
+  throw new Error("Failed to retrieve audio stream URL.");
 }
 
 export async function resolveTidalTrackById(trackId: string): Promise<Track | null> {

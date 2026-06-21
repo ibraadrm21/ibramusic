@@ -3,7 +3,7 @@ import {
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
   Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock
 } from "lucide-react";
-import { useAudio } from "../context/AudioContext";
+import { useAudio, useAudioProgress } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
 import { Capacitor } from "@capacitor/core";
 
@@ -55,8 +55,6 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     currentTrack,
     isPlaying,
     isLoading,
-    currentTime,
-    duration,
     volume,
     isMuted,
     isShuffle,
@@ -76,6 +74,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     isHost,
     sleepTimerRemaining
   } = useAudio();
+
+  const { currentTime, duration } = useAudioProgress();
 
 
 

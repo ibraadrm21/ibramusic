@@ -16,7 +16,7 @@ interface TrackCardProps {
   playlistId?: string;
 }
 
-export const TrackCard: React.FC<TrackCardProps> = ({
+export const TrackCard = React.memo<TrackCardProps>(({
   track,
   variant,
   tracksQueue = [],
@@ -292,8 +292,6 @@ export const TrackCard: React.FC<TrackCardProps> = ({
         </div>
       </div>
 
-
-
       {/* Col 2: Actions & Duration */}
       <div className="col-span-3 md:col-span-2 flex items-center justify-end gap-1.5 md:gap-2.5 shrink-0" onClick={(e) => e.stopPropagation()}>
         {/* Add to Playlist Button */}
@@ -347,5 +345,6 @@ export const TrackCard: React.FC<TrackCardProps> = ({
       </div>
     </div>
   );
-};
+});
+
 export default TrackCard;

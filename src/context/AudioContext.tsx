@@ -23,8 +23,6 @@ interface AudioContextType {
   currentTrack: Track | null;
   isPlaying: boolean;
   isLoading: boolean;
-  currentTime: number;
-  duration: number;
   volume: number;
   isMuted: boolean;
   queue: Track[];
@@ -69,7 +67,21 @@ interface AudioContextType {
   cancelSleepTimer: () => void;
 }
 
+interface AudioProgressContextType {
+  currentTime: number;
+  duration: number;
+}
+
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
+const AudioProgressContext = createContext<AudioProgressContextType | undefined>(undefined);
+
+export const useAudioProgress = () => {
+  const context = useContext(AudioProgressContext);
+  if (context === undefined) {
+    throw new Error("useAudioProgress must be used within an AudioProvider");
+  }
+  return context;
+};
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => {
@@ -1481,57 +1493,103 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => { handle?.remove?.(); };
   }, []);
 
+  const progressValue = React.useMemo(() => ({
+    currentTime,
+    duration
+  }), [currentTime, duration]);
+
+  const audioContextValue = React.useMemo<AudioContextType>(() => ({
+    currentTrack,
+    isPlaying,
+    isLoading,
+    volume,
+    isMuted,
+    queue,
+    currentIndex,
+    isShuffle,
+    isRepeat,
+    playingPlaylistId,
+    setPlayingPlaylistId,
+    playTrack,
+    togglePlay,
+    nextTrack,
+    prevTrack,
+    seek,
+    changeVolume,
+    toggleMute,
+    toggleShuffle,
+    toggleRepeat,
+    addToQueue,
+    playNext,
+    removeFromQueue,
+    clearQueue,
+    reorderQueue,
+    toast,
+    showToast,
+    roomId,
+    isHost,
+    isConnected,
+    participants,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    closeRoom,
+    updateUserIdentity,
+    ambientGlowEnabled,
+    setAmbientGlowEnabled,
+    eqPreset,
+    setEqPreset,
+    sleepTimerRemaining,
+    startSleepTimer,
+    cancelSleepTimer,
+  }), [
+    currentTrack,
+    isPlaying,
+    isLoading,
+    volume,
+    isMuted,
+    queue,
+    currentIndex,
+    isShuffle,
+    isRepeat,
+    playingPlaylistId,
+    playTrack,
+    togglePlay,
+    nextTrack,
+    prevTrack,
+    seek,
+    changeVolume,
+    toggleMute,
+    toggleShuffle,
+    toggleRepeat,
+    addToQueue,
+    playNext,
+    removeFromQueue,
+    clearQueue,
+    reorderQueue,
+    toast,
+    showToast,
+    roomId,
+    isHost,
+    isConnected,
+    participants,
+    createRoom,
+    joinRoom,
+    leaveRoom,
+    closeRoom,
+    updateUserIdentity,
+    ambientGlowEnabled,
+    eqPreset,
+    sleepTimerRemaining,
+    startSleepTimer,
+    cancelSleepTimer,
+  ]);
+
   return (
-    <AudioContext.Provider
-      value={{
-        currentTrack,
-        isPlaying,
-        isLoading,
-        currentTime,
-        duration,
-        volume,
-        isMuted,
-        queue,
-        currentIndex,
-        isShuffle,
-        isRepeat,
-        playingPlaylistId,
-        setPlayingPlaylistId,
-        playTrack,
-        togglePlay,
-        nextTrack,
-        prevTrack,
-        seek,
-        changeVolume,
-        toggleMute,
-        toggleShuffle,
-        toggleRepeat,
-        addToQueue,
-        playNext,
-        removeFromQueue,
-        clearQueue,
-        reorderQueue,
-        toast,
-        showToast,
-        roomId,
-        isHost,
-        isConnected,
-        participants,
-        createRoom,
-        joinRoom,
-        leaveRoom,
-        closeRoom,
-        updateUserIdentity,
-        ambientGlowEnabled,
-        setAmbientGlowEnabled,
-        eqPreset,
-        setEqPreset,
-        sleepTimerRemaining,
-        startSleepTimer,
-        cancelSleepTimer,
-      }}
-    >
-      {children}
+    <AudioContext.Provider value={audioContextValue}>
+      <AudioProgressContext.Provider value={progressValue}>
+        {children}
+      </AudioProgressContext.Provider>
     </AudioContext.Provider>
   );
 };

@@ -50,7 +50,7 @@ public class PlaybackService extends MediaSessionService {
 
         androidx.media3.datasource.DefaultHttpDataSource.Factory httpDataSourceFactory = 
             new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36");
+                .setUserAgent("com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)");
         
         androidx.media3.datasource.DefaultDataSource.Factory dataSourceFactory = 
             new androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory);

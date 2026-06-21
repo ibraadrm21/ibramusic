@@ -1,5 +1,4 @@
-import React from "react";
-import { User, Sparkles } from "lucide-react";
+import { User } from "lucide-react";
 import type { Artist } from "../services/musicApi";
 
 interface ArtistCardProps {
@@ -32,13 +31,6 @@ export const ArtistCard: React.FC<ArtistCardProps> = ({ artist, onClick }) => {
         <h3 className="font-semibold text-sm text-white truncate group-hover:text-brand-accent transition-colors duration-200">
           {artist.name}
         </h3>
-        
-        {artist.popularity !== undefined && (
-          <div className="flex items-center justify-center gap-1 mt-1 text-[9px] text-gray-500">
-            <Sparkles className="w-3 h-3 text-yellow-500" />
-            <span>Popularity: {artist.popularity}%</span>
-          </div>
-        )}
       </div>
     </div>
   );

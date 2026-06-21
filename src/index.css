@@ -174,7 +174,7 @@ body.is-native {
 .glass-card {
   background: color-mix(in srgb, var(--app-bg-color-val, #161616) 80%, transparent);
   border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .glass-card:hover {
@@ -218,45 +218,46 @@ body.is-native {
 
 /* Slide in from right (navigating forward) */
 @keyframes slideInRight {
-  from { opacity: 0; transform: translateX(48px) scale(0.97); }
-  to   { opacity: 1; transform: translateX(0)    scale(1);    }
+  from { opacity: 0; transform: translateX(24px) scale(0.985); }
+  to   { opacity: 1; transform: translateX(0)    scale(1);     }
 }
 
 /* Slide in from left (navigating backward) */
 @keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-48px) scale(0.97); }
-  to   { opacity: 1; transform: translateX(0)     scale(1);    }
+  from { opacity: 0; transform: translateX(-24px) scale(0.985); }
+  to   { opacity: 1; transform: translateX(0)     scale(1);     }
 }
 
-/* Zoom-up for home / root tabs */
+/* Zoom-up for home / root tabs - removed blur to eliminate GPU rendering lag */
 @keyframes zoomUp {
-  from { opacity: 0; transform: translateY(22px) scale(0.95); filter: blur(4px); }
-  to   { opacity: 1; transform: translateY(0)    scale(1);    filter: blur(0);   }
+  from { opacity: 0; transform: translateY(12px) scale(0.975); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);     }
 }
 
 /* Sub-page slide from right (drill-down) */
 @keyframes mobileSubpageTransition {
-  from { opacity: 0; transform: translateX(60px) scale(0.98); }
+  from { opacity: 0; transform: translateX(30px) scale(0.99); }
   to   { opacity: 1; transform: translateX(0)    scale(1);    }
 }
 
+.animate-mobile-page {
+  animation: zoomUp 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+.animate-tab-forward {
+  animation: slideInRight 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+.animate-tab-backward {
+  animation: slideInLeft 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+.animate-mobile-subpage {
+  animation: mobileSubpageTransition 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
 @media (max-width: 767px) {
-  .animate-mobile-page {
-    animation: zoomUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
-    will-change: transform, opacity;
-  }
-  .animate-tab-forward {
-    animation: slideInRight 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
-    will-change: transform, opacity;
-  }
-  .animate-tab-backward {
-    animation: slideInLeft 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
-    will-change: transform, opacity;
-  }
-  .animate-mobile-subpage {
-    animation: mobileSubpageTransition 0.30s cubic-bezier(0.22, 1, 0.36, 1) both;
-    will-change: transform, opacity;
-  }
   main {
     padding-top: calc(76px + var(--safe-top)) !important;
     padding-bottom: calc(148px + var(--safe-bottom)) !important;

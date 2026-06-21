@@ -38,6 +38,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(Media3SessionPlugin.class);
+        registerPlugin(AppUpdaterPlugin.class);
         SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
 
