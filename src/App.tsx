@@ -1262,13 +1262,15 @@ const MainLayout: React.FC = () => {
 
   // Check for updates on mount
   useEffect(() => {
-    checkForUpdates().then((info) => {
-      if (info && info.hasUpdate) {
-        setUpdateInfo(info);
-        setShowUpdateModal(true);
-      }
-    });
-    startAutoUpdatePolling(30); // Check every 30 minutes
+    if (Capacitor.isNativePlatform()) {
+      checkForUpdates().then((info) => {
+        if (info && info.hasUpdate) {
+          setUpdateInfo(info);
+          setShowUpdateModal(true);
+        }
+      });
+      startAutoUpdatePolling(30); // Check every 30 minutes
+    }
     fetchFeaturedContent();
   }, []);
 
