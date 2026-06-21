@@ -4700,43 +4700,17 @@ const MainLayout: React.FC = () => {
 
                     {/* Featured Songs */}
                     {featuredSongs.map((track, idx) => (
-                      <div key={`feat-song-container-${track.id}-${idx}`} className="flex flex-col gap-2">
-                        <TrackCard
-                          key={`feat-song-${track.id}-${idx}`}
-                          track={track}
-                          variant="square"
-                          tracksQueue={featuredSongs}
-                          onToggleFavorite={handleToggleFavorite}
-                          isFavorite={favorites.some((f) => f.id === track.id)}
-
-                          onOpenArtist={handleOpenArtist}
-                          onAddToPlaylist={setTrackToAddToPlaylist}
-                          onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                        />
-                        {Capacitor.isNativePlatform() && (
-                          <button
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (!downloadService.isTrackDownloaded(track.id)) {
-                                try {
-                                  const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
-                                  await downloadService.downloadTrack(track, async () => {
-                                    const videoId = await getYouTubeVideoId(track);
-                                    return await getYouTubeAudioStream(videoId);
-                                  });
-                                  showToast(`Descargado: ${track.title}`, "success");
-                                } catch (err) {
-                                  showToast("Error al descargar", "error");
-                                }
-                              }
-                            }}
-                            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] text-gray-400 flex items-center justify-center gap-1 transition-all"
-                          >
-                            <Download className="w-3 h-3" />
-                            {downloadService.isTrackDownloaded(track.id) ? "Guardado" : "Bajar"}
-                          </button>
-                        )}
-                      </div>
+                      <TrackCard
+                        key={`feat-song-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={featuredSongs}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -4751,42 +4725,17 @@ const MainLayout: React.FC = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {/* 8 quick-access cards using square variant */}
                     {homeRecommendations.slice(0, 8).map((track, idx) => (
-                      <div key={`quick-container-${track.id}-${idx}`} className="flex flex-col gap-2">
-                        <TrackCard
-                          key={`quick-${track.id}-${idx}`}
-                          track={track}
-                          variant="square"
-                          tracksQueue={homeRecommendations}
-                          onToggleFavorite={handleToggleFavorite}
-                          isFavorite={favorites.some((f) => f.id === track.id)}
-                          onOpenArtist={handleOpenArtist}
-                          onAddToPlaylist={setTrackToAddToPlaylist}
-                          onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                        />
-                        {Capacitor.isNativePlatform() && (
-                          <button
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (!downloadService.isTrackDownloaded(track.id)) {
-                                try {
-                                  const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
-                                  await downloadService.downloadTrack(track, async () => {
-                                    const videoId = await getYouTubeVideoId(track);
-                                    return await getYouTubeAudioStream(videoId);
-                                  });
-                                  showToast(`Descargado: ${track.title}`, "success");
-                                } catch (err) {
-                                  showToast("Error al descargar", "error");
-                                }
-                              }
-                            }}
-                            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] text-gray-400 flex items-center justify-center gap-1 transition-all"
-                          >
-                            <Download className="w-3 h-3" />
-                            {downloadService.isTrackDownloaded(track.id) ? "Guardado" : "Bajar"}
-                          </button>
-                        )}
-                      </div>
+                      <TrackCard
+                        key={`quick-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={homeRecommendations}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
                     ))}
                   </div>
                 </div>

@@ -3,9 +3,6 @@ import {
   Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
-import { 
-  getUpdaterCredentials, setUpdaterCredentials, checkForUpdates, redirectToUpdate 
-} from "../services/updateChecker";
 
 export const SettingsPanel: React.FC = () => {
   const {
@@ -23,20 +20,8 @@ export const SettingsPanel: React.FC = () => {
   const [downloadCount, setDownloadCount] = useState<number>(0);
   const [cachedLyricsCount, setCachedLyricsCount] = useState<number>(0);
 
-  // GitHub Auto-Updater States
-  const [githubPat, setGithubPat] = useState("");
-  const [githubOwner, setGithubOwner] = useState("");
-  const [githubRepo, setGithubRepo] = useState("");
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [updaterStatusText, setUpdaterStatusText] = useState("");
-
   // Fetch metrics on mount
   useEffect(() => {
-    // Load GitHub Updater configs
-    const creds = getUpdaterCredentials();
-    setGithubPat(creds.pat);
-    setGithubOwner(creds.owner);
-    setGithubRepo(creds.repo);
     // 1. Get downloads count
     try {
       const savedDownloads = localStorage.getItem("ibrastream_downloaded_ids");
@@ -269,113 +254,6 @@ export const SettingsPanel: React.FC = () => {
             </button>
           </div>
         </div>
-
-        {/* GitHub Auto-Updater Card */}
-        <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5 md:col-span-2">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
-            <Sliders className="w-5 h-5 text-brand-accent animate-pulse" />
-            GitHub APK Self-Updater (Private Repo Support)
-          </h2>
-
-          <p className="text-xs text-gray-400">
-            Configure your private/public GitHub repository credentials to check for and install APK updates automatically.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-semibold text-gray-300">GitHub Personal Access Token (PAT)</span>
-              <input
-                type="password"
-                placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                value={githubPat}
-                onChange={(e) => setGithubPat(e.target.value)}
-                className="bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-brand-accent transition-all"
-              />
-            </div>
-            
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-semibold text-gray-300">Repository Owner</span>
-              <input
-                type="text"
-                placeholder="e.g. ibraadrm21"
-                value={githubOwner}
-                onChange={(e) => setGithubOwner(e.target.value)}
-                className="bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-brand-accent transition-all"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-semibold text-gray-300">Repository Name</span>
-              <input
-                type="text"
-                placeholder="e.g. ibramusic"
-                value={githubRepo}
-                onChange={(e) => setGithubRepo(e.target.value)}
-                className="bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-brand-accent transition-all"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-3 mt-1 items-center justify-between">
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setUpdaterCredentials(githubPat, githubOwner, githubRepo);
-                  showToast("Updater credentials saved!", "success");
-                }}
-                className="px-6 py-2.5 bg-white text-black text-xs font-bold rounded-full hover:bg-gray-200 transition-all"
-              >
-                Save Credentials
-              </button>
-
-              <button
-                onClick={async () => {
-                  if (!githubOwner || !githubRepo) {
-                    showToast("Please enter Repository Owner and Name first", "error");
-                    return;
-                  }
-                  setIsCheckingUpdate(true);
-                  setUpdaterStatusText("Checking releases...");
-                  try {
-                    // Update current input in local storage before checking
-                    setUpdaterCredentials(githubPat, githubOwner, githubRepo);
-                    const update = await checkForUpdates(false);
-                    if (update) {
-                      if (update.hasUpdate) {
-                        setUpdaterStatusText(`Update available: v${update.latestVersion}! Triggering download...`);
-                        showToast(`New update v${update.latestVersion} found!`, "success");
-                        if (update.apkUrl) {
-                          await redirectToUpdate(update.apkUrl, update.token);
-                        }
-                      } else {
-                        setUpdaterStatusText(`You are on the latest version: v${update.currentVersion}`);
-                        showToast("App is up to date!", "success");
-                      }
-                    } else {
-                      setUpdaterStatusText("No release or APK assets found.");
-                    }
-                  } catch (e: any) {
-                    setUpdaterStatusText(`Error: ${e.message || e}`);
-                    showToast("Update check failed", "error");
-                  } finally {
-                    setIsCheckingUpdate(false);
-                  }
-                }}
-                disabled={isCheckingUpdate}
-                className="px-6 py-2.5 bg-brand-accent text-black text-xs font-bold rounded-full hover:bg-brand-accent/80 transition-all flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {isCheckingUpdate ? "Checking..." : "Check & Install Update"}
-              </button>
-            </div>
-
-            {updaterStatusText ? (
-              <span className="text-[11px] text-gray-400 font-semibold italic">
-                {updaterStatusText}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
       </div>
 
       {/* Safety Notice */}
