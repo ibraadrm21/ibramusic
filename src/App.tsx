@@ -447,6 +447,8 @@ const MainLayout: React.FC = () => {
   const isOwnPlaylist = selectedPlaylist ? playlists.some(p => p.id === selectedPlaylist.id) : false;
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
   const [saveQueueMode, setSaveQueueMode] = useState<boolean>(false);
+  const [downloadingPlaylistId, setDownloadingPlaylistId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
 
   // Multi-select state
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set());
@@ -730,7 +732,7 @@ const MainLayout: React.FC = () => {
     }
   };
 
-  const handleSaveHeroBanner = async (title: string, subtitle: string, description: string, bgGradient: string, textColor: string) => {
+  const handleSaveHeroBanner = async (title: string, subtitle: string, description: string, _bgGradient: string, textColor: string) => {
     try {
       const { data, error: selectError } = await supabase
         .from("featured_content")
@@ -744,7 +746,7 @@ const MainLayout: React.FC = () => {
         type: "hero_banner",
         name: title,
         pfp: subtitle,
-        tracks: [{ description, bgGradient, textColor }]
+        tracks: [{ description, bgGradient: "", textColor }]
       };
 
       if (data) {
@@ -1088,6 +1090,52 @@ const MainLayout: React.FC = () => {
       setSelectedPlaylist(prev => prev ? { ...prev, coverUrl } : null);
     }
     showToast("Playlist cover updated", "success");
+  };
+
+  const handleDownloadPlaylist = async (playlist: Playlist) => {
+    if (!playlist || !playlist.tracks.length) return;
+    if (downloadingPlaylistId === playlist.id) return;
+
+    setDownloadingPlaylistId(playlist.id);
+
+    const tracksToDownload = playlist.tracks.filter(
+      track => !downloadService.isTrackDownloaded(track.id)
+    );
+
+    const totalToDownload = tracksToDownload.length;
+    if (totalToDownload === 0) {
+      showToast("Todas las canciones ya están descargadas", "info");
+      setDownloadingPlaylistId(null);
+      return;
+    }
+
+    setDownloadProgress({ downloaded: 0, total: totalToDownload });
+    showToast(`Iniciando descarga de ${totalToDownload} canciones...`, "info");
+
+    const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+    let downloadedCount = 0;
+
+    for (const track of tracksToDownload) {
+      try {
+        await downloadService.downloadTrack(track, async () => {
+          const videoId = await getYouTubeVideoId(track);
+          return await getYouTubeAudioStream(videoId);
+        });
+        downloadedCount++;
+        setDownloadProgress({ downloaded: downloadedCount, total: totalToDownload });
+        showToast(`Descargadas: ${downloadedCount}/${totalToDownload} canciones`, "info");
+        // Sleep to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } catch (e) {
+        console.warn(`Error descargando ${track.title}`, e);
+        showToast(`Error al descargar: ${track.title}`, "error");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    setDownloadingPlaylistId(null);
+    setDownloadProgress(null);
+    showToast("Descarga de lista completada", "success");
   };
 
   const handleAddTrackToPlaylist = (playlistId: string, track: Track) => {
@@ -2841,29 +2889,24 @@ const MainLayout: React.FC = () => {
                           <Plus className="w-6 h-6 text-white mb-1" />
                           <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
                           <button
-                            onClick={async () => {
+                            onClick={async (e) => {
+                              e.stopPropagation();
                               if (!selectedPlaylist) return;
-                              if (!selectedPlaylist.tracks.length) return;
-                              showToast(`Iniciando descarga de ${selectedPlaylist.tracks.length} canciones...`, "info");
-                              const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
-                              for (const track of selectedPlaylist.tracks) {
-                                try {
-                                  if (!downloadService.isTrackDownloaded(track.id)) {
-                                    await downloadService.downloadTrack(track, async () => {
-                                      const videoId = await getYouTubeVideoId(track);
-                                      return await getYouTubeAudioStream(videoId);
-                                    });
-                                  }
-                                } catch (e) {
-                                  console.warn(`Error descargando ${track.title}`, e);
-                                }
-                              }
-                              showToast("Descarga de lista completada", "success");
+                              await handleDownloadPlaylist(selectedPlaylist);
                             }}
-                            className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/10 active:scale-95 shrink-0"
-                            title="Download playlist"
+                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
+                              downloadingPlaylistId === selectedPlaylist.id
+                                ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
+                                : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
+                            }`}
+                            title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
+                            disabled={downloadingPlaylistId === selectedPlaylist.id}
                           >
-                            <Download className="w-5 h-5" />
+                            {downloadingPlaylistId === selectedPlaylist.id ? (
+                              <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Download className="w-5 h-5" />
+                            )}
                           </button>
                         </div>
                       )}
@@ -2914,6 +2957,20 @@ const MainLayout: React.FC = () => {
                         <h3 className="text-xl md:text-3xl font-extrabold text-white mt-1">{selectedPlaylist.name}</h3>
                       )}
                       <p className="text-xs text-gray-400 mt-2">{selectedPlaylist.tracks.length} Songs</p>
+                      {downloadingPlaylistId === selectedPlaylist.id && downloadProgress && (
+                        <div className="mt-3 flex flex-col gap-1.5 max-w-[200px] mx-auto md:mx-0">
+                          <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-brand-accent">
+                            <span>Descargando...</span>
+                            <span>{downloadProgress.downloaded} / {downloadProgress.total}</span>
+                          </div>
+                          <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden border border-white/5">
+                            <div 
+                              className="bg-brand-accent h-full transition-all duration-300 rounded-full" 
+                              style={{ width: `${(downloadProgress.downloaded / downloadProgress.total) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                       {selectedPlaylist.tracks.length > 0 && (
                         <div className="flex items-center gap-4 mt-4 justify-center md:justify-start">
                           <button
@@ -2951,29 +3008,24 @@ const MainLayout: React.FC = () => {
                           </button>
                           {Capacitor.isNativePlatform() && (
                             <button
-                              onClick={async () => {
+                              onClick={async (e) => {
+                                e.stopPropagation();
                                 if (!selectedPlaylist) return;
-                                if (!selectedPlaylist.tracks.length) return;
-                                showToast(`Iniciando descarga de ${selectedPlaylist.tracks.length} canciones...`, "info");
-                                const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
-                                for (const track of selectedPlaylist.tracks) {
-                                  try {
-                                    if (!downloadService.isTrackDownloaded(track.id)) {
-                                      await downloadService.downloadTrack(track, async () => {
-                                        const videoId = await getYouTubeVideoId(track);
-                                        return await getYouTubeAudioStream(videoId);
-                                      });
-                                    }
-                                  } catch (e) {
-                                    console.warn(`Error descargando ${track.title}`, e);
-                                  }
-                                }
-                                showToast("Descarga de lista completada", "success");
+                                await handleDownloadPlaylist(selectedPlaylist);
                               }}
-                              className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all border border-white/10 active:scale-95 shrink-0"
-                              title="Download playlist"
+                              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
+                                downloadingPlaylistId === selectedPlaylist.id
+                                  ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
+                                  : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
+                              }`}
+                              title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
+                              disabled={downloadingPlaylistId === selectedPlaylist.id}
                             >
-                              <Download className="w-5 h-5" />
+                              {downloadingPlaylistId === selectedPlaylist.id ? (
+                                <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Download className="w-5 h-5" />
+                              )}
                             </button>
                           )}
                         </div>
@@ -4308,46 +4360,7 @@ const MainLayout: React.FC = () => {
                     />
                   </div>
 
-                  {/* Gradient Presets */}
-                  <div className="flex flex-col gap-2">
-                    <label className="text-xs text-gray-400">Select Background Gradient Preset</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-                      {[
-                        { name: "Default Glow", class: "from-brand-accent/20 via-pink-500/10 to-transparent" },
-                        { name: "Sunset Sparkle", class: "from-orange-500/20 via-rose-500/15 to-transparent" },
-                        { name: "Cyberpunk Violet", class: "from-purple-600/20 via-fuchsia-500/15 to-transparent" },
-                        { name: "Emerald Aurora", class: "from-emerald-500/20 via-teal-500/10 to-transparent" },
-                        { name: "Ocean Breeze", class: "from-blue-600/20 via-cyan-500/15 to-transparent" },
-                        { name: "Midnight Sapphire", class: "from-indigo-900/40 via-blue-900/20 to-transparent" },
-                        { name: "Neon Lime", class: "from-lime-500/20 via-green-500/10 to-transparent" },
-                        { name: "Sakura Pink", class: "from-pink-400/20 via-rose-300/10 to-transparent" },
-                        { name: "Golden Hour", class: "from-amber-500/20 via-yellow-600/10 to-transparent" },
-                        { name: "Crimson Shadow", class: "from-red-600/25 via-rose-900/15 to-transparent" }
-                      ].map((preset) => (
-                        <button
-                          key={preset.name}
-                          type="button"
-                          onClick={() => setHeroBgGradient(preset.class)}
-                          className={`p-2 rounded-xl text-[10px] font-semibold transition-all border ${
-                            heroBgGradient === preset.class ? "bg-brand-accent text-black border-brand-accent" : "bg-white/5 text-white border-white/5 hover:bg-white/10"
-                          }`}
-                        >
-                          {preset.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
 
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-400">Custom Gradient Tailwind Classes</label>
-                    <input 
-                      type="text" 
-                      value={heroBgGradient}
-                      onChange={(e) => setHeroBgGradient(e.target.value)}
-                      placeholder="e.g., from-brand-accent/20 via-pink-500/10 to-transparent"
-                      className="bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-accent transition-colors"
-                    />
-                  </div>
 
                   {/* Text Color Presets */}
                   <div className="flex flex-col gap-2">
@@ -4621,7 +4634,7 @@ const MainLayout: React.FC = () => {
             <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page">
 
               {/* Customizable Hero Card */}
-              <div className={`relative overflow-hidden rounded-[32px] bg-gradient-to-br ${heroBgGradient} p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]`}>
+              <div className="relative overflow-hidden rounded-[32px] bg-brand-darkBg p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]">
                 <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand-accent/20 rounded-full blur-3xl pointer-events-none"></div>
                 <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
                 <div className="max-w-md relative z-10 flex flex-col gap-3">
@@ -5091,7 +5104,7 @@ const MainLayout: React.FC = () => {
 
         {/* Toast Notification overlay */}
         {toast && (
-          <div className={`fixed bottom-20 md:bottom-6 right-6 px-5 py-3 rounded-2xl border backdrop-blur-md shadow-2xl flex items-center gap-3 animate-[slideUp_0.2s_ease] z-50 transition-all ${toast.type === "success"
+          <div className={`fixed md:bottom-6 right-6 px-5 py-3 rounded-2xl border backdrop-blur-md shadow-2xl flex items-center gap-3 animate-[slideUp_0.2s_ease] z-50 transition-all mobile-toast ${currentTrack ? 'has-player' : ''} ${toast.type === "success"
               ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
               : toast.type === "error"
                 ? "bg-red-500/10 border-red-500/25 text-red-400"
@@ -5894,7 +5907,7 @@ const MainLayout: React.FC = () => {
 
 
       {/* ═══ MOBILE MINI-PLAYER (above bottom nav) ═══ */}
-      {currentTrack && (
+      {currentTrack && !showMobilePlayer && (
         <div
           className="md:hidden fixed left-0 right-0 z-40 px-3 pb-2 bottom-20"
           style={{ bottom: 'calc(64px + var(--safe-bottom))' }}

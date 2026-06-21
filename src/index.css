@@ -257,6 +257,16 @@ body.is-native {
     animation: mobileSubpageTransition 0.30s cubic-bezier(0.22, 1, 0.36, 1) both;
     will-change: transform, opacity;
   }
+  main {
+    padding-top: calc(76px + var(--safe-top)) !important;
+    padding-bottom: calc(148px + var(--safe-bottom)) !important;
+  }
+  .mobile-toast {
+    bottom: calc(76px + var(--safe-bottom)) !important;
+  }
+  .mobile-toast.has-player {
+    bottom: calc(148px + var(--safe-bottom)) !important;
+  }
 }
 
 /* ─── Bright mode lyrics contrast overrides ─────────────────── */

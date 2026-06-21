@@ -19,6 +19,10 @@ public class PlaybackService extends MediaSessionService {
     private static final String TAG = "IbraStreamService";
     public static CustomPlayerWrapper customPlayer = null;
     public static float userVolume = 1f;
+    public static PlaybackService instance = null;
+    private android.media.audiofx.Equalizer equalizer = null;
+    private int equalizerSessionId = 0;
+    private String currentEqPreset = "flat";
     private MediaSession mediaSession = null;
     private ExoPlayer player = null;
     private PowerManager.WakeLock wakeLock = null;
@@ -27,6 +31,7 @@ public class PlaybackService extends MediaSessionService {
     @Override
     public void onCreate() {
         super.onCreate();
+        PlaybackService.instance = this;
         Log.e(TAG, "PlaybackService CREATED");
         
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -79,6 +84,12 @@ public class PlaybackService extends MediaSessionService {
                     if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
                     if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
                 }
+            }
+
+            @Override
+            public void onAudioSessionIdChanged(int audioSessionId) {
+                Log.e(TAG, "ExoPlayer: onAudioSessionIdChanged = " + audioSessionId);
+                applyEqualizerPreset(currentEqPreset);
             }
         });
         
@@ -165,11 +176,81 @@ public class PlaybackService extends MediaSessionService {
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         customPlayer = null;
+        if (equalizer != null) {
+            equalizer.release();
+            equalizer = null;
+        }
+        PlaybackService.instance = null;
         if (mediaSession != null) {
             if (player != null) player.release();
             mediaSession.release();
             mediaSession = null;
         }
         super.onDestroy();
+    }
+
+    public void applyEqualizerPreset(String preset) {
+        currentEqPreset = preset;
+        if (player == null) return;
+        int sessionId = player.getAudioSessionId();
+        if (sessionId == 0) { // AudioManager.AUDIO_SESSION_ID_GENERATE / not initialized
+            return;
+        }
+
+        try {
+            if (equalizer == null || equalizerSessionId != sessionId) {
+                if (equalizer != null) {
+                    equalizer.release();
+                }
+                equalizer = new android.media.audiofx.Equalizer(0, sessionId);
+                equalizerSessionId = sessionId;
+            }
+
+            if ("flat".equals(preset)) {
+                equalizer.setEnabled(false);
+                Log.e(TAG, "Equalizer: DISABLED (flat preset)");
+                return;
+            }
+
+            equalizer.setEnabled(true);
+            short bands = equalizer.getNumberOfBands();
+            Log.e(TAG, "Equalizer: applying preset: " + preset + " for session: " + sessionId + " with " + bands + " bands");
+
+            short[] range = equalizer.getBandLevelRange();
+            short minLevel = range[0];
+            short maxLevel = range[1];
+
+            for (short i = 0; i < bands; i++) {
+                int centerFreq = equalizer.getCenterFreq(i) / 1000; // in Hz
+                short level = 0;
+                if ("bass".equals(preset)) {
+                    // Boost frequencies below 300Hz
+                    if (centerFreq < 300) {
+                        level = (short) (maxLevel * 0.7); // 70% of max boost
+                    }
+                } else if ("vocal".equals(preset)) {
+                    // Boost mid-range frequencies between 300Hz and 3000Hz (vocals range)
+                    if (centerFreq >= 300 && centerFreq <= 3000) {
+                        level = (short) (maxLevel * 0.6);
+                    } else if (centerFreq < 300) {
+                        level = (short) (minLevel * 0.2); // slight cut on bass
+                    }
+                } else if ("electronic".equals(preset)) {
+                    // V-shape boost
+                    if (centerFreq < 200) {
+                        level = (short) (maxLevel * 0.6); // bass boost
+                    } else if (centerFreq > 3000) {
+                        level = (short) (maxLevel * 0.5); // treble boost
+                    } else {
+                        level = (short) (minLevel * 0.15); // slight mid cut
+                    }
+                }
+                
+                equalizer.setBandLevel(i, level);
+                Log.e(TAG, "Band " + i + " (" + centerFreq + "Hz) set to level: " + level);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error applying equalizer preset", e);
+        }
     }
 }

@@ -8,8 +8,6 @@ export const SettingsPanel: React.FC = () => {
   const {
     ambientGlowEnabled,
     setAmbientGlowEnabled,
-    visualizerStyle,
-    setVisualizerStyle,
     eqPreset,
     setEqPreset,
     sleepTimerRemaining,
@@ -119,29 +117,6 @@ export const SettingsPanel: React.FC = () => {
                 }`}
               />
             </button>
-          </div>
-
-          {/* Visualizer Style Select */}
-          <div className="flex flex-col gap-2.5 pt-2">
-            <span className="text-sm font-semibold text-white">Music Visualizer Style</span>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {(["none", "circle", "bars", "wave"] as const).map((style) => (
-                <button
-                  key={style}
-                  onClick={() => setVisualizerStyle(style)}
-                  className={`py-3 px-4 rounded-xl border text-center font-bold capitalize transition-all ${
-                    visualizerStyle === style
-                      ? "bg-white text-black border-white"
-                      : "bg-white/5 text-gray-400 border-white/5 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  {style === "none" ? "Disabled" : style}
-                </button>
-              ))}
-            </div>
-            <span className="text-[10px] text-gray-500 italic mt-0.5">
-              * Note: Visualizer runs interactively during playback.
-            </span>
           </div>
         </div>
 

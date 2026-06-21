@@ -62,8 +62,6 @@ interface AudioContextType {
   // Custom Settings & Premium features
   ambientGlowEnabled: boolean;
   setAmbientGlowEnabled: (val: boolean) => void;
-  visualizerStyle: "none" | "circle" | "bars" | "wave";
-  setVisualizerStyle: (val: "none" | "circle" | "bars" | "wave") => void;
   eqPreset: "flat" | "bass" | "vocal" | "electronic";
   setEqPreset: (val: "flat" | "bass" | "vocal" | "electronic") => void;
   sleepTimerRemaining: number | null;
@@ -229,9 +227,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = localStorage.getItem("ibrastream_ambient_glow");
     return saved !== "false"; // Default to true
   });
-  const [visualizerStyle, setVisualizerStyle] = useState<"none" | "circle" | "bars" | "wave" >(() => {
-    return (localStorage.getItem("ibrastream_visualizer_style") as any) || "circle";
-  });
   const [eqPreset, setEqPreset] = useState<"flat" | "bass" | "vocal" | "electronic">(() => {
     return (localStorage.getItem("ibrastream_eq_preset") as any) || "flat";
   });
@@ -244,11 +239,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [ambientGlowEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("ibrastream_visualizer_style", visualizerStyle);
-  }, [visualizerStyle]);
-
-  useEffect(() => {
     localStorage.setItem("ibrastream_eq_preset", eqPreset);
+    if (isAndroid) {
+      Media3Session.setEqualizerPreset({ preset: eqPreset }).catch(() => {});
+    }
   }, [eqPreset]);
 
   const startSleepTimer = (minutes: number) => {
@@ -1530,8 +1524,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updateUserIdentity,
         ambientGlowEnabled,
         setAmbientGlowEnabled,
-        visualizerStyle,
-        setVisualizerStyle,
         eqPreset,
         setEqPreset,
         sleepTimerRemaining,

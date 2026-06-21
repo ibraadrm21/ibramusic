@@ -414,6 +414,23 @@ public class Media3SessionPlugin extends Plugin {
         }, MoreExecutors.directExecutor());
     }
 
+    @PluginMethod
+    public void setEqualizerPreset(PluginCall call) {
+        String preset = call.getString("preset", "flat");
+        MainActivity activity = (MainActivity) getActivity();
+        activity.runOnUiThread(() -> {
+            try {
+                if (PlaybackService.instance != null) {
+                    PlaybackService.instance.applyEqualizerPreset(preset);
+                }
+                call.resolve();
+            } catch (Exception e) {
+                Log.e(TAG, "Error in setEqualizerPreset", e);
+                call.reject(e.getMessage());
+            }
+        });
+    }
+
     private static final String NOTIF_CHANNEL_ID = "ibrastream_update";
     private static final int NOTIF_ID = 9001;
 
@@ -546,6 +563,100 @@ public class Media3SessionPlugin extends Plugin {
             } catch (Exception e) {
                 Log.e(TAG, "Error downloading APK", e);
                 nm.cancel(NOTIF_ID);
+                call.reject("Download failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    @PluginMethod
+    public void downloadTrackBackground(PluginCall call) {
+        String urlString = call.getString("url");
+        String trackId = call.getString("trackId");
+        if (urlString == null || urlString.isEmpty() || trackId == null || trackId.isEmpty()) {
+            call.reject("URL and Track ID are required");
+            return;
+        }
+
+        Log.e(TAG, "Starting native background download for: " + trackId);
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL(urlString);
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(60000);
+                c.connect();
+
+                int status = c.getResponseCode();
+                while (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == java.net.HttpURLConnection.HTTP_MOVED_PERM
+                        || status == 307 || status == 308) {
+                    String newUrl = c.getHeaderField("Location");
+                    c.disconnect();
+                    url = new java.net.URL(newUrl);
+                    c = (java.net.HttpURLConnection) url.openConnection();
+                    c.setInstanceFollowRedirects(false);
+                    c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(60000);
+                    c.connect();
+                    status = c.getResponseCode();
+                }
+
+                if (status < 200 || status >= 300) {
+                    call.reject("Server returned HTTP " + status);
+                    return;
+                }
+
+                long totalBytes = c.getContentLengthLong();
+                File downloadDir = new File(getContext().getFilesDir(), "offline_music");
+                if (!downloadDir.exists()) {
+                    downloadDir.mkdirs();
+                }
+
+                File trackFile = new File(downloadDir, trackId + ".mp3");
+                File tempFile = new File(downloadDir, trackId + ".tmp");
+                if (tempFile.exists()) tempFile.delete();
+
+                FileOutputStream fos = new FileOutputStream(tempFile);
+                InputStream is = c.getInputStream();
+
+                byte[] buffer = new byte[8192];
+                long downloaded = 0;
+                int len;
+                int lastProgress = -1;
+
+                while ((len = is.read(buffer)) != -1) {
+                    fos.write(buffer, 0, len);
+                    downloaded += len;
+                    if (totalBytes > 0) {
+                        int progress = (int) (downloaded * 100 / totalBytes);
+                        if (progress != lastProgress) {
+                            lastProgress = progress;
+                            JSObject progressObj = new JSObject();
+                            progressObj.put("trackId", trackId);
+                            progressObj.put("progress", progress / 100.0);
+                            notifyListeners("downloadProgress", progressObj);
+                        }
+                    }
+                }
+                fos.close();
+                is.close();
+                c.disconnect();
+
+                if (trackFile.exists()) trackFile.delete();
+                if (tempFile.renameTo(trackFile)) {
+                    Log.e(TAG, "Native download successful for: " + trackId);
+                    JSObject ret = new JSObject();
+                    ret.put("trackId", trackId);
+                    ret.put("path", trackFile.getAbsolutePath());
+                    call.resolve(ret);
+                } else {
+                    call.reject("Failed to rename temp download file");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error in background download", e);
                 call.reject("Download failed: " + e.getMessage());
             }
         }).start();

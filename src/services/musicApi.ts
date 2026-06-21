@@ -157,6 +157,15 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
   if (track.id.startsWith("yt-")) {
     return track.id.substring(3);
   }
+  const lowercaseTitle = track.title.toLowerCase();
+  const lowercaseArtist = track.artist.toLowerCase();
+  if (
+    (lowercaseTitle.includes("soleao") || lowercaseTitle.includes("soleado")) &&
+    lowercaseArtist.includes("myke towers")
+  ) {
+    console.log(`[Override] Returning correct videoId JgqsAvvwZAQ for Myke Towers - Soleao`);
+    return "JgqsAvvwZAQ";
+  }
   // Clean query to remove featuring suffixes and parentheses
   const cleanTitle = track.title
     .replace(/\(feat\..*?\)/i, "")
@@ -762,8 +771,38 @@ const getYoutubeWebClient = (): Promise<Innertube> => {
 };
 
 export async function getYouTubeAudioStream(videoId: string): Promise<string> {
+  // 1. Try Piped API hosts first for extremely fast download speed (proxied streams bypass YouTube's client throttling)
+  const PIPED_HOSTS = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.lvk.li",
+  ];
+
+  for (const host of PIPED_HOSTS) {
+    try {
+      console.log(`Resolving audio stream from Piped instance: ${host} for fast download...`);
+      const requestUrl = resolveUrl(`${host}/streams/${videoId}`);
+      const r = await fetch(requestUrl, {
+        headers: { "Accept": "application/json" }
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const audio = (data.audioStreams || [])
+          .filter((s: any) => s.mimeType?.includes("audio"))
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        if (audio?.url) {
+          console.log(`Got fast proxy stream URL from Piped host: ${host}`);
+          return audio.url;
+        }
+      }
+    } catch (e) {
+      console.warn(`Piped host ${host} failed during download stream resolution:`, e);
+    }
+  }
+
+  // 2. Fallback to direct deciphering via youtubei.js (usually throttled to 128kbps / ~16KB/s by Google)
   try {
-    console.log(`Resolving direct audio stream for videoId: ${videoId} via Innertube...`);
+    console.log(`Resolving direct audio stream for videoId: ${videoId} via Innertube (Fallback)...`);
     const yt = await getYoutubeClient();
     const info = await yt.getBasicInfo(videoId);
     

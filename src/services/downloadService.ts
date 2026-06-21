@@ -1,8 +1,9 @@
 import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { Track } from './musicApi';
 
 const DOWNLOAD_DIR = 'offline_music';
+const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 
 export interface DownloadStatus {
   isDownloaded: boolean;
@@ -30,13 +31,36 @@ class DownloadService {
         recursive: true
       }).catch(() => {});
 
-      // Load existing downloads from a manifest or scan directory
-      const saved = localStorage.getItem('ibrastream_downloaded_ids');
-      if (saved) {
-        const ids = JSON.parse(saved);
-        if (Array.isArray(ids)) {
-          this.downloadedTracks = new Set(ids);
+      // Scan directory to discover completed downloads
+      try {
+        const result = await Filesystem.readdir({
+          path: DOWNLOAD_DIR,
+          directory: Directory.Data
+        });
+        const ids = result.files
+          .map(f => typeof f === 'string' ? f : f.name)
+          .filter(name => name.endsWith('.mp3'))
+          .map(name => name.replace('.mp3', ''));
+        this.downloadedTracks = new Set(ids);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(ids));
+      } catch (scanErr) {
+        const saved = localStorage.getItem('ibrastream_downloaded_ids');
+        if (saved) {
+          const ids = JSON.parse(saved);
+          if (Array.isArray(ids)) {
+            this.downloadedTracks = new Set(ids);
+          }
         }
+      }
+
+      // Add listener for native background download progress events
+      if (Capacitor.getPlatform() === 'android') {
+        Media3Session.addListener('downloadProgress', (data: { trackId: string; progress: number }) => {
+          if (this.downloadingTracks.has(data.trackId)) {
+            this.downloadingTracks.set(data.trackId, data.progress);
+            this.notifyStatusChange();
+          }
+        });
       }
     } catch (e) {
       console.error('DownloadService init failed', e);
@@ -59,16 +83,22 @@ class DownloadService {
       // 1. Resolve stream URL
       const streamUrl = await getStreamUrl(track.id);
 
-      // 2. Start download
-      const fileName = `${track.id}.mp3`;
-      const path = `${DOWNLOAD_DIR}/${fileName}`;
-
-      await Filesystem.downloadFile({
-        path,
-        url: streamUrl,
-        directory: Directory.Data,
-        progress: true
-      });
+      // 2. Start download (natively on Android, fallback to Capacitor Filesystem otherwise)
+      if (Capacitor.getPlatform() === 'android') {
+        await Media3Session.downloadTrackBackground({
+          url: streamUrl,
+          trackId: track.id
+        });
+      } else {
+        const fileName = `${track.id}.mp3`;
+        const path = `${DOWNLOAD_DIR}/${fileName}`;
+        await Filesystem.downloadFile({
+          path,
+          url: streamUrl,
+          directory: Directory.Data,
+          progress: true
+        });
+      }
 
       // 3. Mark as downloaded
       this.downloadedTracks.add(track.id);
