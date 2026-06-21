@@ -65,6 +65,8 @@ interface AudioContextType {
   sleepTimerRemaining: number | null;
   startSleepTimer: (minutes: number) => void;
   cancelSleepTimer: () => void;
+  onlyDownloaded: boolean;
+  setOnlyDownloaded: (val: boolean) => void;
 }
 
 interface AudioProgressContextType {
@@ -239,6 +241,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = localStorage.getItem("ibrastream_ambient_glow");
     return saved !== "false"; // Default to true
   });
+  const [onlyDownloaded, setOnlyDownloaded] = useState<boolean>(() => {
+    const saved = localStorage.getItem("ibrastream_only_downloaded");
+    return saved === "true"; // Default to false
+  });
   const [eqPreset, setEqPreset] = useState<"flat" | "bass" | "vocal" | "electronic">(() => {
     return (localStorage.getItem("ibrastream_eq_preset") as any) || "flat";
   });
@@ -249,6 +255,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem("ibrastream_ambient_glow", String(ambientGlowEnabled));
   }, [ambientGlowEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_only_downloaded", String(onlyDownloaded));
+    window.dispatchEvent(new Event("ibrastream_only_downloaded_changed"));
+  }, [onlyDownloaded]);
 
   useEffect(() => {
     localStorage.setItem("ibrastream_eq_preset", eqPreset);
@@ -1542,6 +1553,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sleepTimerRemaining,
     startSleepTimer,
     cancelSleepTimer,
+    onlyDownloaded,
+    setOnlyDownloaded,
   }), [
     currentTrack,
     isPlaying,
@@ -1583,6 +1596,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sleepTimerRemaining,
     startSleepTimer,
     cancelSleepTimer,
+    onlyDownloaded,
   ]);
 
   return (

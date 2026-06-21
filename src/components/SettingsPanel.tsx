@@ -13,7 +13,9 @@ export const SettingsPanel: React.FC = () => {
     sleepTimerRemaining,
     startSleepTimer,
     cancelSleepTimer,
-    showToast
+    showToast,
+    onlyDownloaded,
+    setOnlyDownloaded
   } = useAudio();
 
   const [customTimerMinutes, setCustomTimerMinutes] = useState<number>(30);
@@ -233,6 +235,26 @@ export const SettingsPanel: React.FC = () => {
                 <span className="text-[10px] text-gray-500">Tracks downloaded to phone storage.</span>
               </div>
               <span className="text-base font-extrabold text-white">{downloadCount} tracks</span>
+            </div>
+
+            {/* Only Downloaded toggle */}
+            <div className="flex justify-between items-center bg-white/5 p-3.5 rounded-2xl border border-white/5">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-bold text-white">Solo canciones descargadas</span>
+                <span className="text-[10px] text-gray-500">Filtrar listas para mostrar solo música descargada offline.</span>
+              </div>
+              <button
+                onClick={() => setOnlyDownloaded(!onlyDownloaded)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  onlyDownloaded ? "bg-green-500" : "bg-white/10"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    onlyDownloaded ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
             </div>
 
             {/* Cache count */}

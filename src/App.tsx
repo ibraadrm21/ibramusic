@@ -195,8 +195,27 @@ const MainLayout: React.FC = () => {
     playingPlaylistId,
     roomId,
     updateUserIdentity,
-    joinRoom
+    joinRoom,
+    onlyDownloaded
   } = useAudio();
+  const [downloadsUpdateTrigger, setDownloadsUpdateTrigger] = useState<number>(0);
+  useEffect(() => {
+    const handleStatusChange = () => {
+      setDownloadsUpdateTrigger(prev => prev + 1);
+    };
+    window.addEventListener("ibrastream_download_status_change", handleStatusChange);
+    window.addEventListener("ibrastream_only_downloaded_changed", handleStatusChange);
+    return () => {
+      window.removeEventListener("ibrastream_download_status_change", handleStatusChange);
+      window.removeEventListener("ibrastream_only_downloaded_changed", handleStatusChange);
+    };
+  }, []);
+
+  const filterTracks = React.useCallback((tracks: Track[]) => {
+    if (!onlyDownloaded) return tracks;
+    return tracks.filter(t => downloadService.isTrackDownloaded(t.id));
+  }, [onlyDownloaded, downloadsUpdateTrigger]);
+
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
   const [tabDirection, setTabDirection] = useState<"forward" | "backward" | "none">("none");
 
@@ -2451,7 +2470,7 @@ const MainLayout: React.FC = () => {
                         </div>
                       )}
 
-                      {artistTracks.slice(0, visibleArtistTracksCount).map((track, idx) => {
+                      {filterTracks(artistTracks).slice(0, visibleArtistTracksCount).map((track, idx) => {
                         const isChecked = selectedTrackIds.has(track.id);
                         return (
                           <div
@@ -2484,7 +2503,7 @@ const MainLayout: React.FC = () => {
                               <TrackCard
                                 track={track}
                                 variant="row"
-                                tracksQueue={artistTracks}
+                                tracksQueue={filterTracks(artistTracks)}
                                 onToggleFavorite={handleToggleFavorite}
                                 isFavorite={favorites.some((f) => f.id === track.id)}
                                 onOpenArtist={handleOpenArtist}
@@ -2664,7 +2683,7 @@ const MainLayout: React.FC = () => {
                       </div>
                     )}
 
-                    {albumTracks.map((track, idx) => {
+                    {filterTracks(albumTracks).map((track, idx) => {
                       const isChecked = selectedTrackIds.has(track.id);
                       return (
                         <div
@@ -2697,7 +2716,7 @@ const MainLayout: React.FC = () => {
                             <TrackCard
                               track={track}
                               variant="row"
-                              tracksQueue={albumTracks}
+                              tracksQueue={filterTracks(albumTracks)}
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={favorites.some((f) => f.id === track.id)}
                               onOpenArtist={handleOpenArtist}
@@ -3061,7 +3080,16 @@ const MainLayout: React.FC = () => {
                         <p className="text-xs text-gray-600 mt-1">Search for songs and click the "+" button to add them here</p>
                       </div>
                     ) : (() => {
-                      const filtered = selectedPlaylist.tracks.filter(track =>
+                      const playlistTracks = filterTracks(selectedPlaylist.tracks);
+                      if (playlistTracks.length === 0) {
+                        return (
+                          <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
+                            <p className="font-semibold text-gray-400">No hay canciones descargadas en esta lista</p>
+                            <p className="text-xs text-gray-600 mt-1">Desactiva el filtro "Solo canciones descargadas" en Ajustes para ver todas.</p>
+                          </div>
+                        );
+                      }
+                      const filtered = playlistTracks.filter(track =>
                         track.title.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
                         track.artist.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
                         (track.albumName && track.albumName.toLowerCase().includes(subSearchQuery.toLowerCase()))
@@ -3656,7 +3684,7 @@ const MainLayout: React.FC = () => {
                         )}
 
                         <div className="flex flex-col gap-3">
-                          {searchResults.map((track, idx) => {
+                          {filterTracks(searchResults).map((track, idx) => {
                             const isChecked = selectedTrackIds.has(track.id);
                             return (
                               <div
@@ -3689,7 +3717,7 @@ const MainLayout: React.FC = () => {
                                   <TrackCard
                                     track={track}
                                     variant="row"
-                                    tracksQueue={searchResults}
+                                    tracksQueue={filterTracks(searchResults)}
                                     onToggleFavorite={handleToggleFavorite}
                                     isFavorite={favorites.some((f) => f.id === track.id)}
                                     onOpenArtist={handleOpenArtist}
@@ -3701,13 +3729,13 @@ const MainLayout: React.FC = () => {
                             );
                           })}
                         </div>
-                        {searchRecommendations.length > 0 && (
+                        {filterTracks(searchRecommendations).length > 0 && (
                           <div className="mt-4 border-t border-white/5 pt-6 animate-[fadeIn_0.3s_ease]">
                             <h3 className="text-sm font-bold text-gray-400 tracking-wider uppercase mb-3 pl-1">
                               Related to your search
                             </h3>
                             <div className="flex flex-col gap-3">
-                              {searchRecommendations.map((track, idx) => {
+                              {filterTracks(searchRecommendations).map((track, idx) => {
                                 const isChecked = selectedTrackIds.has(track.id);
                                 return (
                                   <div
@@ -3950,7 +3978,16 @@ const MainLayout: React.FC = () => {
                   <p className="text-xs text-gray-600 mt-1">Click the heart icon on any song to save it here</p>
                 </div>
               ) : (() => {
-                const filtered = favorites.filter(track =>
+                const favTracks = filterTracks(favorites);
+                if (favTracks.length === 0) {
+                  return (
+                    <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
+                      <p className="font-semibold text-gray-400">No hay canciones descargadas en tus favoritos</p>
+                      <p className="text-xs text-gray-600 mt-1">Desactiva el filtro "Solo canciones descargadas" en Ajustes para ver todas.</p>
+                    </div>
+                  );
+                }
+                const filtered = favTracks.filter(track =>
                   track.title.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
                   track.artist.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
                   (track.albumName && track.albumName.toLowerCase().includes(subSearchQuery.toLowerCase()))
