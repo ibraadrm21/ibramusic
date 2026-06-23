@@ -40,6 +40,72 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
     }
 
     @Override
+    public androidx.media3.common.Timeline getCurrentTimeline() {
+        final androidx.media3.common.Timeline timeline = super.getCurrentTimeline();
+        if (timeline.isEmpty()) {
+            return timeline;
+        }
+        return new androidx.media3.common.Timeline() {
+            @Override
+            public int getWindowCount() {
+                return timeline.getWindowCount();
+            }
+
+            @Override
+            public Window getWindow(int windowIndex, Window window, long defaultPositionProjectionUs) {
+                timeline.getWindow(windowIndex, window, defaultPositionProjectionUs);
+                if (durationMs != C.TIME_UNSET && durationMs > 0) {
+                    window.durationUs = durationMs * 1000;
+                }
+                window.isSeekable = true;
+                window.isDynamic = false;
+                window.isPlaceholder = false;
+                return window;
+            }
+
+            @Override
+            public int getPeriodCount() {
+                return timeline.getPeriodCount();
+            }
+
+            @Override
+            public Period getPeriod(int periodIndex, Period period, boolean setIds) {
+                timeline.getPeriod(periodIndex, period, setIds);
+                if (durationMs != C.TIME_UNSET && durationMs > 0) {
+                    period.durationUs = durationMs * 1000;
+                }
+                period.isPlaceholder = false;
+                return period;
+            }
+
+            @Override
+            public int getIndexOfPeriod(Object uid) {
+                return timeline.getIndexOfPeriod(uid);
+            }
+
+            @Override
+            public Object getUidOfPeriod(int periodIndex) {
+                return timeline.getUidOfPeriod(periodIndex);
+            }
+        };
+    }
+
+    @Override
+    public boolean isCurrentMediaItemSeekable() {
+        return true;
+    }
+
+    @Override
+    public boolean isCurrentMediaItemLive() {
+        return false;
+    }
+
+    @Override
+    public boolean isCurrentMediaItemDynamic() {
+        return false;
+    }
+
+    @Override
     public void seekTo(int mediaItemIndex, long positionMs) {
         Log.e(TAG, "CustomPlayerWrapper: seekTo index=" + mediaItemIndex + ", positionMs=" + positionMs);
         this.positionMs = positionMs;
@@ -58,6 +124,7 @@ public class CustomPlayerWrapper extends ForwardingPlayer {
                 .add(COMMAND_SEEK_TO_PREVIOUS)
                 .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                 .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
                 .build();
     }
 

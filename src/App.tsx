@@ -3,7 +3,8 @@ import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
-  User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download
+  User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download,
+  CheckCircle2
 } from "lucide-react";
 import { AudioProvider, useAudio, useAudioProgress } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
@@ -461,6 +462,9 @@ const MainLayout: React.FC = () => {
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const isOwnPlaylist = selectedPlaylist ? playlists.some(p => p.id === selectedPlaylist.id) : false;
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
+  const [playlistPopoverCoords, setPlaylistPopoverCoords] = useState<{ x: number; y: number } | null>(null);
+  const [trackPendingNewPlaylist, setTrackPendingNewPlaylist] = useState<Track | null>(null);
+  const [playlistSearchQuery, setPlaylistSearchQuery] = useState<string>("");
   const [saveQueueMode, setSaveQueueMode] = useState<boolean>(false);
   const [downloadingPlaylistId, setDownloadingPlaylistId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
@@ -469,6 +473,24 @@ const MainLayout: React.FC = () => {
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set());
   const [showBulkPlaylistPicker, setShowBulkPlaylistPicker] = useState<boolean>(false);
   const isSelecting = selectedTrackIds.size > 0;
+
+  const handleOpenAddToPlaylist = (track: Track, e?: React.MouseEvent | any) => {
+    setTrackToAddToPlaylist(track);
+    if (e && e.currentTarget) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      setPlaylistPopoverCoords({
+        x: rect.left + rect.width / 2,
+        y: rect.top
+      });
+    } else if (e && e.clientX && e.clientY) {
+      setPlaylistPopoverCoords({
+        x: e.clientX,
+        y: e.clientY
+      });
+    } else {
+      setPlaylistPopoverCoords(null);
+    }
+  };
 
   const handleSelectTrack = (trackId: string) => {
     setSelectedTrackIds(prev => {
@@ -963,13 +985,16 @@ const MainLayout: React.FC = () => {
     const newPlaylist: Playlist = {
       id: String(Date.now()),
       name: name.trim(),
-      tracks: saveQueueMode ? [...queue] : []
+      tracks: saveQueueMode 
+        ? [...queue] 
+        : (trackPendingNewPlaylist ? [trackPendingNewPlaylist] : [])
     };
     const updated = [...playlists, newPlaylist];
     savePlaylists(updated);
     setNewPlaylistName("");
     setShowPlaylistCreateModal(false);
     setSaveQueueMode(false);
+    setTrackPendingNewPlaylist(null);
     showToast(`Created playlist "${newPlaylist.name}"`, "success");
   };
 
@@ -1167,6 +1192,27 @@ const MainLayout: React.FC = () => {
     });
     savePlaylists(updated);
     setTrackToAddToPlaylist(null);
+  };
+
+  const handleToggleTrackPlaylist = (playlistId: string, track: Track) => {
+    const updated = playlists.map(p => {
+      if (p.id === playlistId) {
+        const exists = p.tracks.some(t => t.id === track.id);
+        if (exists) {
+          showToast(`Removed "${track.title}" from "${p.name}"`, "info");
+          return { ...p, tracks: p.tracks.filter(t => t.id !== track.id) };
+        } else {
+          showToast(`Added "${track.title}" to "${p.name}"`, "success");
+          return { ...p, tracks: [...p.tracks, { ...track, dateAdded: new Date().toISOString() }] };
+        }
+      }
+      return p;
+    });
+    savePlaylists(updated);
+    if (selectedPlaylist && selectedPlaylist.id === playlistId) {
+      const updatedSel = updated.find(p => p.id === playlistId) || null;
+      setSelectedPlaylist(updatedSel);
+    }
   };
 
   const handleSort = (field: "title" | "album" | "dateAdded" | "duration") => {
@@ -2507,7 +2553,7 @@ const MainLayout: React.FC = () => {
                                 onToggleFavorite={handleToggleFavorite}
                                 isFavorite={favorites.some((f) => f.id === track.id)}
                                 onOpenArtist={handleOpenArtist}
-                                onAddToPlaylist={setTrackToAddToPlaylist}
+                                onAddToPlaylist={handleOpenAddToPlaylist}
                                 onContextMenu={(e) => handleTrackContextMenu(e, track)}
                               />
                             </div>
@@ -2720,7 +2766,7 @@ const MainLayout: React.FC = () => {
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={favorites.some((f) => f.id === track.id)}
                               onOpenArtist={handleOpenArtist}
-                              onAddToPlaylist={setTrackToAddToPlaylist}
+                              onAddToPlaylist={handleOpenAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track)}
                             />
                           </div>
@@ -3287,7 +3333,7 @@ const MainLayout: React.FC = () => {
                                       isFavorite={favorites.some((f) => f.id === track.id)}
 
                                       onOpenArtist={handleOpenArtist}
-                                      onAddToPlaylist={setTrackToAddToPlaylist}
+                                      onAddToPlaylist={handleOpenAddToPlaylist}
                                       trackIndex={idx + 1}
                                       onContextMenu={(e) => handleTrackContextMenu(e, track, selectedPlaylist?.id)}
                                       playlistId={selectedPlaylist?.id}
@@ -3550,7 +3596,7 @@ const MainLayout: React.FC = () => {
                             isFavorite={favorites.some((f) => f.id === track.id)}
 
                             onOpenArtist={handleOpenArtist}
-                            onAddToPlaylist={setTrackToAddToPlaylist}
+                            onAddToPlaylist={handleOpenAddToPlaylist}
                             onContextMenu={(e) => handleTrackContextMenu(e, track)}
                           />
                         ))}
@@ -3721,7 +3767,7 @@ const MainLayout: React.FC = () => {
                                     onToggleFavorite={handleToggleFavorite}
                                     isFavorite={favorites.some((f) => f.id === track.id)}
                                     onOpenArtist={handleOpenArtist}
-                                    onAddToPlaylist={setTrackToAddToPlaylist}
+                                    onAddToPlaylist={handleOpenAddToPlaylist}
                                     onContextMenu={(e) => handleTrackContextMenu(e, track)}
                                   />
                                 </div>
@@ -3772,7 +3818,7 @@ const MainLayout: React.FC = () => {
                                         onToggleFavorite={handleToggleFavorite}
                                         isFavorite={favorites.some((f) => f.id === track.id)}
                                         onOpenArtist={handleOpenArtist}
-                                        onAddToPlaylist={setTrackToAddToPlaylist}
+                                        onAddToPlaylist={handleOpenAddToPlaylist}
                                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                                       />
                                     </div>
@@ -4099,7 +4145,7 @@ const MainLayout: React.FC = () => {
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={true}
                               onOpenArtist={handleOpenArtist}
-                              onAddToPlaylist={setTrackToAddToPlaylist}
+                              onAddToPlaylist={handleOpenAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track, "favorites")}
                               playlistId="favorites"
                             />
@@ -4747,7 +4793,7 @@ const MainLayout: React.FC = () => {
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
                         onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                       />
                     ))}
@@ -4772,7 +4818,7 @@ const MainLayout: React.FC = () => {
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
                         onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                       />
                     ))}
@@ -4797,7 +4843,7 @@ const MainLayout: React.FC = () => {
                         isFavorite={favorites.some((f) => f.id === track.id)}
 
                         onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                       />
                     ))}
@@ -4878,7 +4924,7 @@ const MainLayout: React.FC = () => {
                         isFavorite={favorites.some((f) => f.id === track.id)}
 
                         onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                       />
                     ))}
@@ -4903,7 +4949,7 @@ const MainLayout: React.FC = () => {
                         isFavorite={favorites.some((f) => f.id === track.id)}
 
                         onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={setTrackToAddToPlaylist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
                       />
                     ))}
@@ -5389,6 +5435,7 @@ const MainLayout: React.FC = () => {
                 onClick={() => {
                   setShowPlaylistCreateModal(false);
                   setSaveQueueMode(false);
+                  setTrackPendingNewPlaylist(null);
                 }}
                 className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-all"
               >
@@ -5410,6 +5457,7 @@ const MainLayout: React.FC = () => {
                   onClick={() => {
                     setShowPlaylistCreateModal(false);
                     setSaveQueueMode(false);
+                    setTrackPendingNewPlaylist(null);
                   }}
                   className="flex-1 py-2.5 rounded-full border border-white/10 hover:bg-white/5 text-xs font-semibold text-gray-400 hover:text-white transition-all"
                 >
@@ -5428,44 +5476,179 @@ const MainLayout: React.FC = () => {
 
         {/* Add Track to Playlist Selector Modal */}
         {trackToAddToPlaylist && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-[fadeIn_0.2s_ease]">
-            <div className="bg-brand-darkBg border border-white/10 rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-2xl relative">
+          <>
+            {/* Backdrop for click outside */}
+            <div
+              className="fixed inset-0 z-[99] bg-black/60 md:bg-transparent backdrop-blur-[2px] md:backdrop-blur-none"
+              onClick={() => {
+                setTrackToAddToPlaylist(null);
+                setPlaylistPopoverCoords(null);
+                setPlaylistSearchQuery("");
+              }}
+            />
+
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={
+                playlistPopoverCoords && window.innerWidth >= 768
+                  ? (() => {
+                      const width = 320; // md:w-80 is 320px
+                      const viewportWidth = window.innerWidth;
+                      const left = playlistPopoverCoords.x;
+                      const top = playlistPopoverCoords.y - 12;
+                      let adjustedLeft = left - width / 2;
+                      if (adjustedLeft < 16) {
+                        adjustedLeft = 16;
+                      } else if (adjustedLeft + width > viewportWidth - 16) {
+                        adjustedLeft = viewportWidth - width - 16;
+                      }
+                      return {
+                        position: "fixed",
+                        left: `${adjustedLeft}px`,
+                        top: `${top}px`,
+                        transform: "translateY(-100%)",
+                        width: `${width}px`,
+                      };
+                    })()
+                  : undefined
+              }
+              className={`fixed z-[100] animate-[fadeIn_0.2s_ease] ${
+                playlistPopoverCoords && window.innerWidth >= 768
+                  ? ""
+                  : "inset-0 md:bottom-28 md:left-6 md:top-auto md:right-auto md:w-80 max-md:bg-black/80 max-md:backdrop-blur-sm max-md:flex max-md:items-center max-md:justify-center"
+              }`}
+            >
+              <div className="bg-[#181818] border border-white/10 rounded-3xl p-5 w-full max-w-sm md:max-w-none flex flex-col gap-4 shadow-2xl relative">
               <button
-                onClick={() => setTrackToAddToPlaylist(null)}
+                onClick={() => {
+                  setTrackToAddToPlaylist(null);
+                  setPlaylistSearchQuery("");
+                }}
                 className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-all"
               >
                 <X className="w-4 h-4" />
               </button>
-              <h3 className="text-lg font-bold text-white truncate pr-6">Add to Playlist</h3>
-              <p className="text-xs text-gray-400 truncate">Select playlist for "{trackToAddToPlaylist.title}"</p>
+              
+              <h3 className="text-sm font-bold text-white pr-6 text-left">Add to playlist</h3>
 
-              <div className="flex flex-col gap-2 max-h-[30vh] overflow-y-auto pr-1">
-                {playlists.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-4 text-center">No playlists created yet.</p>
-                ) : (
-                  playlists.map((playlist) => (
-                    <button
-                      key={playlist.id}
-                      onClick={() => handleAddTrackToPlaylist(playlist.id, trackToAddToPlaylist)}
-                      className="w-full text-left p-3 rounded-2xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all text-sm font-semibold text-white flex items-center justify-between"
-                    >
-                      <span>{playlist.name}</span>
-                      <span className="text-[10px] text-gray-500 font-normal">{playlist.tracks.length} Songs</span>
-                    </button>
-                  ))
-                )}
+              {/* Search playlist */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+                <input
+                  type="text"
+                  placeholder="Find a playlist"
+                  value={playlistSearchQuery}
+                  onChange={(e) => setPlaylistSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 rounded-xl bg-white/5 border border-white/5 focus:border-brand-accent/50 text-white text-xs placeholder:text-gray-500 focus:outline-none transition-all"
+                />
               </div>
 
+              {/* Create new playlist inside modal */}
               <button
                 onClick={() => {
+                  setTrackPendingNewPlaylist(trackToAddToPlaylist);
+                  setTrackToAddToPlaylist(null);
+                  setPlaylistSearchQuery("");
+                  setNewPlaylistName("");
                   setShowPlaylistCreateModal(true);
                 }}
-                className="w-full py-2.5 rounded-full border border-dashed border-white/15 hover:border-white/40 text-xs font-semibold text-gray-400 hover:text-white transition-all mt-2"
+                className="flex items-center gap-2 px-1 text-xs font-bold text-gray-300 hover:text-white transition-all text-left"
               >
-                + Create New Playlist
+                <Plus className="w-4 h-4 text-gray-400" />
+                New playlist
               </button>
+
+              {/* List of playlists */}
+              <div className="flex flex-col gap-3 max-h-[35vh] overflow-y-auto pr-1">
+                {playlists.length === 0 ? (
+                  <p className="text-xs text-gray-500 py-4 text-center">No playlists created yet.</p>
+                ) : (() => {
+                  const filtered = playlists.filter(p => p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()));
+                  const savedIn = filtered.filter(p => p.tracks.some(t => t.id === trackToAddToPlaylist.id));
+                  const others = filtered.filter(p => !p.tracks.some(t => t.id === trackToAddToPlaylist.id));
+
+                  if (filtered.length === 0) {
+                    return <p className="text-xs text-gray-500 py-4 text-center">No playlists found.</p>;
+                  }
+
+                  return (
+                    <>
+                      {savedIn.length > 0 && (
+                        <div className="flex flex-col gap-2">
+                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">Saved In</span>
+                          {savedIn.map(playlist => (
+                            <button
+                              key={playlist.id}
+                              onClick={() => handleToggleTrackPlaylist(playlist.id, trackToAddToPlaylist)}
+                              className="w-full text-left p-1.5 rounded-xl hover:bg-white/5 transition-all text-xs font-semibold text-white flex items-center justify-between group"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                                  {playlist.coverUrl || playlist.tracks?.[0]?.thumbnail ? (
+                                    <img src={playlist.coverUrl || playlist.tracks?.[0]?.thumbnail} className="w-full h-full object-cover" />
+                                  ) : (
+                                    <Music2 className="w-4 h-4 text-gray-500" />
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-white text-xs font-bold">{playlist.name}</p>
+                                  <p className="text-[10px] text-gray-400 mt-0.5">{playlist.tracks.length} songs</p>
+                                </div>
+                              </div>
+                              <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 fill-emerald-500/20 shrink-0 ml-2" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {others.length > 0 && (
+                        <div className="flex flex-col gap-2">
+                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">Recently updated</span>
+                          {others.map(playlist => (
+                            <button
+                              key={playlist.id}
+                              onClick={() => handleToggleTrackPlaylist(playlist.id, trackToAddToPlaylist)}
+                              className="w-full text-left p-1.5 rounded-xl hover:bg-white/5 transition-all text-xs font-semibold text-white flex items-center justify-between group"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                                  {playlist.coverUrl || playlist.tracks?.[0]?.thumbnail ? (
+                                    <img src={playlist.coverUrl || playlist.tracks?.[0]?.thumbnail} className="w-full h-full object-cover" />
+                                  ) : (
+                                    <Music2 className="w-4 h-4 text-gray-500" />
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-white text-xs font-bold">{playlist.name}</p>
+                                  <p className="text-[10px] text-gray-400 mt-0.5">{playlist.tracks.length} songs</p>
+                                </div>
+                              </div>
+                              <div className="w-4.5 h-4.5 rounded-full border border-gray-600 group-hover:border-white transition-colors shrink-0 ml-2" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Bottom Cancel button */}
+              <div className="flex justify-end border-t border-white/5 pt-3">
+                <button
+                  onClick={() => {
+                    setTrackToAddToPlaylist(null);
+                    setPlaylistSearchQuery("");
+                  }}
+                  className="px-4 py-1.5 rounded-full hover:bg-white/5 text-xs font-bold text-gray-400 hover:text-white transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+
             </div>
           </div>
+          </>
         )}
 
         {/* Spotify Playlist Import Modal */}
@@ -5906,6 +6089,8 @@ const MainLayout: React.FC = () => {
         handleOpenArtist={handleOpenArtist}
         showQueueOverlay={showQueueOverlay}
         setShowQueueOverlay={setShowQueueOverlay}
+        playlists={playlists}
+        onAddToPlaylist={handleOpenAddToPlaylist}
       />
 
       {contextMenu && (
@@ -6062,6 +6247,8 @@ interface DesktopPlaybackBarProps {
   handleOpenArtist: (artist: Artist) => void;
   showQueueOverlay: boolean;
   setShowQueueOverlay: React.Dispatch<React.SetStateAction<boolean>>;
+  playlists: Playlist[];
+  onAddToPlaylist: (track: Track, e: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
@@ -6070,7 +6257,9 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
   handleOpenAlbum,
   handleOpenArtist,
   showQueueOverlay,
-  setShowQueueOverlay
+  setShowQueueOverlay,
+  playlists,
+  onAddToPlaylist
 }) => {
   const {
     currentTrack,
@@ -6106,16 +6295,29 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
           className="w-14 h-14 rounded-lg object-cover shadow-md"
         />
         <div className="min-w-0 flex-1">
-          <h4
-            onClick={() => {
-              if (handleOpenAlbum && currentTrack.albumId) {
-                handleOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-              }
-            }}
-            className="text-sm font-semibold text-white truncate hover:underline cursor-pointer"
-          >
-            {currentTrack.title}
-          </h4>
+          <div className="flex items-center gap-2">
+            <h4
+              onClick={() => {
+                if (handleOpenAlbum && currentTrack.albumId) {
+                  handleOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
+                }
+              }}
+              className="text-sm font-semibold text-white truncate hover:underline cursor-pointer"
+            >
+              {currentTrack.title}
+            </h4>
+            <button
+              onClick={(e) => onAddToPlaylist(currentTrack, e)}
+              className={`shrink-0 hover:bg-white/5 transition-all rounded-full p-0.5 ${
+                playlists.some(p => p.tracks.some(t => t.id === currentTrack.id))
+                  ? "text-emerald-500"
+                  : "text-gray-400 hover:text-white"
+              }`}
+              title="Add to playlist"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
           <div className="text-xs text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
             {currentTrack.artists && currentTrack.artists.length > 0 ? (
               currentTrack.artists.map((art, i) => (

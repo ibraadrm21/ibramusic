@@ -83,6 +83,27 @@ class DownloadService {
       // 1. Resolve stream URL
       const streamUrl = await getStreamUrl(track.id);
 
+      if (Capacitor.getPlatform() === 'android') {
+        console.log(`[Downloader] Starting native Android background download for: ${track.id}`);
+        await Media3Session.downloadTrackBackground({
+          url: streamUrl,
+          trackId: track.id
+        });
+        
+        // Mark as downloaded
+        this.downloadedTracks.add(track.id);
+        this.downloadingTracks.delete(track.id);
+
+        // Save manifest
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+
+        // Save track metadata for offline mode
+        localStorage.setItem(`ibrastream_meta_${track.id}`, JSON.stringify(track));
+
+        this.notifyStatusChange();
+        return;
+      }
+
       const fileName = `${track.id}.mp3`;
       const path = `${DOWNLOAD_DIR}/${fileName}`;
       const tempPath = `${path}.tmp`;

@@ -10,7 +10,7 @@ interface TrackCardProps {
   onToggleFavorite?: (track: Track) => void;
   isFavorite?: boolean;
   onOpenArtist?: (artist: any) => void;
-  onAddToPlaylist?: (track: Track) => void;
+  onAddToPlaylist?: (track: Track, e: React.MouseEvent<HTMLButtonElement>) => void;
   trackIndex?: number;
   onContextMenu?: (e: React.MouseEvent, track: Track) => void;
   playlistId?: string;
@@ -297,7 +297,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
         {/* Add to Playlist Button */}
         {onAddToPlaylist && (
           <button
-            onClick={() => onAddToPlaylist(track)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddToPlaylist(track, e);
+            }}
             className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors shrink-0"
             title="Add to playlist"
           >

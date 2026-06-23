@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import type { Track } from "../services/musicApi";
-import { getYouTubeVideoId } from "../services/musicApi";
+import { getYouTubeVideoId, fetchNative } from "../services/musicApi";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { supabase } from "../services/supabaseClient";
@@ -15,6 +15,85 @@ declare global {
 
 const isAndroid = Capacitor.getPlatform() === "android";
 const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
+
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage = "Request timed out"): Promise<T> {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
+async function validateStreamUrl(url: string, ms = 2500, signal?: AbortSignal): Promise<boolean> {
+  // 1. Try standard browser fetch (with GET + Range: bytes=0-0) first because it's CORS-safe for Piped/Cobalt and DOES NOT download the body unless we call .text()/.json()
+  try {
+    const res = await withTimeout(
+      fetch(url, {
+        method: "GET",
+        headers: { "Range": "bytes=0-0" },
+        signal
+      }),
+      ms,
+      "Browser validation timed out"
+    );
+    if (res.status === 200 || res.status === 206) {
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn("Standard fetch validation failed/timed out, trying native HEAD...", e);
+  }
+
+  // 2. Try native HEAD request via CapacitorHttp (bypasses CORS, does not download body)
+  try {
+    const res = await withTimeout(
+      fetchNative(url, {
+        method: "HEAD",
+        timeout: ms - 500
+      }),
+      ms,
+      "Native HEAD validation timed out"
+    );
+    if (res.status === 200 || res.status === 204 || res.status === 206) {
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn("Native HEAD validation failed/timed out, trying native GET with Range...", e);
+  }
+
+  // 3. Fallback to native GET request with Range, but only as last resort
+  try {
+    const res = await withTimeout(
+      fetchNative(url, {
+        method: "GET",
+        timeout: ms - 500,
+        headers: { "Range": "bytes=0-0" }
+      }),
+      ms,
+      "Native GET validation timed out"
+    );
+    if (res.status === 200 || res.status === 206) {
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn("All validation methods failed", e);
+  }
+
+  return false;
+}
+
 
 // Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
 const resolutionCache = new Map<string, { videoId: string; streamUrl?: string; timestamp: number }>();
@@ -635,6 +714,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsPlaying(false);
     setIsLoading(true);
 
+    // Stop current playing song immediately so user hears silence while loading next song
+    if (isAndroid) {
+      Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
+    } else if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === "function") {
+      try { ytPlayerRef.current.pauseVideo(); } catch {}
+    }
+
     // 1. Check for Offline Local File first
     if (isAndroid) {
       const localUri = await downloadService.getLocalUri(track.id);
@@ -668,7 +754,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         videoId = cached.videoId;
         if (isAndroid) {
           if (cached.streamUrl) {
-            streamUrl = cached.streamUrl;
+            const isCachedValid = await validateStreamUrl(cached.streamUrl, 2500, abortController.signal);
+            if (isCachedValid) {
+              streamUrl = cached.streamUrl;
+            } else {
+              console.log("Cached streamUrl is invalid or hung. Re-resolving stream URL...");
+              cached.streamUrl = undefined;
+              streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+              if (abortController.signal.aborted) return;
+              cached.streamUrl = streamUrl;
+            }
           } else {
             streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
             if (abortController.signal.aborted) return;
@@ -747,44 +842,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const { getYouTubeAudioStream } = await import("../services/musicApi");
       const url = await getYouTubeAudioStream(videoId);
       if (url) {
-        console.log("Successfully got stream URL via youtubei.js on Android, validating accessibility...");
-        const validateResponse = await fetch(url, { method: "HEAD", signal });
-        if (validateResponse.status === 403) {
-          throw new Error("Validation returned 403 Forbidden");
+        console.log("Successfully got stream URL via youtubei.js on Android, validating accessibility natively...");
+        const isValid = await validateStreamUrl(url, 2500, signal);
+        if (isValid) {
+          console.log(`Stream URL validated successfully`);
+          return url;
+        } else {
+          throw new Error("Validation returned invalid response or hung");
         }
-        console.log(`Stream URL validated successfully: status ${validateResponse.status}`);
-        return url;
       }
     } catch (e) {
-      console.warn("youtubei.js stream resolution or validation failed on Android, falling back to Piped:", e);
-    }
-
-    const PIPED_HOSTS = [
-      "https://pipedapi.kavin.rocks",
-      "https://api.piped.private.coffee",
-      "https://pipedapi.lvk.li",
-    ];
-
-    for (const host of PIPED_HOSTS) {
-      try {
-        const r = await fetch(`${host}/streams/${videoId}`, {
-          signal,
-          headers: { "Accept": "application/json" }
-        });
-        if (!r.ok) continue;
-        const data = await r.json();
-        // Pick best audio stream
-        const audio = (data.audioStreams || [])
-          .filter((s: any) => s.mimeType?.includes("audio"))
-          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        if (audio?.url) {
-          console.log(`Got Android stream URL from ${host}`);
-          return audio.url;
-        }
-      } catch (e: any) {
-        if (e?.name === "AbortError") throw e;
-        console.warn(`Piped ${host} failed for Android:`, e);
-      }
+      console.warn("youtubei.js/Cobalt stream resolution or validation failed on Android:", e);
     }
 
     throw new Error("Failed to get playback stream URL.");
@@ -793,24 +861,29 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
     if (!track) return;
     
-    // Check if already in cache
     const cached = resolutionCache.get(track.id);
     if (cached && cached.videoId && cached.streamUrl) {
       if (isAndroid) {
         try {
-          await Media3Session.setNextMetadata({
-            title: track.title,
-            artist: track.artist,
-            artwork: track.thumbnail,
-            duration: track.duration,
-            streamUrl: cached.streamUrl,
-            mediaId: track.id
-          });
+          const isValid = await validateStreamUrl(cached.streamUrl, 2500, signal);
+          if (isValid) {
+            await Media3Session.setNextMetadata({
+              title: track.title,
+              artist: track.artist,
+              artwork: track.thumbnail,
+              duration: track.duration,
+              streamUrl: cached.streamUrl,
+              mediaId: track.id
+            });
+            return;
+          }
+          cached.streamUrl = undefined;
         } catch (e) {
-          console.warn("Failed to set native next metadata:", e);
+          cached.streamUrl = undefined;
         }
+      } else {
+        return;
       }
-      return;
     }
 
     try {

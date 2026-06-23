@@ -48,12 +48,60 @@ public class PlaybackService extends MediaSessionService {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build();
 
-        androidx.media3.datasource.DefaultHttpDataSource.Factory httpDataSourceFactory = 
-            new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                .setUserAgent("com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)");
-        
-        androidx.media3.datasource.DefaultDataSource.Factory dataSourceFactory = 
-            new androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory);
+        androidx.media3.datasource.DataSource.Factory dataSourceFactory = new androidx.media3.datasource.DataSource.Factory() {
+            private final androidx.media3.datasource.DefaultHttpDataSource.Factory ytHttpFactory = 
+                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                    .setUserAgent("com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)")
+                    .setAllowCrossProtocolRedirects(true);
+            
+            private final androidx.media3.datasource.DefaultHttpDataSource.Factory defaultHttpFactory = 
+                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                    .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .setAllowCrossProtocolRedirects(true);
+
+            @Override
+            public androidx.media3.datasource.DataSource createDataSource() {
+                return new androidx.media3.datasource.DataSource() {
+                    private androidx.media3.datasource.DataSource activeDataSource = null;
+
+                    @Override
+                    public void addTransferListener(androidx.media3.datasource.TransferListener transferListener) {
+                    }
+
+                    @Override
+                    public long open(androidx.media3.datasource.DataSpec dataSpec) throws java.io.IOException {
+                        String uriString = dataSpec.uri.toString();
+                        if (uriString.contains("googlevideo.com")) {
+                            Log.e("IbraStreamService", "Using YouTube iOS User-Agent for: " + uriString);
+                            activeDataSource = new androidx.media3.datasource.DefaultDataSource(PlaybackService.this, ytHttpFactory.createDataSource());
+                        } else {
+                            Log.e("IbraStreamService", "Using default Browser User-Agent for: " + uriString);
+                            activeDataSource = new androidx.media3.datasource.DefaultDataSource(PlaybackService.this, defaultHttpFactory.createDataSource());
+                        }
+                        return activeDataSource.open(dataSpec);
+                    }
+
+                    @Override
+                    public int read(byte[] buffer, int offset, int length) throws java.io.IOException {
+                        return activeDataSource != null ? activeDataSource.read(buffer, offset, length) : 0;
+                    }
+
+                    @Override
+                    @Nullable
+                    public android.net.Uri getUri() {
+                        return activeDataSource != null ? activeDataSource.getUri() : null;
+                    }
+
+                    @Override
+                    public void close() throws java.io.IOException {
+                        if (activeDataSource != null) {
+                            activeDataSource.close();
+                            activeDataSource = null;
+                        }
+                    }
+                };
+            }
+        };
         
         androidx.media3.exoplayer.source.DefaultMediaSourceFactory mediaSourceFactory = 
             new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
@@ -113,6 +161,7 @@ public class PlaybackService extends MediaSessionService {
                                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
                                 .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                                 .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
                                 .build();
                         return new MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                                 .setAvailableSessionCommands(sessionCommands)

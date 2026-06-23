@@ -754,70 +754,10 @@ async function getHealthyCobaltHosts(): Promise<string[]> {
   ];
 }
 
-let cachedPipedHosts: string[] = [];
-let lastPipedFetchTime = 0;
 
-async function getHealthyPipedHosts(): Promise<string[]> {
-  const now = Date.now();
-  if (cachedPipedHosts.length > 0 && (now - lastPipedFetchTime < 1000 * 60 * 15)) {
-    return cachedPipedHosts;
-  }
-  try {
-    const res = await fetchNative("https://piped-instances.kavin.rocks");
-    if (res.ok) {
-      const data = await res.json();
-      const healthy = data
-        .filter((inst: any) => inst.uptime_24h > 90 && (inst.api_url || inst.api))
-        .map((inst: any) => (inst.api_url || inst.api).replace(/\/$/, ""));
-      if (healthy.length > 0) {
-        cachedPipedHosts = healthy;
-        lastPipedFetchTime = now;
-        return healthy;
-      }
-    }
-  } catch (e) {
-    console.warn("Failed to fetch dynamic Piped instances list:", e);
-  }
-  return [
-    "https://api.piped.private.coffee",
-    "https://pipedapi.lvk.li",
-    "https://pipedapi.kavin.rocks"
-  ];
-}
-
-let cachedInvidiousHosts: string[] = [];
-let lastInvidiousFetchTime = 0;
-
-async function getHealthyInvidiousHosts(): Promise<string[]> {
-  const now = Date.now();
-  if (cachedInvidiousHosts.length > 0 && (now - lastInvidiousFetchTime < 1000 * 60 * 15)) {
-    return cachedInvidiousHosts;
-  }
-  try {
-    const res = await fetchNative("https://api.invidious.io/instances.json?sort_by=type,health");
-    if (res.ok) {
-      const data = await res.json();
-      const healthy = data
-        .filter((item: any) => item[1] && item[1].type === "https" && item[1].monitor && item[1].monitor.uptime > 0.90)
-        .map((item: any) => `https://${item[0]}`);
-      if (healthy.length > 0) {
-        cachedInvidiousHosts = healthy;
-        lastInvidiousFetchTime = now;
-        return healthy;
-      }
-    }
-  } catch (e) {
-    console.warn("Failed to fetch dynamic Invidious instances list:", e);
-  }
-  return [
-    "https://invidious.privacydev.net",
-    "https://inv.thepixora.com",
-    "https://invidious.f5.si"
-  ];
-}
 
 // Helper to perform native-first requests to bypass CORS and auto-patching issues on Android
-async function fetchNative(url: string, options: any = {}) {
+export async function fetchNative(url: string, options: any = {}) {
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
   if (isNative) {
     const { CapacitorHttp } = await import('@capacitor/core');
@@ -828,12 +768,15 @@ async function fetchNative(url: string, options: any = {}) {
         dataPayload = JSON.parse(options.body);
       } catch (e) {}
     }
+    const timeout = options.timeout || 4000;
     const response = await CapacitorHttp.request({
       url,
       method: options.method || 'GET',
       headers,
       data: dataPayload,
-      responseType: 'text'
+      responseType: 'text',
+      connectTimeout: timeout,
+      readTimeout: timeout
     });
     const responseHeaders = new Headers();
     if (response.headers) {
@@ -851,6 +794,18 @@ async function fetchNative(url: string, options: any = {}) {
     Object.defineProperty(res, 'url', { value: url });
     return res;
   } else {
+    if (options.timeout) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), options.timeout);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return res;
+      } catch (err) {
+        clearTimeout(id);
+        throw err;
+      }
+    }
     return fetch(url, options);
   }
 }
@@ -927,7 +882,22 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
 }
 
 export async function getYouTubeAudioStream(videoId: string): Promise<string> {
-  // 0. Try Cobalt APIs first for high-performance direct audio stream URLs
+  // 1. Try resolving direct YouTube stream via Innertube first
+  try {
+    console.log("Resolving direct YouTube stream URL via Innertube...");
+    const yt = await getYoutubeClient();
+    const info = await yt.getInfo(videoId);
+    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+    const streamUrl = format?.decipher((yt.session as any).actions?.session?.signature_timestamp) || format?.url;
+    if (streamUrl) {
+      console.log("Successfully resolved direct Innertube stream URL.");
+      return streamUrl;
+    }
+  } catch (e) {
+    console.warn("Direct Innertube resolution failed:", e);
+  }
+
+  // 2. Fallback to Cobalt API which gets the stream via direct YouTube URL
   let cobaltEndpoints: string[] = [];
   try {
     cobaltEndpoints = await getHealthyCobaltHosts();
@@ -961,32 +931,43 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
             'Referer': 'https://cobalt.tools/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           },
-          data: JSON.stringify({
+          connectTimeout: 3000,
+          readTimeout: 3000,
+          data: {
             url: `https://www.youtube.com/watch?v=${videoId}`,
             downloadMode: 'audio',
             audioFormat: 'mp3'
-          })
+          }
         });
         if (response.status === 200 && response.data) {
           responseData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
         }
       } else {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://cobalt.tools',
-            'Referer': 'https://cobalt.tools/'
-          },
-          body: JSON.stringify({
-            url: `https://www.youtube.com/watch?v=${videoId}`,
-            downloadMode: 'audio',
-            audioFormat: 'mp3'
-          })
-        });
-        if (response.ok) {
-          responseData = await response.json();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            signal: controller.signal,
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'Origin': 'https://cobalt.tools',
+              'Referer': 'https://cobalt.tools/'
+            },
+            body: JSON.stringify({
+              url: `https://www.youtube.com/watch?v=${videoId}`,
+              downloadMode: 'audio',
+              audioFormat: 'mp3'
+            })
+          });
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            responseData = await response.json();
+          }
+        } catch (err) {
+          clearTimeout(timeoutId);
+          throw err;
         }
       }
 
@@ -997,70 +978,6 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
     } catch (err) {
       console.warn(`[Downloader] Cobalt endpoint ${endpoint} failed:`, err);
     }
-  }
-
-  // 1. Try Piped API hosts first for extremely fast download speed
-  try {
-    const pipedHosts = await getHealthyPipedHosts();
-    for (const host of pipedHosts.slice(0, 5)) {
-      try {
-        console.log(`Resolving audio stream from Piped instance: ${host}...`);
-        const requestUrl = `${host}/streams/${videoId}`;
-        const r = await fetchNative(requestUrl, {
-          headers: { 
-            "Accept": "application/json",
-            "Referer": "https://piped.video/",
-            "Origin": "https://piped.video"
-          }
-        });
-        if (r.ok) {
-          const data = await r.json();
-          const audio = (data.audioStreams || [])
-            .filter((s: any) => s.mimeType?.includes("audio"))
-            .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-          if (audio?.url) {
-            console.log(`Got stream URL from Piped host: ${host}`);
-            return audio.url;
-          }
-        }
-      } catch (e) {
-        console.warn(`Piped host ${host} failed during stream resolution:`, e);
-      }
-    }
-  } catch (err) {
-    console.warn("Piped stream resolution failure:", err);
-  }
-
-  // 2. Try Invidious API hosts for proxy stream URLs
-  try {
-    const invidiousHosts = await getHealthyInvidiousHosts();
-    for (const host of invidiousHosts.slice(0, 5)) {
-      try {
-        console.log(`Resolving audio stream from Invidious instance: ${host}...`);
-        const r = await fetchNative(`${host}/api/v1/videos/${videoId}`);
-        if (r.ok) {
-          const data = await r.json();
-          const adaptiveFormats = data.adaptiveFormats || [];
-          const audioStreams = adaptiveFormats.filter((f: any) => f.type?.includes("audio"));
-          if (audioStreams.length > 0) {
-            audioStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
-            let streamUrl = audioStreams[0].url;
-            if (!streamUrl.includes("local=true")) {
-              streamUrl += streamUrl.includes("?") ? "&local=true" : "?local=true";
-            }
-            if (streamUrl.startsWith("/")) {
-              streamUrl = host + streamUrl;
-            }
-            console.log(`Got stream URL from Invidious host: ${host}`);
-            return streamUrl;
-          }
-        }
-      } catch (e) {
-        console.warn(`Invidious host ${host} failed during stream resolution:`, e);
-      }
-    }
-  } catch (err) {
-    console.warn("Invidious stream resolution failure:", err);
   }
 
   throw new Error("Failed to retrieve audio stream URL.");
