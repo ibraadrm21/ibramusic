@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
 import type { Track } from "../services/musicApi";
 import { getYouTubeVideoId, fetchNative } from "../services/musicApi";
 import { Capacitor, registerPlugin } from "@capacitor/core";
@@ -29,6 +29,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage = "Request
 }
 
 async function validateStreamUrl(url: string, ms = 2500, signal?: AbortSignal): Promise<boolean> {
+  if (isAndroid) {
+    return true;
+  }
   // 1. Try standard browser fetch (with GET + Range: bytes=0-0) first because it's CORS-safe for Piped/Cobalt and DOES NOT download the body unless we call .text()/.json()
   try {
     const res = await withTimeout(
@@ -126,6 +129,11 @@ interface AudioContextType {
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   toast: { message: string; type: "info" | "success" | "error" } | null;
   showToast: (message: string, type?: "info" | "success" | "error") => void;
+  userQueue: Track[];
+  playlistQueue: Track[];
+  playlistIndex: number;
+  currentTrackSource: 'playlist' | 'user_queue' | null;
+  history: Track[];
   // Listen Together
   roomId: string | null;
   isHost: boolean;
@@ -184,18 +192,47 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = localStorage.getItem("ibrastream_is_muted");
     return saved === "true";
   });
-  const [queue, setQueue] = useState<Track[]>(() => {
-    const saved = localStorage.getItem("ibrastream_queue");
+  const [userQueue, setUserQueue] = useState<Track[]>(() => {
+    const saved = localStorage.getItem("ibrastream_user_queue");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
-  const [originalQueue, setOriginalQueue] = useState<Track[]>(() => {
-    const saved = localStorage.getItem("ibrastream_original_queue");
+  const [playlistQueue, setPlaylistQueue] = useState<Track[]>(() => {
+    const saved = localStorage.getItem("ibrastream_playlist_queue");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
-  const [currentIndex, setCurrentIndex] = useState<number>(() => {
-    const saved = localStorage.getItem("ibrastream_current_index");
+  const [originalPlaylistQueue, setOriginalPlaylistQueue] = useState<Track[]>(() => {
+    const saved = localStorage.getItem("ibrastream_original_playlist_queue");
+    try { return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+  const [playlistIndex, setPlaylistIndex] = useState<number>(() => {
+    const saved = localStorage.getItem("ibrastream_playlist_index");
     return saved ? parseInt(saved, 10) : -1;
   });
+  const [history, setHistory] = useState<Track[]>(() => {
+    const saved = localStorage.getItem("ibrastream_history");
+    try { return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+  const [currentTrackSource, setCurrentTrackSource] = useState<'playlist' | 'user_queue' | null>(() => {
+    return (localStorage.getItem("ibrastream_current_track_source") as any) || null;
+  });
+
+  const queue = useMemo(() => {
+    const q: Track[] = [];
+    q.push(...history);
+    if (currentTrack) {
+      q.push(currentTrack);
+    }
+    q.push(...userQueue);
+    const startIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+    if (startIdx >= 0 && startIdx < playlistQueue.length) {
+      q.push(...playlistQueue.slice(startIdx));
+    }
+    return q;
+  }, [history, currentTrack, userQueue, playlistQueue, playlistIndex, currentTrackSource]);
+
+  const currentIndex = useMemo(() => {
+    return currentTrack ? history.length : -1;
+  }, [currentTrack, history]);
   const [isShuffle, setIsShuffle] = useState<boolean>(() => {
     const saved = localStorage.getItem("ibrastream_is_shuffle");
     return saved === "true";
@@ -286,14 +323,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Persist queue and playing track state
   useEffect(() => {
     localStorage.setItem("ibrastream_queue", JSON.stringify(queue));
-    localStorage.setItem("ibrastream_original_queue", JSON.stringify(originalQueue));
     localStorage.setItem("ibrastream_current_index", String(currentIndex));
+    localStorage.setItem("ibrastream_user_queue", JSON.stringify(userQueue));
+    localStorage.setItem("ibrastream_playlist_queue", JSON.stringify(playlistQueue));
+    localStorage.setItem("ibrastream_original_playlist_queue", JSON.stringify(originalPlaylistQueue));
+    localStorage.setItem("ibrastream_playlist_index", String(playlistIndex));
+    localStorage.setItem("ibrastream_history", JSON.stringify(history));
+    if (currentTrackSource) {
+      localStorage.setItem("ibrastream_current_track_source", currentTrackSource);
+    } else {
+      localStorage.removeItem("ibrastream_current_track_source");
+    }
     if (currentTrack) {
       localStorage.setItem("ibrastream_current_track", JSON.stringify(currentTrack));
     } else {
       localStorage.removeItem("ibrastream_current_track");
     }
-  }, [queue, originalQueue, currentIndex, currentTrack]);
+  }, [queue, currentIndex, currentTrack, userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, history, currentTrackSource]);
 
   // Trigger pre-resolution of the next song in the queue
   useEffect(() => {
@@ -668,30 +714,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (!isRemoteSync) {
       if (newQueue) {
-        setOriginalQueue(newQueue);
+        setOriginalPlaylistQueue(newQueue);
+        if (currentTrack) {
+          setHistory(prev => [...prev, currentTrack]);
+        }
         if (isShuffle) {
           const otherTracks = newQueue.filter(t => t.id !== track.id);
           const shuffled = [track, ...shuffleArray(otherTracks)];
-          setQueue(shuffled);
-          setCurrentIndex(0);
+          setPlaylistQueue(shuffled);
+          setPlaylistIndex(0);
         } else {
-          setQueue(newQueue);
+          setPlaylistQueue(newQueue);
           const index = newQueue.findIndex(t => t.id === track.id);
-          setCurrentIndex(index !== -1 ? index : 0);
+          setPlaylistIndex(index !== -1 ? index : 0);
         }
+        setCurrentTrackSource('playlist');
       } else {
-        // Use queueRef.current (always fresh) instead of stale 'queue' state
-        const currentQ = queueRef.current;
-        const index = currentQ.findIndex(t => t.id === track.id);
-        if (index !== -1) {
-          setCurrentIndex(index);
+        if (currentTrack && currentTrack.id === track.id) {
+          // Same track, do nothing
         } else {
-          // Track not in queue at all — add it
-          const updatedQueue = [...currentQ, track];
-          setQueue(updatedQueue);
-          queueRef.current = updatedQueue;
-          setOriginalQueue(prev => [...prev, track]);
-          setCurrentIndex(updatedQueue.length - 1);
+          if (currentTrack) {
+            setHistory(prev => [...prev, currentTrack]);
+          }
+          const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
+          if (userQueueIdx !== -1) {
+            setUserQueue(prev => prev.slice(userQueueIdx + 1));
+            setCurrentTrackSource('user_queue');
+          } else {
+            const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
+            if (playlistIdx !== -1) {
+              setPlaylistIndex(playlistIdx);
+              setCurrentTrackSource('playlist');
+            } else {
+              setPlaylistQueue([track]);
+              setPlaylistIndex(0);
+              setCurrentTrackSource('playlist');
+            }
+          }
         }
       }
     }
@@ -741,7 +800,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Broadcast immediately if host
     if (roomIdRef.current && isHostRef.current) {
-      broadcastState(0, true, track);
+      broadcastState(0, true, track, true);
     }
 
     try {
@@ -960,7 +1019,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsPlaying(nextState);
 
     if (roomIdRef.current && isHostRef.current) {
-      broadcastState(undefined, nextState, currentTrackRef.current);
+      broadcastState(undefined, nextState, currentTrackRef.current, true);
     }
   };
 
@@ -969,22 +1028,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    const q = queueRef.current;
-    const idx = currentIndexRef.current;
-    if (q.length === 0) return;
-
-    let nextIdx = idx + 1;
-    if (nextIdx >= q.length) {
-      if (isRepeatRef.current === "all") {
-        nextIdx = 0;
-      } else {
-        playbackExpectedRef.current = false;
-        setIsPlaying(false);
-        return;
-      }
+    if (currentTrack) {
+      setHistory(prev => [...prev, currentTrack]);
     }
 
-    if (q[nextIdx]) playTrack(q[nextIdx]);
+    if (userQueue.length > 0) {
+      const nextTrk = userQueue[0];
+      setUserQueue(prev => prev.slice(1));
+      setCurrentTrackSource('user_queue');
+      playTrack(nextTrk);
+    } else {
+      const playStartIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+      if (playStartIdx >= 0 && playStartIdx < playlistQueue.length) {
+        setPlaylistIndex(playStartIdx);
+        setCurrentTrackSource('playlist');
+        playTrack(playlistQueue[playStartIdx]);
+      } else {
+        if (isRepeatRef.current === "all" && playlistQueue.length > 0) {
+          setPlaylistIndex(0);
+          setCurrentTrackSource('playlist');
+          playTrack(playlistQueue[0]);
+        } else {
+          playbackExpectedRef.current = false;
+          setIsPlaying(false);
+        }
+      }
+    }
   };
 
   const prevTrack = () => {
@@ -992,21 +1061,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    const q = queueRef.current;
-    const idx = currentIndexRef.current;
-    if (q.length === 0) return;
-
     if (currentTime >= 3) {
       seek(0);
       return;
     }
 
-    let prevIdx = idx - 1;
-    if (prevIdx < 0) {
-      prevIdx = isRepeatRef.current === "all" ? q.length - 1 : 0;
-    }
+    if (history.length > 0) {
+      const prevTrk = history[history.length - 1];
+      setHistory(prev => prev.slice(0, -1));
 
-    if (q[prevIdx]) playTrack(q[prevIdx]);
+      if (currentTrack && currentTrackSource === 'user_queue') {
+        setUserQueue(prev => [currentTrack, ...prev]);
+      }
+
+      if (prevTrk.isUserAdded) {
+        setCurrentTrackSource('user_queue');
+      } else {
+        const pIdx = playlistQueue.findIndex(t => t.id === prevTrk.id);
+        if (pIdx !== -1) {
+          setPlaylistIndex(pIdx);
+        }
+        setCurrentTrackSource('playlist');
+      }
+      playTrack(prevTrk);
+    } else {
+      seek(0);
+    }
   };
 
   const seek = (time: number, isRemoteSync?: boolean) => {
@@ -1032,7 +1112,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (roomIdRef.current && isHostRef.current) {
-      broadcastState(time, undefined, currentTrackRef.current);
+      broadcastState(time, undefined, currentTrackRef.current, true);
     }
   };
 
@@ -1056,22 +1136,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsShuffle(nextShuffle);
 
     if (nextShuffle) {
-      setOriginalQueue(queue);
-      if (currentTrack) {
-        const others = queue.filter(t => t.id !== currentTrack.id);
-        setQueue([currentTrack, ...shuffleArray(others)]);
-        setCurrentIndex(0);
+      setOriginalPlaylistQueue(playlistQueue);
+      if (currentTrack && currentTrackSource === 'playlist') {
+        const others = playlistQueue.filter(t => t.id !== currentTrack.id);
+        const shuffled = [currentTrack, ...shuffleArray(others)];
+        setPlaylistQueue(shuffled);
+        setPlaylistIndex(0);
       } else {
-        setQueue(shuffleArray(queue));
-        setCurrentIndex(0);
+        const shuffled = shuffleArray(playlistQueue);
+        setPlaylistQueue(shuffled);
+        if (currentTrack && currentTrackSource === 'playlist') {
+          const idx = shuffled.findIndex(t => t.id === currentTrack.id);
+          setPlaylistIndex(idx !== -1 ? idx : 0);
+        }
       }
       showToast("Shuffle on", "info");
     } else {
-      if (originalQueue.length > 0) {
-        setQueue(originalQueue);
-        if (currentTrack) {
-          const idx = originalQueue.findIndex(t => t.id === currentTrack.id);
-          setCurrentIndex(idx !== -1 ? idx : 0);
+      if (originalPlaylistQueue.length > 0) {
+        setPlaylistQueue(originalPlaylistQueue);
+        if (currentTrack && currentTrackSource === 'playlist') {
+          const idx = originalPlaylistQueue.findIndex(t => t.id === currentTrack.id);
+          setPlaylistIndex(idx !== -1 ? idx : 0);
         }
       }
       showToast("Shuffle off", "info");
@@ -1095,13 +1180,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (queue.some(t => t.id === track.id)) {
+    if (userQueue.some(t => t.id === track.id)) {
       showToast(`"${track.title}" is already in the queue`, "info");
       return;
     }
     showToast(`Added "${track.title}" to queue`, "success");
-    setQueue(prev => [...prev, track]);
-    setOriginalQueue(prev => [...prev, track]);
+    const userTrack = { ...track, isUserAdded: true };
+    setUserQueue(prev => [...prev, userTrack]);
   };
 
   const playNext = (track: Track) => {
@@ -1109,32 +1194,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    const cleanedQueue = queue.filter(t => t.id !== track.id);
-    const cleanedOriginal = originalQueue.filter(t => t.id !== track.id);
-    const currentId = currentTrack?.id;
-    const activeIdx = cleanedQueue.findIndex(t => t.id === currentId);
-
-    const newQueue = [...cleanedQueue];
-    if (activeIdx !== -1) {
-      newQueue.splice(activeIdx + 1, 0, track);
-    } else {
-      newQueue.unshift(track);
-    }
-
-    const newOriginal = [...cleanedOriginal];
-    const originalActiveIdx = cleanedOriginal.findIndex(t => t.id === currentId);
-    if (originalActiveIdx !== -1) {
-      newOriginal.splice(originalActiveIdx + 1, 0, track);
-    } else {
-      newOriginal.unshift(track);
-    }
-
-    setQueue(newQueue);
-    setOriginalQueue(newOriginal);
-
-    const newIdx = newQueue.findIndex(t => t.id === currentId);
-    if (newIdx !== -1) setCurrentIndex(newIdx);
-
+    const userTrack = { ...track, isUserAdded: true };
+    setUserQueue(prev => {
+      const cleaned = prev.filter(t => t.id !== track.id);
+      return [userTrack, ...cleaned];
+    });
     showToast(`"${track.title}" will play next`, "success");
   };
 
@@ -1143,8 +1207,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    setQueue(prev => prev.filter(t => t.id !== trackId));
-    setOriginalQueue(prev => prev.filter(t => t.id !== trackId));
+    setUserQueue(prev => prev.filter(t => t.id !== trackId));
+    setPlaylistQueue(prev => {
+      const idx = prev.findIndex(t => t.id === trackId);
+      if (idx !== -1 && idx <= playlistIndex && playlistIndex > 0) {
+        setPlaylistIndex(playlistIndex - 1);
+      }
+      return prev.filter(t => t.id !== trackId);
+    });
+    setHistory(prev => prev.filter(t => t.id !== trackId));
     showToast("Removed track from queue", "info");
   };
 
@@ -1153,11 +1224,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    const newQ = currentTrack ? [currentTrack] : [];
-    setQueue(newQ);
-    setOriginalQueue(newQ);
-    setCurrentIndex(currentTrack ? 0 : -1);
-    showToast("Cleared queue", "info");
+    setUserQueue([]);
+    showToast("Cleared manual queue", "info");
   };
 
   const reorderQueue = (fromIndex: number, toIndex: number) => {
@@ -1167,26 +1235,26 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (fromIndex < 0 || fromIndex >= queue.length || toIndex < 0 || toIndex >= queue.length) return;
 
-    const updated = [...queue];
-    const [movedItem] = updated.splice(fromIndex, 1);
-    updated.splice(toIndex, 0, movedItem);
-    setQueue(updated);
+    const userQueueStart = history.length + (currentTrack ? 1 : 0);
+    if (fromIndex >= userQueueStart && toIndex >= userQueueStart) {
+      const playStartIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+      const upcoming = [...userQueue, ...playlistQueue.slice(playStartIdx)];
+      const fromOffset = fromIndex - userQueueStart;
+      const toOffset = toIndex - userQueueStart;
 
-    const updatedOriginal = [...originalQueue];
-    const originalFromIdx = updatedOriginal.findIndex(t => t.id === movedItem.id);
-    if (originalFromIdx !== -1) {
-      const [movedOriginal] = updatedOriginal.splice(originalFromIdx, 1);
-      updatedOriginal.splice(Math.max(0, Math.min(updatedOriginal.length, toIndex)), 0, movedOriginal);
-      setOriginalQueue(updatedOriginal);
-    }
+      if (fromOffset >= 0 && fromOffset < upcoming.length && toOffset >= 0 && toOffset < upcoming.length) {
+        const [moved] = upcoming.splice(fromOffset, 1);
+        upcoming.splice(toOffset, 0, moved);
 
-    if (currentIndex === fromIndex) {
-      setCurrentIndex(toIndex);
-    } else {
-      let newIdx = currentIndex;
-      if (currentIndex > fromIndex && currentIndex <= toIndex) newIdx = currentIndex - 1;
-      else if (currentIndex < fromIndex && currentIndex >= toIndex) newIdx = currentIndex + 1;
-      setCurrentIndex(newIdx);
+        const newUserQueue = upcoming.filter(t => t.isUserAdded);
+        const newRemainingPlaylist = upcoming.filter(t => !t.isUserAdded);
+
+        setUserQueue(newUserQueue);
+        setPlaylistQueue(prev => [
+          ...prev.slice(0, playStartIdx),
+          ...newRemainingPlaylist
+        ]);
+      }
     }
   };
 
@@ -1343,7 +1411,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       })
       .on("broadcast", { event: "request_state" }, (_msg: any) => {
         if (!isHostRef.current) return;
-        broadcastState(undefined, undefined, currentTrackRef.current);
+        broadcastState(undefined, undefined, currentTrackRef.current, true);
       })
       .on("broadcast", { event: "room_closed" }, () => {
         if (!isHostRef.current) {
@@ -1390,7 +1458,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }).catch((err: any) => console.error("Failed to track host promotion:", err));
           
           // Immediately broadcast current state
-          broadcastState(undefined, undefined, currentTrackRef.current);
+          broadcastState(undefined, undefined, currentTrackRef.current, true);
         }
       }
     });
@@ -1419,15 +1487,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const handleRemoteState = async (payload: any) => {
-    const { track, isPlaying: remoteIsPlaying, position, queue: remoteQueue, currentIndex: remoteCurrentIndex, timestamp } = payload;
+    const { track, isPlaying: remoteIsPlaying, position, queue: remoteQueue, currentIndex: remoteCurrentIndex, timestamp, isManual } = payload;
     if (!track) return;
 
     try {
       if (remoteQueue && Array.isArray(remoteQueue)) {
-        setQueue(remoteQueue);
-        setOriginalQueue(remoteQueue);
+        setPlaylistQueue(remoteQueue);
+        setOriginalPlaylistQueue(remoteQueue);
+        setUserQueue([]);
+        setHistory([]);
         if (remoteCurrentIndex !== undefined && remoteCurrentIndex !== -1) {
-          setCurrentIndex(remoteCurrentIndex);
+          setPlaylistIndex(remoteCurrentIndex);
+          setCurrentTrackSource('playlist');
         }
       }
 
@@ -1443,7 +1514,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await playTrack(track, undefined, undefined, true);
       } else {
         const drift = Math.abs(currentTime - targetPosition);
-        if (drift > 2) seek(targetPosition, true);
+        const playPauseChanged = remoteIsPlaying !== isPlayingRef.current;
+        const isFirstSixSeconds = targetPosition <= 6;
+
+        if (isManual || playPauseChanged || isFirstSixSeconds) {
+          if (drift > 2) {
+            seek(targetPosition, true);
+          }
+        }
       }
 
       if (remoteIsPlaying !== isPlayingRef.current) {
@@ -1463,7 +1541,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const broadcastState = (customPosition?: number, forceIsPlaying?: boolean, customTrack?: Track | null) => {
+  const broadcastState = (customPosition?: number, forceIsPlaying?: boolean, customTrack?: Track | null, isManual = false) => {
     if (!roomIdRef.current || !isHostRef.current || !channelRef.current) return;
     const trackToBroadcast = customTrack !== undefined ? customTrack : currentTrackRef.current;
     if (!trackToBroadcast) return;
@@ -1477,7 +1555,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         position: customPosition !== undefined ? customPosition : currentTime,
         queue: queueRef.current,
         currentIndex: currentIndexRef.current,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        isManual
       }
     });
   };
@@ -1498,6 +1577,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       Media3Session.addListener("onIsPlayingChanged", (data: { isPlaying: boolean }) => {
         setIsPlaying(data.isPlaying);
         if (data.isPlaying) setIsLoading(false);
+        if (roomIdRef.current && isHostRef.current) {
+          broadcastState(undefined, data.isPlaying, currentTrackRef.current, true);
+        }
       });
       Media3Session.addListener("onPlaybackReady", () => setIsLoading(false));
       Media3Session.addListener("onPlaybackError", (data: { error: string }) => {
@@ -1517,7 +1599,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (targetTrack) {
           const idx = q.findIndex(t => t.id === targetTrack.id);
           setCurrentTrack(targetTrack);
-          setCurrentIndex(idx);
+          
+          setUserQueue(prevUserQ => {
+            const userQueueIdx = prevUserQ.findIndex(t => t.id === targetTrack.id);
+            if (userQueueIdx !== -1) {
+              setCurrentTrackSource('user_queue');
+              return prevUserQ.slice(userQueueIdx + 1);
+            } else {
+              setPlaylistQueue(prevPlayQ => {
+                const playlistIdx = prevPlayQ.findIndex(t => t.id === targetTrack.id);
+                if (playlistIdx !== -1) {
+                  setPlaylistIndex(playlistIdx);
+                  setCurrentTrackSource('playlist');
+                }
+                return prevPlayQ;
+              });
+              return prevUserQ;
+            }
+          });
+
           setIsPlaying(true);
           setIsLoading(false);
           
@@ -1610,6 +1710,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reorderQueue,
     toast,
     showToast,
+    userQueue,
+    playlistQueue,
+    playlistIndex,
+    currentTrackSource,
+    history,
     roomId,
     isHost,
     isConnected,
@@ -1655,6 +1760,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reorderQueue,
     toast,
     showToast,
+    userQueue,
+    playlistQueue,
+    playlistIndex,
+    currentTrackSource,
+    history,
     roomId,
     isHost,
     isConnected,

@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { 
-  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive
+  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive, Zap
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
+import { Capacitor, registerPlugin } from "@capacitor/core";
+
+const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
+const isAndroid = Capacitor.getPlatform() === "android";
 
 export const SettingsPanel: React.FC = () => {
   const {
@@ -21,6 +25,36 @@ export const SettingsPanel: React.FC = () => {
   const [customTimerMinutes, setCustomTimerMinutes] = useState<number>(30);
   const [downloadCount, setDownloadCount] = useState<number>(0);
   const [cachedLyricsCount, setCachedLyricsCount] = useState<number>(0);
+  const [isBatteryExempt, setIsBatteryExempt] = useState<boolean>(true);
+
+  // Check battery optimization exemption on mount
+  useEffect(() => {
+    if (isAndroid) {
+      Media3Session.isBatteryOptimizationExempt()
+        .then((res: any) => {
+          setIsBatteryExempt(!!res.isExempt);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const handleRequestBatteryExemption = async () => {
+    try {
+      const res = await Media3Session.requestBatteryOptimizationExemption();
+      if (res && (res.granted || res.requested)) {
+        showToast("Battery exemption requested!", "success");
+        setTimeout(() => {
+          Media3Session.isBatteryOptimizationExempt()
+            .then((check: any) => {
+              setIsBatteryExempt(!!check.isExempt);
+            })
+            .catch(() => {});
+        }, 5000);
+      }
+    } catch (err: any) {
+      showToast(err.message || "Failed to request exemption", "error");
+    }
+  };
 
   // Fetch metrics on mount
   useEffect(() => {
@@ -276,6 +310,39 @@ export const SettingsPanel: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Android Background Settings Card */}
+        {isAndroid && (
+          <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
+              <Zap className="w-5 h-5 text-brand-accent animate-pulse" />
+              Background Playback
+            </h2>
+
+            <div className="flex flex-col gap-3.5 text-xs text-gray-400">
+              <div className="flex justify-between items-center bg-white/5 p-3.5 rounded-2xl border border-white/5">
+                <div className="flex flex-col gap-0.5 max-w-[70%]">
+                  <span className="font-bold text-white">Exclude Battery Optimization</span>
+                  <span className="text-[10px] text-gray-500">
+                    Recommended. Prevents Android from freezing the music service in background.
+                  </span>
+                </div>
+                {isBatteryExempt ? (
+                  <span className="text-green-400 font-extrabold bg-green-500/10 px-3.5 py-1.5 rounded-xl border border-green-500/20 text-[10px]">
+                    EXEMPT ACTIVE
+                  </span>
+                ) : (
+                  <button
+                    onClick={handleRequestBatteryExemption}
+                    className="px-4 py-2 bg-white text-black font-extrabold rounded-xl hover:bg-gray-200 transition-all text-xs"
+                  >
+                    Exempt App
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Safety Notice */}

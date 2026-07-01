@@ -16,6 +16,7 @@ export interface Track {
   youtubeUrl?: string;
   plays?: string;
   dateAdded?: string;
+  isUserAdded?: boolean;
 }
 
 export interface Artist {
@@ -626,19 +627,17 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
   }
 
   if (isNative) {
+    // Normalize headers keys to lowercase to avoid duplicate casing headers (e.g. user-agent vs User-Agent)
+    const normalizedHeaders: Record<string, string> = {};
+    if (headers) {
+      for (const [key, val] of Object.entries(headers)) {
+        normalizedHeaders[key.toLowerCase()] = val;
+      }
+    }
+
     // 2. Parse JSON bodies case-insensitively so CapacitorHttp can serialize them natively
     let dataPayload = body;
-    const getHeader = (headersMap: any, name: string): string | undefined => {
-      if (!headersMap) return undefined;
-      const lowerName = name.toLowerCase();
-      for (const key of Object.keys(headersMap)) {
-        if (key.toLowerCase() === lowerName) {
-          return headersMap[key];
-        }
-      }
-      return undefined;
-    };
-    const contentType = getHeader(headers, 'content-type');
+    const contentType = normalizedHeaders['content-type'];
     if (typeof body === 'string' && contentType?.includes('application/json')) {
       try {
         dataPayload = JSON.parse(body);
@@ -650,9 +649,9 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
       const isIOSClient = (typeof body === 'string' && body.includes('"clientName":"IOS"')) || 
                           (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'IOS');
       if (isIOSClient) {
-        headers["User-Agent"] = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
+        normalizedHeaders["user-agent"] = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
       } else {
-        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        normalizedHeaders["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
       }
     }
 
@@ -660,7 +659,7 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
     const response = await CapacitorHttp.request({
       url,
       method,
-      headers,
+      headers: normalizedHeaders,
       data: dataPayload,
       responseType: 'text'
     });
@@ -706,7 +705,7 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
 export const getYoutubeClient = (): Promise<Innertube> => {
   if (!youtubeClientPromise) {
     youtubeClientPromise = Innertube.create({
-      client_type: 'IOS' as any,
+      client_type: 'ANDROID_VR' as any,
       fetch: sharedCustomFetch
     });
   }
@@ -886,9 +885,9 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
   try {
     console.log("Resolving direct YouTube stream URL via Innertube...");
     const yt = await getYoutubeClient();
-    const info = await yt.getInfo(videoId);
+    const info = await yt.getBasicInfo(videoId);
     const format = info.chooseFormat({ type: 'audio', quality: 'best' });
-    const streamUrl = format?.decipher((yt.session as any).actions?.session?.signature_timestamp) || format?.url;
+    const streamUrl = await format?.decipher(yt.session.player) || format?.url;
     if (streamUrl) {
       console.log("Successfully resolved direct Innertube stream URL.");
       return streamUrl;
@@ -897,7 +896,64 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
     console.warn("Direct Innertube resolution failed:", e);
   }
 
-  // 2. Fallback to Cobalt API which gets the stream via direct YouTube URL
+  // 2. Fallback to Piped API streams endpoint (highly optimized for streaming and ExoPlayer range requests)
+  const PIPED_HOSTS = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.lvk.li",
+    "https://api.piped.yt"
+  ];
+  for (const baseUrl of PIPED_HOSTS) {
+    try {
+      console.log(`[Downloader] Attempting Piped stream: ${baseUrl}/streams/${videoId}...`);
+      const response = await fetchNative(`${baseUrl}/streams/${videoId}`);
+      if (response.ok) {
+        const data = await response.json();
+        const streams = data.audioStreams || [];
+        if (streams.length > 0) {
+          // Find best stream (M4A or high bitrate)
+          const bestStream = streams.find((s: any) => s.mimeType?.includes("audio/mp4")) || streams[0];
+          if (bestStream && bestStream.url) {
+            console.log(`[Downloader] Piped resolved stream: ${bestStream.url}. Validating accessibility...`);
+            try {
+              const check = await fetchNative(bestStream.url, { 
+                method: "GET", 
+                headers: { "Range": "bytes=0-0" },
+                timeout: 2500 
+              });
+              const contentLength = check.headers.get("content-length");
+              const bodyText = await check.text();
+              if (check.status === 200 || check.status === 206) {
+                if (contentLength === "0" || (check.status === 200 && bodyText.length === 0)) {
+                  console.warn(`[Downloader] Piped stream has content-length 0. Skipping.`);
+                } else {
+                  const contentType = check.headers.get("content-type") || "";
+                  if (contentType.includes("text/html") || contentType.includes("application/json")) {
+                    console.warn(`[Downloader] Piped stream returned HTML/JSON. Skipping.`);
+                  } else {
+                    console.log(`[Downloader] Piped stream validated successfully.`);
+                    return bestStream.url;
+                  }
+                }
+              } else {
+                console.warn(`[Downloader] Piped stream validation returned status ${check.status}. Skipping.`);
+              }
+            } catch (e) {
+              console.warn(`[Downloader] Piped stream validation failed:`, e);
+            }
+          }
+        } else {
+          console.warn(`[Downloader] Piped stream returned empty audioStreams list for ${baseUrl}`);
+        }
+      } else {
+        console.warn(`[Downloader] Piped endpoint ${baseUrl} returned non-ok status: ${response.status}`);
+      }
+    } catch (err) {
+      console.warn(`[Downloader] Piped endpoint ${baseUrl} failed:`, err);
+    }
+  }
+
+  // 3. Fallback to Cobalt API as last resort (meant for single file downloads, rate-limits range requests)
   let cobaltEndpoints: string[] = [];
   try {
     cobaltEndpoints = await getHealthyCobaltHosts();
@@ -972,8 +1028,33 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
       }
 
       if (responseData && responseData.url) {
-        console.log(`[Downloader] Cobalt successfully resolved stream: ${responseData.url}`);
-        return responseData.url;
+        console.log(`[Downloader] Cobalt resolved stream: ${responseData.url}. Validating accessibility...`);
+        try {
+          const check = await fetchNative(responseData.url, { 
+            method: "GET", 
+            headers: { "Range": "bytes=0-0" },
+            timeout: 2500 
+          });
+          const contentLength = check.headers.get("content-length");
+          const bodyText = await check.text();
+          if (check.status === 200 || check.status === 206) {
+            if (contentLength === "0" || (check.status === 200 && bodyText.length === 0)) {
+              console.warn(`[Downloader] Cobalt stream is empty. Skipping.`);
+            } else {
+              const contentType = check.headers.get("content-type") || "";
+              if (contentType.includes("text/html") || contentType.includes("application/json")) {
+                console.warn(`[Downloader] Cobalt stream returned HTML/JSON instead of audio. Skipping.`);
+              } else {
+                console.log(`[Downloader] Cobalt stream validated successfully.`);
+                return responseData.url;
+              }
+            }
+          } else {
+            console.warn(`[Downloader] Cobalt stream validation returned status ${check.status}. Skipping.`);
+          }
+        } catch (e) {
+          console.warn(`[Downloader] Cobalt stream validation failed:`, e);
+        }
       }
     } catch (err) {
       console.warn(`[Downloader] Cobalt endpoint ${endpoint} failed:`, err);

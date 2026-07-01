@@ -27,6 +27,7 @@ import java.net.URL;
 import android.content.Intent;
 import android.net.Uri;
 import androidx.core.content.FileProvider;
+import android.provider.Settings;
 
 @CapacitorPlugin(name = "Media3Session")
 public class Media3SessionPlugin extends Plugin {
@@ -678,5 +679,54 @@ public class Media3SessionPlugin extends Plugin {
                 call.reject("Download failed: " + e.getMessage());
             }
         }).start();
+    }
+
+    @PluginMethod
+    public void isBatteryOptimizationExempt(PluginCall call) {
+        Context context = getContext();
+        PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        boolean isExempt = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (pm != null) {
+                isExempt = pm.isIgnoringBatteryOptimizations(context.getPackageName());
+            }
+        } else {
+            isExempt = true;
+        }
+        JSObject ret = new JSObject();
+        ret.put("isExempt", isExempt);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void requestBatteryOptimizationExemption(PluginCall call) {
+        Context context = getContext();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(context.getPackageName())) {
+                JSObject ret = new JSObject();
+                ret.put("granted", true);
+                call.resolve(ret);
+                return;
+            }
+            try {
+                Intent intent = new Intent();
+                intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + context.getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+                
+                JSObject ret = new JSObject();
+                ret.put("requested", true);
+                call.resolve(ret);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to launch battery optimization settings", e);
+                call.reject("Failed to request battery exemption: " + e.getMessage());
+            }
+        } else {
+            JSObject ret = new JSObject();
+            ret.put("granted", true);
+            call.resolve(ret);
+        }
     }
 }

@@ -49,16 +49,6 @@ public class PlaybackService extends MediaSessionService {
                 .build();
 
         androidx.media3.datasource.DataSource.Factory dataSourceFactory = new androidx.media3.datasource.DataSource.Factory() {
-            private final androidx.media3.datasource.DefaultHttpDataSource.Factory ytHttpFactory = 
-                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                    .setUserAgent("com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)")
-                    .setAllowCrossProtocolRedirects(true);
-            
-            private final androidx.media3.datasource.DefaultHttpDataSource.Factory defaultHttpFactory = 
-                new androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                    .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .setAllowCrossProtocolRedirects(true);
-
             @Override
             public androidx.media3.datasource.DataSource createDataSource() {
                 return new androidx.media3.datasource.DataSource() {
@@ -71,13 +61,32 @@ public class PlaybackService extends MediaSessionService {
                     @Override
                     public long open(androidx.media3.datasource.DataSpec dataSpec) throws java.io.IOException {
                         String uriString = dataSpec.uri.toString();
-                        if (uriString.contains("googlevideo.com")) {
-                            Log.e("IbraStreamService", "Using YouTube iOS User-Agent for: " + uriString);
-                            activeDataSource = new androidx.media3.datasource.DefaultDataSource(PlaybackService.this, ytHttpFactory.createDataSource());
+                        java.util.Map<String, String> headers = new java.util.HashMap<>();
+                        
+                        String userAgent;
+                        if (uriString.contains("googlevideo.com") || uriString.contains("youtube.com") || uriString.contains("youtubei")) {
+                            userAgent = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
                         } else {
-                            Log.e("IbraStreamService", "Using default Browser User-Agent for: " + uriString);
-                            activeDataSource = new androidx.media3.datasource.DefaultDataSource(PlaybackService.this, defaultHttpFactory.createDataSource());
+                            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
                         }
+                        
+                        if (uriString.contains("cobalt") || uriString.contains("xenon.zone") || uriString.contains("kittycat.boo") || uriString.contains("qwkuns.me") || uriString.contains("mgytr.top") || uriString.contains("squair.xyz")) {
+                            headers.put("Origin", "https://cobalt.tools");
+                            headers.put("Referer", "https://cobalt.tools/");
+                        } else if (uriString.contains("piped") || uriString.contains("kavin.rocks") || uriString.contains("private.coffee") || uriString.contains("lvk.li")) {
+                            headers.put("Origin", "https://piped.video");
+                            headers.put("Referer", "https://piped.video/");
+                        }
+                        
+                        Log.e("IbraStreamService", "DataSource opening URL: " + uriString + " with UA: " + userAgent + " and headers: " + headers);
+                        
+                        androidx.media3.datasource.DefaultHttpDataSource.Factory factory = 
+                            new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                                .setUserAgent(userAgent)
+                                .setDefaultRequestProperties(headers)
+                                .setAllowCrossProtocolRedirects(true);
+                                
+                        activeDataSource = new androidx.media3.datasource.DefaultDataSource(PlaybackService.this, factory.createDataSource());
                         return activeDataSource.open(dataSpec);
                     }
 

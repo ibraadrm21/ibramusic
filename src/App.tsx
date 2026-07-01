@@ -197,8 +197,39 @@ const MainLayout: React.FC = () => {
     roomId,
     updateUserIdentity,
     joinRoom,
-    onlyDownloaded
+    onlyDownloaded,
   } = useAudio();
+
+  const getContextName = React.useCallback(() => {
+    if (!playingPlaylistId) return "Queue";
+    if (playingPlaylistId === "liked-songs") return "Liked Songs";
+    if (playingPlaylistId.startsWith("album-")) return "Album";
+    if (playingPlaylistId.startsWith("artist-")) return "Artist Radio";
+    try {
+      const saved = localStorage.getItem("ibrastream_playlists");
+      if (saved) {
+        const playlists = JSON.parse(saved);
+        const match = playlists.find((p: any) => p.id === playingPlaylistId);
+        if (match) return match.name;
+      }
+    } catch {}
+    return "Playlist";
+  }, [playingPlaylistId]);
+
+  const upcomingItems = React.useMemo(() => {
+    return queue.slice(currentIndex + 1).map((track, relativeIdx) => ({
+      track,
+      originalIdx: currentIndex + 1 + relativeIdx
+    }));
+  }, [queue, currentIndex]);
+
+  const userAddedItems = React.useMemo(() => {
+    return upcomingItems.filter(item => item.track.isUserAdded);
+  }, [upcomingItems]);
+
+  const playlistItems = React.useMemo(() => {
+    return upcomingItems.filter(item => !item.track.isUserAdded);
+  }, [upcomingItems]);
   const [downloadsUpdateTrigger, setDownloadsUpdateTrigger] = useState<number>(0);
   useEffect(() => {
     const handleStatusChange = () => {
@@ -5038,73 +5069,141 @@ const MainLayout: React.FC = () => {
                       </div>
                     )}
 
-                    <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider pl-1 mt-2">
-                      Next Up ({queue.length})
-                    </span>
-                    <div className="flex flex-col gap-2">
-                      {queue.map((track, idx) => {
-                        const isPlayingNow = idx === currentIndex;
-                        const isDragged = idx === draggedIndex;
-                        return (
-                          <div
-                            key={`${track.id}-${idx}`}
-                            draggable={true}
-                            onDragStart={(e) => {
-                              setDraggedIndex(idx);
-                              e.dataTransfer.effectAllowed = "move";
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                            }}
-                            onDragEnter={(e) => {
-                              e.preventDefault();
-                              if (draggedIndex !== null && draggedIndex !== idx) {
-                                reorderQueue(draggedIndex, idx);
-                                setDraggedIndex(idx);
-                              }
-                            }}
-                            onDragEnd={() => {
-                              setDraggedIndex(null);
-                            }}
-                            className={`group flex items-center gap-3 p-2 rounded-xl transition-all border cursor-grab active:cursor-grabbing ${isPlayingNow
-                                ? "bg-white/5 border-white/10"
-                                : isDragged
-                                  ? "bg-brand-accent/20 border-brand-accent/30 scale-95 opacity-50"
-                                  : "hover:bg-white/5 border-transparent hover:border-white/5"
-                              }`}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              handleTrackContextMenu(e, track);
-                            }}
-                            onClick={() => playTrack(track)}
+                    {userAddedItems.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between pl-1 mt-2">
+                          <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider">
+                            Next in queue
+                          </span>
+                          <button
+                            onClick={clearQueue}
+                            className="text-[10px] font-bold text-gray-400 hover:text-brand-accent transition-colors"
                           >
-                            <span className={`text-[10px] font-bold w-4 text-center ${isPlayingNow ? "text-brand-accent" : "text-gray-500"}`}>
-                              {idx + 1}
-                            </span>
-                            <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
-                            <div className="flex-1 min-w-0">
-                              <h4 className={`font-semibold text-xs truncate transition-colors ${isPlayingNow ? "text-brand-accent" : "text-white group-hover:text-brand-accent"}`}>
-                                {track.title}
-                              </h4>
-                              <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
-                            </div>
-
-                            {!isPlayingNow && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  removeFromQueue(track.id);
+                            Clear queue
+                          </button>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {userAddedItems.map(({ track, originalIdx }) => {
+                            const isDragged = originalIdx === draggedIndex;
+                            return (
+                              <div
+                                key={`${track.id}-${originalIdx}`}
+                                draggable={true}
+                                onDragStart={(e) => {
+                                  setDraggedIndex(originalIdx);
+                                  e.dataTransfer.effectAllowed = "move";
                                 }}
-                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-all ml-auto shrink-0"
-                                title="Remove"
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                }}
+                                onDragEnter={(e) => {
+                                  e.preventDefault();
+                                  if (draggedIndex !== null && draggedIndex !== originalIdx) {
+                                    reorderQueue(draggedIndex, originalIdx);
+                                    setDraggedIndex(originalIdx);
+                                  }
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedIndex(null);
+                                }}
+                                className={`group flex items-center gap-3 p-2 rounded-xl transition-all border cursor-grab active:cursor-grabbing ${
+                                  isDragged
+                                      ? "bg-brand-accent/20 border-brand-accent/30 scale-95 opacity-50"
+                                      : "hover:bg-white/5 border-transparent hover:border-white/5"
+                                  }`}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  handleTrackContextMenu(e, track);
+                                }}
+                                onClick={() => playTrack(track)}
                               >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
+                                <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
+                                    {track.title}
+                                  </h4>
+                                  <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeFromQueue(track.id);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-all ml-auto shrink-0"
+                                  title="Remove"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {playlistItems.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider pl-1 mt-2">
+                          Next from: {getContextName()}
+                        </span>
+                        <div className="flex flex-col gap-2">
+                          {playlistItems.map(({ track, originalIdx }) => {
+                            const isDragged = originalIdx === draggedIndex;
+                            return (
+                              <div
+                                key={`${track.id}-${originalIdx}`}
+                                draggable={true}
+                                onDragStart={(e) => {
+                                  setDraggedIndex(originalIdx);
+                                  e.dataTransfer.effectAllowed = "move";
+                                }}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                }}
+                                onDragEnter={(e) => {
+                                  e.preventDefault();
+                                  if (draggedIndex !== null && draggedIndex !== originalIdx) {
+                                    reorderQueue(draggedIndex, originalIdx);
+                                    setDraggedIndex(originalIdx);
+                                  }
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedIndex(null);
+                                }}
+                                className={`group flex items-center gap-3 p-2 rounded-xl transition-all border cursor-grab active:cursor-grabbing ${
+                                  isDragged
+                                      ? "bg-brand-accent/20 border-brand-accent/30 scale-95 opacity-50"
+                                      : "hover:bg-white/5 border-transparent hover:border-white/5"
+                                  }`}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  handleTrackContextMenu(e, track);
+                                }}
+                                onClick={() => playTrack(track)}
+                              >
+                                <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
+                                    {track.title}
+                                  </h4>
+                                  <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeFromQueue(track.id);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-all ml-auto shrink-0"
+                                  title="Remove"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -5162,7 +5261,7 @@ const MainLayout: React.FC = () => {
                   <ListMusic className="w-6 h-6 text-brand-accent" /> Play Queue
                 </h3>
                 <div className="flex items-center gap-2 pr-8">
-                  {queue.length > 0 && (
+                  {upcomingItems.length > 0 && (
                     <>
                       {canSaveQueueAsPlaylist && (
                         <button
@@ -5187,76 +5286,154 @@ const MainLayout: React.FC = () => {
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-                {queue.length === 0 ? (
+                {!currentTrack && upcomingItems.length === 0 ? (
                   <p className="text-center py-8 text-gray-500 text-sm">Queue is empty</p>
                 ) : (
-                  <div className="flex flex-col gap-2">
-                    {queue.map((track, idx) => {
-                      const isPlayingNow = idx === currentIndex;
-                      return (
-                        <div
-                          key={`${track.id}-${idx}`}
-                          className={`flex items-center gap-3 p-2 rounded-xl transition-all border ${isPlayingNow ? "bg-white/5 border-white/10" : "bg-transparent border-transparent"
-                            }`}
-                          onClick={() => {
-                            playTrack(track);
-                            setShowQueueOverlay(false);
-                          }}
-                        >
-                          <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
+                  <div className="flex flex-col gap-4">
+                    {/* Now Playing Section */}
+                    {currentTrack && (
+                      <div className="flex flex-col gap-2 text-left">
+                        <span className="text-[10px] font-bold uppercase text-brand-accent tracking-wider pl-1">
+                          Now Playing
+                        </span>
+                        <div className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center gap-3">
+                          <img src={currentTrack.thumbnail} className="w-10 h-10 rounded-lg object-cover" />
                           <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-semibold truncate ${isPlayingNow ? "text-brand-accent" : "text-white"}`}>{track.title}</p>
-                            <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
+                            <h4 className="font-bold text-xs text-white truncate">{currentTrack.title}</h4>
+                            <p className="text-[10px] text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
                           </div>
-                          {/* Reordering and Actions container */}
-                          <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            {/* Move Up */}
-                            {idx > 0 && (
-                              <button
-                                onClick={() => reorderQueue(idx, idx - 1)}
-                                className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                                title="Move up"
-                              >
-                                <ChevronUp className="w-4 h-4" />
-                              </button>
-                            )}
-                            
-                            {/* Move Down */}
-                            {idx < queue.length - 1 && (
-                              <button
-                                onClick={() => reorderQueue(idx, idx + 1)}
-                                className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                                title="Move down"
-                              >
-                                <ChevronDown className="w-4 h-4" />
-                              </button>
-                            )}
-
-                            {/* Context Menu Button */}
-                            <button
-                              onClick={(e) => {
-                                handleTrackContextMenu(e, track);
-                              }}
-                              className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                              title="Actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {/* Remove Button */}
-                            {!isPlayingNow && (
-                              <button
-                                onClick={() => removeFromQueue(track.id)}
-                                className="p-1.5 rounded hover:bg-white/10 text-red-400 hover:text-red-300 transition-colors"
-                                title="Remove from queue"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
+                          <span className="text-[10px] text-brand-accent font-bold animate-pulse shrink-0">Playing</span>
                         </div>
-                      );
-                    })}
+                      </div>
+                    )}
+
+                    {/* Next in Queue Section */}
+                    {userAddedItems.length > 0 && (
+                      <div className="flex flex-col gap-2 text-left">
+                        <div className="flex items-center justify-between border-b border-white/5 pb-1">
+                          <span className="text-xs font-bold text-gray-400">Next in queue</span>
+                          <button
+                            onClick={clearQueue}
+                            className="text-xs font-semibold text-brand-accent hover:underline"
+                          >
+                            Clear queue
+                          </button>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {userAddedItems.map(({ track, originalIdx }) => (
+                            <div
+                              key={`${track.id}-${originalIdx}`}
+                              className="flex items-center gap-3 p-2 rounded-xl transition-all border border-transparent hover:bg-white/5"
+                              onClick={() => {
+                                playTrack(track);
+                                setShowQueueOverlay(false);
+                              }}
+                            >
+                              <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold truncate text-white">{track.title}</p>
+                                <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                {originalIdx > 0 && (
+                                  <button
+                                    onClick={() => reorderQueue(originalIdx, originalIdx - 1)}
+                                    className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                    title="Move up"
+                                  >
+                                    <ChevronUp className="w-4 h-4" />
+                                  </button>
+                                )}
+                                {originalIdx < queue.length - 1 && (
+                                  <button
+                                    onClick={() => reorderQueue(originalIdx, originalIdx + 1)}
+                                    className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                    title="Move down"
+                                  >
+                                    <ChevronDown className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => handleTrackContextMenu(e, track)}
+                                  className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                  title="Actions"
+                                >
+                                  <MoreVertical className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => removeFromQueue(track.id)}
+                                  className="p-1.5 rounded hover:bg-white/10 text-red-400 hover:text-red-300 transition-colors"
+                                  title="Remove from queue"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Next from Context Section */}
+                    {playlistItems.length > 0 && (
+                      <div className="flex flex-col gap-2 text-left">
+                        <div className="border-b border-white/5 pb-1">
+                          <span className="text-xs font-bold text-gray-400">Next from: {getContextName()}</span>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {playlistItems.map(({ track, originalIdx }) => (
+                            <div
+                              key={`${track.id}-${originalIdx}`}
+                              className="flex items-center gap-3 p-2 rounded-xl transition-all border border-transparent hover:bg-white/5"
+                              onClick={() => {
+                                playTrack(track);
+                                setShowQueueOverlay(false);
+                              }}
+                            >
+                              <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold truncate text-white">{track.title}</p>
+                                <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                {originalIdx > 0 && (
+                                  <button
+                                    onClick={() => reorderQueue(originalIdx, originalIdx - 1)}
+                                    className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                    title="Move up"
+                                  >
+                                    <ChevronUp className="w-4 h-4" />
+                                  </button>
+                                )}
+                                {originalIdx < queue.length - 1 && (
+                                  <button
+                                    onClick={() => reorderQueue(originalIdx, originalIdx + 1)}
+                                    className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                    title="Move down"
+                                  >
+                                    <ChevronDown className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => handleTrackContextMenu(e, track)}
+                                  className="p-1.5 rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                                  title="Actions"
+                                >
+                                  <MoreVertical className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => removeFromQueue(track.id)}
+                                  className="p-1.5 rounded hover:bg-white/10 text-red-400 hover:text-red-300 transition-colors"
+                                  title="Remove from queue"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
