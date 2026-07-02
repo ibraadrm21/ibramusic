@@ -1,5 +1,129 @@
 import type { Track } from "./musicApi";
 import { searchTracks, getArtistTracks } from "./musicApi";
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
+
+// Dynamic similar artists cache (in-memory)
+const similarArtistsCache = new Map<string, string[]>();
+
+/**
+ * Generic fetch with support for CapacitorHttp (native) and CORS proxy fallbacks (web browser).
+ */
+async function fetchDeezer(url: string): Promise<any> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const response = await CapacitorHttp.get({ url });
+      if (response.status === 200) {
+        return typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+      }
+    } catch (e) {
+      console.warn("CapacitorHttp failed for Deezer API:", e);
+    }
+  }
+
+  // Try direct fetch first (works if Deezer has permissive CORS or on local builds/extensions)
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn("Direct fetch failed for Deezer, trying CORS proxies...", e);
+  }
+
+  // CORS Proxy fallbacks for web browsers
+  const proxies = [
+    (target: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
+    (target: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`,
+    (target: string) => `https://corsproxy.io/?${encodeURIComponent(target)}`
+  ];
+
+  for (const getProxyUrl of proxies) {
+    try {
+      const proxyUrl = getProxyUrl(url);
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        if (proxyUrl.includes("allorigins")) {
+          const json = await res.json();
+          if (json && json.contents) {
+            return JSON.parse(json.contents);
+          }
+        } else {
+          return await res.json();
+        }
+      }
+    } catch (e) {
+      console.warn(`Proxy fetch failed for Deezer URL: ${url}`, e);
+    }
+  }
+
+  throw new Error(`Failed to fetch Deezer API: ${url}`);
+}
+
+/**
+ * Dynamically queries the Deezer API to find similar artists for a given artist name.
+ * Uses localStorage and memory cache to prevent rate-limiting and redundant API calls.
+ */
+export async function getSimilarArtistsDynamic(artistName: string): Promise<string[]> {
+  if (!artistName) return [];
+  const cleanName = artistName.trim().toLowerCase();
+
+  // 1. Check memory cache
+  if (similarArtistsCache.has(cleanName)) {
+    return similarArtistsCache.get(cleanName)!;
+  }
+
+  // 2. Check localStorage cache
+  const localCacheKey = `ibrastream_similar_artists_${cleanName}`;
+  try {
+    const saved = localStorage.getItem(localCacheKey);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        similarArtistsCache.set(cleanName, parsed);
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to read similar artists cache from localStorage", e);
+  }
+
+  try {
+    console.log(`[Recommender] Querying Deezer for similar artists of: ${artistName}`);
+    
+    // Step 1: Search for artist ID
+    const searchUrl = `https://api.deezer.com/search/artist?q=${encodeURIComponent(artistName)}`;
+    const searchData = await fetchDeezer(searchUrl);
+    const artists = searchData.data || [];
+    if (artists.length === 0) {
+      throw new Error(`Artist "${artistName}" not found on Deezer`);
+    }
+
+    const artistId = artists[0].id;
+    
+    // Step 2: Fetch related/similar artists
+    const relatedUrl = `https://api.deezer.com/artist/${artistId}/related`;
+    const relatedData = await fetchDeezer(relatedUrl);
+    const relatedList = relatedData.data || [];
+    
+    const similarNames = relatedList.map((art: any) => art.name as string).filter(Boolean);
+    
+    if (similarNames.length > 0) {
+      // Save in caches
+      similarArtistsCache.set(cleanName, similarNames);
+      try {
+        localStorage.setItem(localCacheKey, JSON.stringify(similarNames));
+      } catch (e) {
+        console.warn("Failed to save similar artists to localStorage", e);
+      }
+      return similarNames;
+    }
+  } catch (err) {
+    console.warn(`[Recommender] Failed dynamic similar artists lookup for "${artistName}":`, err);
+  }
+
+  return [];
+}
+
 
 // Expanded popular seeds representing diverse genres (Pop, Rock, Hip-hop, Reggaeton/Latino, Electronic)
 const POPULAR_SEEDS = [
@@ -125,25 +249,45 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
       .slice(0, 3)
       .map(([name, info]) => ({ name, id: info.id }));
 
-    // 2. Build recommendations from top genres and top artists
+    // 2. Build recommendations from top genres, top artists, and dynamic similar artists
     const searchQueries: string[] = [];
+
+    // Fetch dynamic similar artists for top artists in parallel
+    const dynamicSimilarPools = await Promise.all(
+      topArtists.map(art => getSimilarArtistsDynamic(art.name).catch(() => []))
+    );
+
+    // Add dynamic similar artists (up to 2 per top artist)
+    dynamicSimilarPools.forEach(similarList => {
+      if (similarList && similarList.length > 0) {
+        const shuffled = [...similarList].sort(() => 0.5 - Math.random());
+        shuffled.slice(0, 2).forEach(artist => {
+          if (!searchQueries.includes(artist)) {
+            searchQueries.push(artist);
+          }
+        });
+      }
+    });
 
     // Add related artists based on top genres
     topGenres.slice(0, 2).forEach(genre => {
-      // Find artists matching this genre in our map
       const entry = Object.values(RELATED_ARTISTS_BY_GENRE).find(e => e.genre === genre);
       if (entry) {
         const randomArtist = entry.artists[Math.floor(Math.random() * entry.artists.length)];
-        searchQueries.push(randomArtist);
+        if (!searchQueries.includes(randomArtist)) {
+          searchQueries.push(randomArtist);
+        }
       }
     });
 
     // Add top artists
     topArtists.forEach(art => {
-      searchQueries.push(art.name);
+      if (!searchQueries.includes(art.name)) {
+        searchQueries.push(art.name);
+      }
     });
 
-    // Add a couple of popular seeds if the search query list is small
+    // Add a couple of popular seeds if the search query list is still small
     while (searchQueries.length < 4) {
       const randomSeed = POPULAR_SEEDS[Math.floor(Math.random() * POPULAR_SEEDS.length)];
       if (!searchQueries.includes(randomSeed)) {
@@ -173,6 +317,14 @@ export async function getHomeRecommendations(favorites: Track[], recentlyPlayed:
       // Weight 1: Exact favorite/recent artist match
       if (artistWeights[trackArtist]) {
         score += artistWeights[trackArtist].count * 10;
+      }
+
+      // Weight 2: Dynamic similar artist match
+      const isSimilarToTop = dynamicSimilarPools.some(pool => 
+        pool.some(name => name.toLowerCase() === trackArtist)
+      );
+      if (isSimilarToTop) {
+        score += 15;
       }
 
       // Weight 2: Genre match
@@ -248,15 +400,24 @@ export async function getSearchRecommendations(query: string, searchResults: Tra
       poolPromises.push(searchTracks(firstResult.artist).catch(() => []));
     }
 
-    const searchArtistName = firstResult.artist.toLowerCase();
-    const match = RELATED_ARTISTS_BY_GENRE[searchArtistName];
-    if (match) {
-      const shuffled = [...match.artists].sort(() => 0.5 - Math.random());
+    const searchArtistName = firstResult.artist;
+    const dynamicSimilar = await getSimilarArtistsDynamic(searchArtistName).catch(() => []);
+    
+    if (dynamicSimilar.length > 0) {
+      const shuffled = [...dynamicSimilar].sort(() => 0.5 - Math.random());
       shuffled.slice(0, 2).forEach(artist => {
         poolPromises.push(searchTracks(artist).catch(() => []));
       });
     } else {
-      poolPromises.push(searchTracks(`${firstResult.artist} popular`).catch(() => []));
+      const match = RELATED_ARTISTS_BY_GENRE[searchArtistName.toLowerCase()];
+      if (match) {
+        const shuffled = [...match.artists].sort(() => 0.5 - Math.random());
+        shuffled.slice(0, 2).forEach(artist => {
+          poolPromises.push(searchTracks(artist).catch(() => []));
+        });
+      } else {
+        poolPromises.push(searchTracks(`${firstResult.artist} popular`).catch(() => []));
+      }
     }
 
     const pools = await Promise.all(poolPromises);
@@ -267,7 +428,7 @@ export async function getSearchRecommendations(query: string, searchResults: Tra
     const recommendations: Track[] = [];
 
     candidates.forEach(track => {
-      if (searchResultIds.has(track.id) || seenIds.has(track.id) || track.artist.toLowerCase() === searchArtistName) {
+      if (searchResultIds.has(track.id) || seenIds.has(track.id) || track.artist.toLowerCase() === searchArtistName.toLowerCase()) {
         return;
       }
       seenIds.add(track.id);

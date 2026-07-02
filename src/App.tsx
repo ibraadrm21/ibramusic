@@ -4,7 +4,7 @@ import {
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
   User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download,
-  CheckCircle2
+  CheckCircle2, RotateCw
 } from "lucide-react";
 import { AudioProvider, useAudio, useAudioProgress } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
@@ -48,7 +48,7 @@ import TrackCard from "./components/TrackCard";
 import TrackContextMenu from "./components/TrackContextMenu";
 import { ListenTogether } from "./components/ListenTogether";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { getHomeRecommendations, getSearchRecommendations } from "./services/recommendationEngine";
+import { getHomeRecommendations, getSearchRecommendations, getTrendingRecommendations } from "./services/recommendationEngine";
 import {
   searchTracks, MOCK_LIBRARY,
   searchAlbums, searchArtists,
@@ -922,6 +922,8 @@ const MainLayout: React.FC = () => {
     const saved = localStorage.getItem("ibrastream_home_recommendations");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
+  const [isRefreshingHome, setIsRefreshingHome] = useState(false);
+  const lastRecsUpdate = useRef<number>(0);
   const [searchRecommendations, setSearchRecommendations] = useState<Track[]>([]);
   const [trendingTracks, setTrendingTracks] = useState<Track[]>([]);
 
@@ -1323,31 +1325,47 @@ const MainLayout: React.FC = () => {
     clearSelection();
   };
 
-  // Fetch home recommendations only once on mount
+  const refreshHomeRecs = async (force: boolean = false) => {
+    // Prevent refreshing too frequently if not forced (e.g. within 2 minutes)
+    if (!force && Date.now() - lastRecsUpdate.current < 120000 && homeRecommendations.length > 0) {
+      return;
+    }
+
+    setIsRefreshingHome(true);
+    try {
+      const savedRecent = localStorage.getItem("ibrastream_recently_played");
+      const recent: Track[] = savedRecent ? JSON.parse(savedRecent) : [];
+      
+      const savedFavs = localStorage.getItem("ibrastream_favorites");
+      const favs: Track[] = savedFavs ? JSON.parse(savedFavs) : [];
+
+      const [recs, trending] = await Promise.all([
+        getHomeRecommendations(favs, recent, null),
+        getTrendingRecommendations(favs, recent)
+      ]);
+
+      setHomeRecommendations(recs);
+      setTrendingTracks(trending);
+      localStorage.setItem("ibrastream_home_recommendations", JSON.stringify(recs));
+      lastRecsUpdate.current = Date.now();
+    } catch (err) {
+      console.error("Failed to load home recommendations", err);
+    } finally {
+      setIsRefreshingHome(false);
+    }
+  };
+
+  // Fetch home recommendations on mount
   useEffect(() => {
-    const loadHomeRecs = async () => {
-      try {
-        const savedRecent = localStorage.getItem("ibrastream_recently_played");
-        const recent: Track[] = savedRecent ? JSON.parse(savedRecent) : [];
-        
-        // Grab current favorites list from localStorage for mount-time recommendation seeding
-        const savedFavs = localStorage.getItem("ibrastream_favorites");
-        const favs: Track[] = savedFavs ? JSON.parse(savedFavs) : [];
-
-        const [recs, trending] = await Promise.all([
-          getHomeRecommendations(favs, recent, null),
-          import("./services/recommendationEngine").then(m => m.getTrendingRecommendations(favs, recent))
-        ]);
-
-        setHomeRecommendations(recs);
-        setTrendingTracks(trending);
-        localStorage.setItem("ibrastream_home_recommendations", JSON.stringify(recs));
-      } catch (err) {
-        console.error("Failed to load home recommendations", err);
-      }
-    };
-    loadHomeRecs();
+    refreshHomeRecs(false);
   }, []);
+
+  // Automatically refresh recommendations when switching back to the Home tab
+  useEffect(() => {
+    if (activeTab === "home" && !selectedArtist && !selectedAlbum && !selectedPlaylist) {
+      refreshHomeRecs(false);
+    }
+  }, [activeTab, selectedArtist, selectedAlbum, selectedPlaylist]);
 
 
 
@@ -4835,9 +4853,19 @@ const MainLayout: React.FC = () => {
               {/* Good Afternoon Section */}
               {homeRecommendations.length > 0 && (
                 <div className="animate-[fadeIn_0.3s_ease]">
-                  <h2 className="text-2xl font-bold text-white tracking-wide mb-4 pl-1">
-                    Good Afternoon
-                  </h2>
+                  <div className="flex items-center justify-between mb-4 pl-1 pr-1">
+                    <h2 className="text-2xl font-bold text-white tracking-wide">
+                      Good Afternoon
+                    </h2>
+                    <button
+                      onClick={() => refreshHomeRecs(true)}
+                      disabled={isRefreshingHome}
+                      className="p-1.5 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-all duration-300 disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                      title="Refrescar recomendaciones"
+                    >
+                      <RotateCw className={`w-4 h-4 ${isRefreshingHome ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {/* 8 quick-access cards using square variant */}
                     {homeRecommendations.slice(0, 8).map((track, idx) => (

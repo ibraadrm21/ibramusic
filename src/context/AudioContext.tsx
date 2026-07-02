@@ -154,6 +154,7 @@ interface AudioContextType {
   cancelSleepTimer: () => void;
   onlyDownloaded: boolean;
   setOnlyDownloaded: (val: boolean) => void;
+  currentUser: any;
 }
 
 interface AudioProgressContextType {
@@ -341,6 +342,30 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [queue, currentIndex, currentTrack, userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, history, currentTrackSource]);
 
+  // Android: Sync the remaining queue natively to Media3Session
+  useEffect(() => {
+    if (isAndroid && queue.length > 0) {
+      const idx = currentTrack ? queue.findIndex(t => t.id === currentTrack.id) : -1;
+      const remainingQueue = idx !== -1 ? queue.slice(idx) : queue;
+      const slicedQueue = remainingQueue.slice(0, 15).map(track => {
+        const cached = resolutionCache.get(track.id);
+        return {
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          thumbnail: track.thumbnail,
+          duration: track.duration,
+          streamUrl: cached?.streamUrl || ""
+        };
+      });
+      
+      console.log(`[Media3Session] Syncing native queue with ${slicedQueue.length} items`);
+      Media3Session.setQueue({ tracks: slicedQueue }).catch((err: any) => {
+        console.warn("Failed to sync native queue to Media3:", err);
+      });
+    }
+  }, [queue, currentTrack]);
+
   // Trigger pre-resolution of the next song in the queue
   useEffect(() => {
     if (!currentTrack || queue.length === 0) return;
@@ -349,15 +374,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const nextTrack = queue[idx + 1];
       const abortController = new AbortController();
       
-      // Delay pre-resolution slightly to not block startup network/CPU
-      const timer = setTimeout(() => {
+      if (isAndroid) {
         preResolveTrack(nextTrack, abortController.signal).catch(() => {});
-      }, 3000);
-      
-      return () => {
-        clearTimeout(timer);
-        abortController.abort();
-      };
+        return () => {
+          abortController.abort();
+        };
+      } else {
+        const timer = setTimeout(() => {
+          preResolveTrack(nextTrack, abortController.signal).catch(() => {});
+        }, 3000);
+        
+        return () => {
+          clearTimeout(timer);
+          abortController.abort();
+        };
+      }
     }
   }, [currentTrack, queue]);
 
@@ -712,6 +743,60 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.removeItem("ibrastream_playing_playlist_id");
     }
 
+    if (isAndroid && !isRemoteSync) {
+      if (newQueue) {
+        setOriginalPlaylistQueue(newQueue);
+        let activeQueue = newQueue;
+        let playIndex = 0;
+        if (isShuffle) {
+          const otherTracks = newQueue.filter(t => t.id !== track.id);
+          const shuffled = [track, ...shuffleArray(otherTracks)];
+          setPlaylistQueue(shuffled);
+          setPlaylistIndex(0);
+          activeQueue = shuffled;
+        } else {
+          setPlaylistQueue(newQueue);
+          const index = newQueue.findIndex(t => t.id === track.id);
+          setPlaylistIndex(index !== -1 ? index : 0);
+          playIndex = index !== -1 ? index : 0;
+        }
+        setCurrentTrackSource('playlist');
+        setCurrentTrack(track);
+        setIsPlaying(true);
+        setIsLoading(false);
+
+        const remainingQueue = activeQueue.slice(playIndex);
+        const slicedQueue = remainingQueue.slice(0, 15).map(t => {
+          const cached = resolutionCache.get(t.id);
+          return {
+            id: t.id,
+            title: t.title,
+            artist: t.artist,
+            thumbnail: t.thumbnail,
+            duration: t.duration,
+            streamUrl: cached?.streamUrl || ""
+          };
+        });
+
+        console.log(`[Media3Session] Synchronously syncing native queue with ${slicedQueue.length} items`);
+        Media3Session.setQueue({ tracks: slicedQueue })
+          .then(() => {
+            Media3Session.playTrackAtIndex({ index: 0 }).catch(() => {});
+          })
+          .catch((err: any) => {
+            console.warn("Failed to sync native queue on playTrack:", err);
+          });
+        return;
+      } else {
+        const q = [...userQueue, ...playlistQueue];
+        const idx = q.findIndex(t => t.id === track.id);
+        if (idx !== -1) {
+          Media3Session.playTrackAtIndex({ index: idx }).catch(() => {});
+          return;
+        }
+      }
+    }
+
     if (!isRemoteSync) {
       if (newQueue) {
         setOriginalPlaylistQueue(newQueue);
@@ -757,6 +842,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     playbackExpectedRef.current = true;
     setCurrentTrack(track);
+
+    // Pre-fetch lyrics for the active track in parallel
+    import("../services/musicApi").then(({ getLyricsForTrack }) => {
+      getLyricsForTrack(track).catch(() => {});
+    });
 
     // Add to recently played in localStorage
     try {
@@ -1028,6 +1118,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
+    if (isAndroid) {
+      Media3Session.playTrackAtIndex({ index: currentIndex + 1 })
+        .catch(() => {
+          playbackExpectedRef.current = false;
+          setIsPlaying(false);
+        });
+      return;
+    }
     if (currentTrack) {
       setHistory(prev => [...prev, currentTrack]);
     }
@@ -1063,6 +1161,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (currentTime >= 3) {
       seek(0);
+      return;
+    }
+    if (isAndroid) {
+      if (currentIndex > 0) {
+        Media3Session.playTrackAtIndex({ index: currentIndex - 1 }).catch(() => {});
+      }
       return;
     }
 
@@ -1624,11 +1728,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           // Also pre-resolve the next track after this natively transitioned track
           if (idx + 1 < q.length) {
             const nextTrack = q[idx + 1];
-            setTimeout(() => {
-              if (currentTrackRef.current?.id === targetTrack.id) {
-                preResolveTrack(nextTrack).catch(() => {});
-              }
-            }, 3000);
+            preResolveTrack(nextTrack).catch(() => {});
           }
         }
       });
@@ -1733,6 +1833,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     cancelSleepTimer,
     onlyDownloaded,
     setOnlyDownloaded,
+    currentUser,
   }), [
     currentTrack,
     isPlaying,
@@ -1780,6 +1881,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     startSleepTimer,
     cancelSleepTimer,
     onlyDownloaded,
+    currentUser,
   ]);
 
   return (

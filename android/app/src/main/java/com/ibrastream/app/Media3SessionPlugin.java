@@ -76,7 +76,23 @@ public class Media3SessionPlugin extends Plugin {
                             if (PlaybackService.customPlayer != null) {
                                 PlaybackService.customPlayer.setMockPosition(0);
                             }
-                            notifyListeners("onMediaItemTransition", ret);
+                            
+                            if (getBridge() != null && getBridge().getWebView() != null) {
+                                getBridge().getWebView().post(() -> {
+                                    try {
+                                        if (!MainActivity.isAppInForeground) {
+                                            Log.e(TAG, "Plugin: Waking WebView JS and timers for transition: " + mediaItem.mediaId);
+                                            getBridge().getWebView().onResume();
+                                            getBridge().getWebView().resumeTimers();
+                                        }
+                                        notifyListeners("onMediaItemTransition", ret);
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Error notifying onMediaItemTransition", e);
+                                    }
+                                });
+                            } else {
+                                notifyListeners("onMediaItemTransition", ret);
+                            }
                         }
                     }
                 });
@@ -232,9 +248,6 @@ public class Media3SessionPlugin extends Plugin {
                     try {
                         int currentIndex = controller.getCurrentMediaItemIndex();
                         int itemCount = controller.getMediaItemCount();
-                        if (itemCount > currentIndex + 1) {
-                            controller.removeMediaItems(currentIndex + 1, itemCount);
-                        }
 
                         MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder()
                                 .setTitle(title)
@@ -254,8 +267,23 @@ public class Media3SessionPlugin extends Plugin {
                             mediaItemBuilder.setUri("android.resource://" + activity.getPackageName() + "/" + R.raw.silent);
                         }
                         
-                        controller.addMediaItem(mediaItemBuilder.build());
-                        Log.e(TAG, "Native: added next media item. mediaId=" + mediaId + ", count=" + controller.getMediaItemCount());
+                        MediaItem newNextItem = mediaItemBuilder.build();
+                        int nextIndex = currentIndex + 1;
+
+                        if (nextIndex < itemCount) {
+                            MediaItem existingItem = controller.getMediaItemAt(nextIndex);
+                            if (existingItem.mediaId.equals(mediaId)) {
+                                controller.replaceMediaItem(nextIndex, newNextItem);
+                                Log.e(TAG, "Native: replaced media item at index " + nextIndex + " with real URL. mediaId=" + mediaId);
+                            } else {
+                                controller.removeMediaItems(nextIndex, itemCount);
+                                controller.addMediaItem(newNextItem);
+                                Log.e(TAG, "Native: next mediaId mismatch. Reset and added next media item. mediaId=" + mediaId);
+                            }
+                        } else {
+                            controller.addMediaItem(newNextItem);
+                            Log.e(TAG, "Native: added next media item at end. mediaId=" + mediaId + ", count=" + controller.getMediaItemCount());
+                        }
                         call.resolve();
                     } catch (Exception e) {
                         Log.e(TAG, "UI Thread error in setNextMetadata", e);
@@ -264,6 +292,86 @@ public class Media3SessionPlugin extends Plugin {
                 });
             } catch (Exception e) {
                 Log.e(TAG, "Plugin error in setNextMetadata", e);
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void setQueue(PluginCall call) {
+        com.getcapacitor.JSArray tracks = call.getArray("tracks");
+        if (tracks == null) {
+            call.reject("Tracks array is required");
+            return;
+        }
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                ensureControllerListener(controller);
+                
+                activity.runOnUiThread(() -> {
+                    try {
+                        int currentIndex = controller.getCurrentMediaItemIndex();
+                        int itemCount = controller.getMediaItemCount();
+                        
+                        if (itemCount > currentIndex + 1) {
+                            controller.removeMediaItems(currentIndex + 1, itemCount);
+                        }
+                        
+                        for (int i = 0; i < tracks.length(); i++) {
+                            org.json.JSONObject track = tracks.getJSONObject(i);
+                            String id = track.getString("id");
+                            String title = track.getString("title");
+                            String artist = track.getString("artist");
+                            String thumbnail = track.optString("thumbnail", "");
+                            String streamUrl = track.optString("streamUrl", "");
+                            
+                            if (controller.getCurrentMediaItem() != null && id.equals(controller.getCurrentMediaItem().mediaId)) {
+                                continue;
+                            }
+                            
+                            MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder()
+                                    .setTitle(title)
+                                    .setArtist(artist);
+                            if (thumbnail != null && !thumbnail.isEmpty()) {
+                                metaBuilder.setArtworkUri(android.net.Uri.parse(thumbnail));
+                            }
+                            
+                            MediaItem.Builder mediaItemBuilder = new MediaItem.Builder()
+                                    .setMediaId(id)
+                                    .setMediaMetadata(metaBuilder.build());
+                                    
+                            if (streamUrl != null && !streamUrl.isEmpty()) {
+                                mediaItemBuilder.setUri(streamUrl);
+                            } else {
+                                String queryParams = "";
+                                try {
+                                    queryParams = "?title=" + java.net.URLEncoder.encode(title, "UTF-8") +
+                                                  "&artist=" + java.net.URLEncoder.encode(artist, "UTF-8");
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Error encoding query params", e);
+                                }
+                                mediaItemBuilder.setUri("https://ibrastream.resolve/" + id + "/audio.mp3" + queryParams);
+                            }
+                                    
+                            controller.addMediaItem(mediaItemBuilder.build());
+                        }
+                        Log.e(TAG, "Native setQueue finished. Total native items: " + controller.getMediaItemCount());
+                        call.resolve();
+                    } catch (Exception e) {
+                        Log.e(TAG, "UI Thread error in setQueue", e);
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "Plugin error in setQueue", e);
                 call.reject(e.getMessage());
             }
         }, MoreExecutors.directExecutor());
@@ -728,5 +836,205 @@ public class Media3SessionPlugin extends Plugin {
             ret.put("granted", true);
             call.resolve(ret);
         }
+    }
+
+    @PluginMethod
+    public void removeTrack(PluginCall call) {
+        Integer index = call.getInt("index");
+        if (index == null) {
+            call.reject("Index is required");
+            return;
+        }
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                activity.runOnUiThread(() -> {
+                    try {
+                        if (index >= 0 && index < controller.getMediaItemCount()) {
+                            controller.removeMediaItem(index);
+                            call.resolve();
+                        } else {
+                            call.reject("Index out of bounds");
+                        }
+                    } catch (Exception e) {
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void reorderTracks(PluginCall call) {
+        Integer fromIndex = call.getInt("fromIndex");
+        Integer toIndex = call.getInt("toIndex");
+        if (fromIndex == null || toIndex == null) {
+            call.reject("fromIndex and toIndex are required");
+            return;
+        }
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                activity.runOnUiThread(() -> {
+                    try {
+                        int count = controller.getMediaItemCount();
+                        if (fromIndex >= 0 && fromIndex < count && toIndex >= 0 && toIndex < count) {
+                            controller.moveMediaItem(fromIndex, toIndex);
+                            call.resolve();
+                        } else {
+                            call.reject("Index out of bounds");
+                        }
+                    } catch (Exception e) {
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void clearQueue(PluginCall call) {
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                activity.runOnUiThread(() -> {
+                    try {
+                        controller.clearMediaItems();
+                        call.resolve();
+                    } catch (Exception e) {
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void addTrack(PluginCall call) {
+        org.json.JSONObject track = call.getObject("track");
+        Integer index = call.getInt("index");
+        if (track == null) {
+            call.reject("Track is required");
+            return;
+        }
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                activity.runOnUiThread(() -> {
+                    try {
+                        String id = track.getString("id");
+                        String title = track.getString("title");
+                        String artist = track.getString("artist");
+                        String thumbnail = track.optString("thumbnail", "");
+                        String streamUrl = track.optString("streamUrl", "");
+
+                        MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder()
+                                .setTitle(title)
+                                .setArtist(artist);
+                        if (thumbnail != null && !thumbnail.isEmpty()) {
+                            metaBuilder.setArtworkUri(android.net.Uri.parse(thumbnail));
+                        }
+
+                        MediaItem.Builder mediaItemBuilder = new MediaItem.Builder()
+                                .setMediaId(id)
+                                .setMediaMetadata(metaBuilder.build());
+
+                        if (streamUrl != null && !streamUrl.isEmpty()) {
+                            mediaItemBuilder.setUri(streamUrl);
+                        } else {
+                            String queryParams = "";
+                            try {
+                                queryParams = "?title=" + java.net.URLEncoder.encode(title, "UTF-8") +
+                                              "&artist=" + java.net.URLEncoder.encode(artist, "UTF-8");
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error encoding query params", e);
+                            }
+                            mediaItemBuilder.setUri("https://ibrastream.resolve/" + id + "/audio.mp3" + queryParams);
+                        }
+
+                        MediaItem mediaItem = mediaItemBuilder.build();
+                        if (index != null && index >= 0 && index <= controller.getMediaItemCount()) {
+                            controller.addMediaItem(index, mediaItem);
+                        } else {
+                            controller.addMediaItem(mediaItem);
+                        }
+                        call.resolve();
+                    } catch (Exception e) {
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
+    }
+
+    @PluginMethod
+    public void playTrackAtIndex(PluginCall call) {
+        Integer index = call.getInt("index");
+        if (index == null) {
+            call.reject("Index is required");
+            return;
+        }
+
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity.getControllerFuture() == null) {
+            call.reject("Controller future is null");
+            return;
+        }
+
+        activity.getControllerFuture().addListener(() -> {
+            try {
+                MediaController controller = activity.getControllerFuture().get();
+                activity.runOnUiThread(() -> {
+                    try {
+                        if (index >= 0 && index < controller.getMediaItemCount()) {
+                            controller.seekTo(index, 0);
+                            controller.play();
+                            call.resolve();
+                        } else {
+                            call.reject("Index out of bounds");
+                        }
+                    } catch (Exception e) {
+                        call.reject(e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        }, MoreExecutors.directExecutor());
     }
 }

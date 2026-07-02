@@ -21,10 +21,37 @@ class DownloadService {
   }
 
   private async init() {
-    if (!Capacitor.isNativePlatform()) return;
+    // 1. Pre-load cached manifest from localStorage for immediate UI availability
+    const saved = localStorage.getItem('ibrastream_downloaded_ids');
+    if (saved) {
+      try {
+        const ids = JSON.parse(saved);
+        if (Array.isArray(ids)) {
+          this.downloadedTracks = new Set(ids);
+        }
+      } catch (e) {}
+    }
+
+    if (!Capacitor.isNativePlatform()) {
+      // Web Cache API syncing
+      try {
+        const cache = await caches.open('ibrastream_offline_music');
+        const keys = await cache.keys();
+        const cachedIds = keys.map(request => {
+          // If we cache by trackId as request URL, extract it
+          const url = new URL(request.url);
+          return url.pathname.split('/').pop() || "";
+        }).filter(Boolean);
+        this.downloadedTracks = new Set(cachedIds);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(cachedIds));
+      } catch (e) {
+        console.warn('Failed to sync Web Cache API keys:', e);
+      }
+      return;
+    }
 
     try {
-      // Ensure download directory exists
+      // Ensure download directory exists (Native Platform)
       await Filesystem.mkdir({
         path: DOWNLOAD_DIR,
         directory: Directory.Data,
@@ -44,23 +71,22 @@ class DownloadService {
         this.downloadedTracks = new Set(ids);
         localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(ids));
       } catch (scanErr) {
-        const saved = localStorage.getItem('ibrastream_downloaded_ids');
-        if (saved) {
-          const ids = JSON.parse(saved);
-          if (Array.isArray(ids)) {
-            this.downloadedTracks = new Set(ids);
-          }
-        }
+        // Fallback to localStorage if disk read fails
+        console.warn('Failed native directory scan, using localStorage fallback', scanErr);
       }
 
-      // Add listener for native background download progress events
-      if (Capacitor.getPlatform() === 'android') {
-        Media3Session.addListener('downloadProgress', (data: { trackId: string; progress: number }) => {
-          if (this.downloadingTracks.has(data.trackId)) {
-            this.downloadingTracks.set(data.trackId, data.progress);
-            this.notifyStatusChange();
-          }
-        });
+      // Add listener for native background download progress events (for when Native background service is active)
+      if (Capacitor.getPlatform() === 'android' && typeof Media3Session.addListener === 'function') {
+        try {
+          Media3Session.addListener('downloadProgress', (data: { trackId: string; progress: number }) => {
+            if (this.downloadingTracks.has(data.trackId)) {
+              this.downloadingTracks.set(data.trackId, data.progress);
+              this.notifyStatusChange();
+            }
+          });
+        } catch (e) {
+          console.warn('Failed to register native Media3Session download listener:', e);
+        }
       }
     } catch (e) {
       console.error('DownloadService init failed', e);
@@ -68,10 +94,6 @@ class DownloadService {
   }
 
   public async downloadTrack(track: Track, getStreamUrl: (id: string) => Promise<string>): Promise<void> {
-    if (!Capacitor.isNativePlatform()) {
-      throw new Error('Downloads are only available on Android/iOS');
-    }
-
     if (this.downloadedTracks.has(track.id) || this.downloadingTracks.has(track.id)) {
       return;
     }
@@ -83,26 +105,42 @@ class DownloadService {
       // 1. Resolve stream URL
       const streamUrl = await getStreamUrl(track.id);
 
-      if (Capacitor.getPlatform() === 'android') {
-        console.log(`[Downloader] Starting native Android background download for: ${track.id}`);
-        await Media3Session.downloadTrackBackground({
-          url: streamUrl,
-          trackId: track.id
-        });
-        
+      // Web Browser Cache API Fallback
+      if (!Capacitor.isNativePlatform()) {
+        console.log(`[Downloader] Starting web browser Cache API download for: ${track.id}`);
+        this.downloadingTracks.set(track.id, 0.2);
+        this.notifyStatusChange();
+
+        const res = await fetch(streamUrl);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch audio stream: ${res.status}`);
+        }
+
+        this.downloadingTracks.set(track.id, 0.6);
+        this.notifyStatusChange();
+
+        const cache = await caches.open('ibrastream_offline_music');
+        // Store the response against the track ID
+        await cache.put(track.id, res);
+
         // Mark as downloaded
         this.downloadedTracks.add(track.id);
         this.downloadingTracks.delete(track.id);
 
-        // Save manifest
         localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
-
-        // Save track metadata for offline mode
         localStorage.setItem(`ibrastream_meta_${track.id}`, JSON.stringify(track));
 
         this.notifyStatusChange();
         return;
       }
+
+      // Note: Native Android background download is currently bypassed because downloadTrackBackground
+      // is not implemented on the native Java plugin. Fallback to robust chunked filesystem downloader.
+      /*
+      if (Capacitor.getPlatform() === 'android') {
+        ...
+      }
+      */
 
       const fileName = `${track.id}.mp3`;
       const path = `${DOWNLOAD_DIR}/${fileName}`;
@@ -287,7 +325,19 @@ class DownloadService {
   }
 
   public async removeDownload(trackId: string): Promise<void> {
-    if (!Capacitor.isNativePlatform()) return;
+    if (!Capacitor.isNativePlatform()) {
+      try {
+        const cache = await caches.open('ibrastream_offline_music');
+        await cache.delete(trackId);
+        this.downloadedTracks.delete(trackId);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+        localStorage.removeItem(`ibrastream_meta_${trackId}`);
+        this.notifyStatusChange();
+      } catch (e) {
+        console.error(`Failed to delete browser cached download ${trackId}`, e);
+      }
+      return;
+    }
 
     try {
       await Filesystem.deleteFile({
@@ -313,6 +363,21 @@ class DownloadService {
 
   public async getLocalUri(trackId: string): Promise<string | null> {
     if (!this.downloadedTracks.has(trackId)) return null;
+
+    if (!Capacitor.isNativePlatform()) {
+      try {
+        const cache = await caches.open('ibrastream_offline_music');
+        const response = await cache.match(trackId);
+        if (response) {
+          const blob = await response.blob();
+          return URL.createObjectURL(blob);
+        }
+      } catch (e) {
+        console.warn("Failed to get local blob URI from Cache API:", e);
+      }
+      return null;
+    }
+
     try {
       const result = await Filesystem.getUri({
         path: `${DOWNLOAD_DIR}/${trackId}.mp3`,

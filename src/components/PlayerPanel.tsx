@@ -72,7 +72,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     playTrack,
     roomId,
     isHost,
-    sleepTimerRemaining
+    sleepTimerRemaining,
+    currentUser,
+    ambientGlowEnabled
   } = useAudio();
 
   const { currentTime, duration } = useAudioProgress();
@@ -87,6 +89,15 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
   const [monthlyListeners, setMonthlyListeners] = useState<number | undefined>(undefined);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [lyricsOffset, setLyricsOffset] = useState<number>(0);
+
+  const updateOffset = (newOffset: number) => {
+    setLyricsOffset(newOffset);
+    if (currentTrack) {
+      const userId = currentUser ? currentUser.id : "guest";
+      localStorage.setItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}`, String(newOffset));
+    }
+  };
 
 
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
@@ -104,6 +115,12 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     setMonthlyListeners(undefined);
     setLyrics([]);
     setPlainLyrics("");
+    
+    // Load saved offset for this song & user combination
+    const userId = currentUser ? currentUser.id : "guest";
+    const saved = localStorage.getItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}`);
+    setLyricsOffset(saved ? parseFloat(saved) : 0);
+
     setIsLoadingLyrics(true);
 
     // Fetch artist picture and stats
@@ -158,10 +175,10 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     return () => {
       active = false;
     };
-  }, [currentTrack]);
+  }, [currentTrack, currentUser]);
 
   const activeLineIndex = lyrics.reduce((acc, line, idx) => {
-    if (currentTime >= line.time) return idx;
+    if (currentTime >= (line.time + lyricsOffset)) return idx;
     return acc;
   }, -1);
 
@@ -219,6 +236,15 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         paddingBottom: 'calc(1.5rem + var(--safe-bottom))'
       }}
     >
+      {/* Immersive blurred backdrop overlay */}
+      {ambientGlowEnabled && (
+        <div 
+          className="absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none scale-125 filter blur-[100px] bg-center bg-cover"
+          style={{
+            backgroundImage: `url(${currentTrack.thumbnail})`,
+          }}
+        />
+      )}
       
       {/* Header Controls */}
       <div className="flex items-center justify-between mb-6 shrink-0 relative">
@@ -286,38 +312,73 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         </div>
       ) : (
         /* Synced Lyrics Container */
-        <div className="flex-1 flex flex-col my-4 min-h-0 relative">
+        <div className="flex-1 flex flex-col my-4 min-h-0 relative z-10">
           {isLoadingLyrics ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2">
               <div className="w-8 h-8 border-4 border-brand-accent border-t-transparent rounded-full animate-spin" />
               <span className="text-xs">Fetching lyrics...</span>
             </div>
           ) : lyrics.length > 0 ? (
-            <div 
-              ref={lyricsContainerRef}
-              className="flex-1 overflow-y-auto flex flex-col gap-6 py-24 px-2 scrollbar-none"
-              style={{ scrollBehavior: "smooth" }}
-            >
-              {lyrics.map((line, idx) => {
-                const isActive = idx === activeLineIndex;
-                const isPast = idx < activeLineIndex;
-                return (
-                  <p
-                    key={idx}
-                    onClick={() => seek(line.time)}
-                    className={`lyrics-line text-lg md:text-xl font-bold cursor-pointer transition-all duration-300 text-left origin-left leading-relaxed ${
-                      isActive 
-                        ? "lyrics-active-line text-white scale-105 filter drop-shadow-[0_0_12px_rgba(255,255,255,0.4)] opacity-100" 
-                        : isPast 
-                          ? "lyrics-line-past text-white/40 hover:text-white/80" 
-                          : "lyrics-line-future text-white/20 hover:text-white/60"
-                    }`}
+            <>
+              {/* Sync offset controls pill */}
+              <div className="flex justify-center mb-3 shrink-0">
+                <div className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1 rounded-full text-xs font-semibold text-gray-400 transition-all select-none backdrop-blur-md">
+                  <span>Sincronizar:</span>
+                  <button 
+                    onClick={() => updateOffset(lyricsOffset - 0.5)}
+                    className="hover:text-white px-1.5 font-bold cursor-pointer transition-colors"
+                    title="Adelantar letra 0.5s"
                   >
-                    {line.text || "•••"}
-                  </p>
-                );
-              })}
-            </div>
+                    -0.5s
+                  </button>
+                  <span className={`min-w-[42px] text-center font-bold transition-colors ${lyricsOffset !== 0 ? 'text-brand-accent scale-105' : 'text-gray-300'}`}>
+                    {lyricsOffset > 0 ? `+${lyricsOffset.toFixed(1)}s` : `${lyricsOffset.toFixed(1)}s`}
+                  </span>
+                  <button 
+                    onClick={() => updateOffset(lyricsOffset + 0.5)}
+                    className="hover:text-white px-1.5 font-bold cursor-pointer transition-colors"
+                    title="Retrasar letra 0.5s"
+                  >
+                    +0.5s
+                  </button>
+                  {lyricsOffset !== 0 && (
+                    <button 
+                      onClick={() => updateOffset(0)}
+                      className="text-brand-accent hover:text-white pl-1 font-bold cursor-pointer transition-colors border-l border-white/10 ml-0.5"
+                      title="Restablecer"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              <div 
+                ref={lyricsContainerRef}
+                className="flex-1 overflow-y-auto flex flex-col gap-6 py-24 px-2 scrollbar-none"
+                style={{ scrollBehavior: "smooth" }}
+              >
+                {lyrics.map((line, idx) => {
+                  const isActive = idx === activeLineIndex;
+                  const isPast = idx < activeLineIndex;
+                  return (
+                    <p
+                      key={idx}
+                      onClick={() => seek(line.time)}
+                      className={`lyrics-line text-lg md:text-xl font-bold cursor-pointer transition-all duration-300 text-left origin-left leading-relaxed ${
+                        isActive 
+                          ? "lyrics-active-line text-white scale-105 filter drop-shadow-[0_0_12px_rgba(255,255,255,0.4)] opacity-100" 
+                          : isPast 
+                            ? "lyrics-line-past text-white/40 hover:text-white/80" 
+                            : "lyrics-line-future text-white/20 hover:text-white/60"
+                      }`}
+                    >
+                      {line.text || "•••"}
+                    </p>
+                  );
+                })}
+              </div>
+            </>
           ) : plainLyrics ? (
             <div className="plain-lyrics flex-1 overflow-y-auto whitespace-pre-wrap text-base font-medium text-gray-300 leading-loose py-4 text-left">
               {plainLyrics}

@@ -164,12 +164,17 @@ export const SettingsPanel: React.FC = () => {
           </h2>
 
           <div className="flex flex-col gap-3">
-            <span className="text-sm font-semibold text-white flex items-center gap-1.5">
-              <Volume2 className="w-4 h-4 text-gray-400" />
-              Sound Profiles
+            <span className="text-sm font-semibold text-white flex items-center justify-between w-full">
+              <span className="flex items-center gap-1.5">
+                <Volume2 className="w-4 h-4 text-gray-400" />
+                Sound Profiles
+              </span>
+              <span className="text-[9px] bg-brand-accent/20 text-brand-accent border border-brand-accent/30 px-2.5 py-0.5 rounded-full font-black uppercase tracking-wider">
+                App Only
+              </span>
             </span>
             <p className="text-[11px] text-gray-400">
-              Enhance frequency bands dynamically using standard high/low shelving filters.
+              Enhance frequency bands dynamically using standard high/low shelving filters. (Only supported on Android/iOS native apps due to browser security limitations).
             </p>
             <div className="grid grid-cols-2 gap-2 text-xs mt-1">
               {(["flat", "bass", "vocal", "electronic"] as const).map((preset) => (
