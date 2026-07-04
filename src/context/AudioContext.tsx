@@ -219,7 +219,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const queue = useMemo(() => {
     const q: Track[] = [];
-    q.push(...history);
     if (currentTrack) {
       q.push(currentTrack);
     }
@@ -229,11 +228,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       q.push(...playlistQueue.slice(startIdx));
     }
     return q;
-  }, [history, currentTrack, userQueue, playlistQueue, playlistIndex, currentTrackSource]);
+  }, [currentTrack, userQueue, playlistQueue, playlistIndex, currentTrackSource]);
 
   const currentIndex = useMemo(() => {
-    return currentTrack ? history.length : -1;
-  }, [currentTrack, history]);
+    return currentTrack ? 0 : -1;
+  }, [currentTrack]);
   const [isShuffle, setIsShuffle] = useState<boolean>(() => {
     const saved = localStorage.getItem("ibrastream_is_shuffle");
     return saved === "true";
@@ -732,6 +731,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     abortControllerRef.current = abortController;
 
     if (playlistId !== undefined && !isRemoteSync) {
+      if (playlistId !== playingPlaylistId) {
+        setUserQueue([]);
+      }
       setPlayingPlaylistId(playlistId);
       if (playlistId) {
         localStorage.setItem("ibrastream_playing_playlist_id", playlistId);
@@ -739,6 +741,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         localStorage.removeItem("ibrastream_playing_playlist_id");
       }
     } else if (newQueue && !isRemoteSync) {
+      setUserQueue([]);
       setPlayingPlaylistId(null);
       localStorage.removeItem("ibrastream_playing_playlist_id");
     }
@@ -1329,7 +1332,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     setUserQueue([]);
-    showToast("Cleared manual queue", "info");
+    setPlaylistQueue([]);
+    setOriginalPlaylistQueue([]);
+    setPlaylistIndex(-1);
+    setPlayingPlaylistId(null);
+    localStorage.removeItem("ibrastream_playing_playlist_id");
+    showToast("Cleared queue", "info");
   };
 
   const reorderQueue = (fromIndex: number, toIndex: number) => {
