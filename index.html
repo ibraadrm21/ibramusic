@@ -7,6 +7,34 @@
     <meta name="description" content="ibrastream - A beautiful and premium music player web application using MusicAPI and React" />
     <title>ibraStream - Let The Music Take You Away</title>
     <script>
+      window.onerror = function(message, source, lineno, colno, error) {
+        if (window.electronAPI && window.electronAPI.writeLog) {
+          window.electronAPI.writeLog("CRITICAL_ERROR", message + " at " + source + ":" + lineno + ":" + colno + (error ? "\n" + error.stack : ""));
+        }
+        alert("Startup error: " + message + "\nSource: " + source + "\nLine: " + lineno + ":" + colno + "\nStack: " + (error ? error.stack : "N/A"));
+        return false;
+      };
+
+      // Redirect Console to Electron Logger
+      if (window.electronAPI && window.electronAPI.writeLog) {
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+
+        console.log = function(...args) {
+          originalLog.apply(console, args);
+          window.electronAPI.writeLog("INFO", args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(" "));
+        };
+        console.warn = function(...args) {
+          originalWarn.apply(console, args);
+          window.electronAPI.writeLog("WARN", args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(" "));
+        };
+        console.error = function(...args) {
+          originalError.apply(console, args);
+          window.electronAPI.writeLog("ERROR", args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(" "));
+        };
+      }
+
       // Prevent Chromium and YouTube player from pausing when page visibility changes
       Object.defineProperty(document, 'visibilityState', {
         get: function() { return 'visible'; },

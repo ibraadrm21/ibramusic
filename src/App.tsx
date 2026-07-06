@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
-  ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings,
+  ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings, Gift,
   User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download,
   CheckCircle2, RotateCw
 } from "lucide-react";
@@ -10,9 +10,11 @@ import { AudioProvider, useAudio, useAudioProgress } from "./context/AudioContex
 import { Capacitor } from "@capacitor/core";
 import { downloadService } from "./services/downloadService";
 import { App as CapApp } from "@capacitor/app";
+import Sidebar from "./components/Sidebar";
+import WrappedModal from "./components/WrappedModal";
+import StatsPanel from "./components/StatsPanel";
 
 const isAndroid = Capacitor.getPlatform() === "android";
-import Sidebar from "./components/Sidebar";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -198,6 +200,9 @@ const MainLayout: React.FC = () => {
     updateUserIdentity,
     joinRoom,
     onlyDownloaded,
+    history,
+    accumulatedStats,
+    setAccumulatedStats,
   } = useAudio();
 
   const getContextName = React.useCallback(() => {
@@ -249,10 +254,12 @@ const MainLayout: React.FC = () => {
   }, [onlyDownloaded, downloadsUpdateTrigger]);
 
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem("ibrastream_sidebar_collapsed") === "true");
   const [tabDirection, setTabDirection] = useState<"forward" | "backward" | "none">("none");
+  const [isWrappedModalOpen, setIsWrappedModalOpen] = useState(false);
 
   // Tab order for directional transition detection
-  const TAB_ORDER = ["home", "search", "favorites", "playlists", "dashboard", "github"];
+  const TAB_ORDER = ["home", "search", "favorites", "playlists", "stats", "wrapped", "settings", "dashboard", "github"];
   const isCloudLoadingRef = useRef<boolean>(false);
   const prevTabRef = React.useRef<string>(activeTab);
 
@@ -408,10 +415,15 @@ const MainLayout: React.FC = () => {
   const [artistAlbums, setArtistAlbums] = useState<Album[]>([]);
   const [isLoadingArtistAlbums, setIsLoadingArtistAlbums] = useState<boolean>(false);
   const [visibleArtistTracksCount, setVisibleArtistTracksCount] = useState<number>(8);
+  const [visiblePlaylistCount, setVisiblePlaylistCount] = useState<number>(30);
+  const [visibleFavoritesCount, setVisibleFavoritesCount] = useState<number>(30);
 
   const [showQueueOverlay, setShowQueueOverlay] = useState<boolean>(false);
   const [showListenTogetherOverlay, setShowListenTogetherOverlay] = useState<boolean>(false);
   const [showListenTogetherDropdown, setShowListenTogetherDropdown] = useState<boolean>(false);
+  const playlistSentinelRef = useRef<HTMLDivElement | null>(null);
+  const favoritesSentinelRef = useRef<HTMLDivElement | null>(null);
+  const mainContentRef = useRef<HTMLElement | null>(null);
   const listenTogetherDropdownRef = React.useRef<HTMLDivElement>(null);
   const [showAccountDropdown, setShowAccountDropdown] = useState<boolean>(false);
   const accountDropdownRef = React.useRef<HTMLDivElement>(null);
@@ -915,7 +927,47 @@ const MainLayout: React.FC = () => {
     setSubSearchQuery("");
     setSortField(null);
     setSortDirection("asc");
+    setVisiblePlaylistCount(30);
+    setVisibleFavoritesCount(30);
   }, [activeTab, selectedPlaylist, selectedAlbum, selectedArtist]);
+
+  // Reset scroll to top on tab/view changes
+  useEffect(() => {
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTop = 0;
+    }
+  }, [activeTab, selectedPlaylist, selectedAlbum, selectedArtist]);
+
+  useEffect(() => {
+    setVisiblePlaylistCount(30);
+    setVisibleFavoritesCount(30);
+  }, [subSearchQuery, sortField, sortDirection]);
+
+  // Intersection Observer for auto-loading songs gradually in playlists
+  useEffect(() => {
+    const el = playlistSentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        setVisiblePlaylistCount(prev => prev + 100);
+      }
+    }, { rootMargin: "800px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [playlistSentinelRef.current, playlistSentinelRef]);
+
+  // Intersection Observer for auto-loading songs gradually in favorites
+  useEffect(() => {
+    const el = favoritesSentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        setVisibleFavoritesCount(prev => prev + 100);
+      }
+    }, { rootMargin: "800px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [favoritesSentinelRef.current, favoritesSentinelRef]);
 
   // Recommendation states
   const [homeRecommendations, setHomeRecommendations] = useState<Track[]>(() => {
@@ -1538,6 +1590,10 @@ const MainLayout: React.FC = () => {
           setThemeSettings(cloudData.themeSettings);
           localStorage.setItem("ibrastream_theme_settings", JSON.stringify(cloudData.themeSettings));
         }
+        if (cloudData.accumulatedStats) {
+          setAccumulatedStats(cloudData.accumulatedStats);
+          localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(cloudData.accumulatedStats));
+        }
         showToast("Settings synchronized from cloud!", "success");
       } else {
         // Cloud is empty, push local data to cloud
@@ -1545,7 +1601,8 @@ const MainLayout: React.FC = () => {
           favorites,
           playlists,
           followedArtists,
-          themeSettings
+          themeSettings,
+          accumulatedStats
         };
         saveUserData(localData).catch(err => {
           console.error("Failed to push initial local state to cloud:", err);
@@ -1567,7 +1624,8 @@ const MainLayout: React.FC = () => {
         favorites,
         playlists,
         followedArtists,
-        themeSettings
+        themeSettings,
+        accumulatedStats
       };
       saveUserData(syncData).catch((err) => {
         console.error("Auto-sync failed:", err);
@@ -1575,7 +1633,68 @@ const MainLayout: React.FC = () => {
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, [favorites, playlists, followedArtists, themeSettings, user]);
+  }, [favorites, playlists, followedArtists, themeSettings, accumulatedStats, user]);
+
+  // Synchronize monthly stats to Supabase for the global leaderboard
+  useEffect(() => {
+    if (!user) return;
+
+    const syncStatsToCloud = async () => {
+      try {
+        const d = new Date();
+        const currentMonth = d.toISOString().substring(0, 7);
+
+        if (!accumulatedStats || !accumulatedStats.tracks || Object.keys(accumulatedStats.tracks).length === 0) return;
+
+        const totalMinutes = Math.floor((accumulatedStats.totalSeconds || 0) / 60);
+
+        const topTracks = Object.values(accumulatedStats.tracks)
+          .map((item: any) => ({
+            id: item.track.id,
+            title: item.track.title,
+            artist: item.track.artist,
+            thumbnail: item.track.thumbnail,
+            minutes: Math.floor(item.seconds / 60),
+            count: item.count
+          }))
+          .sort((a: any, b: any) => b.minutes - a.minutes || b.count - a.count)
+          .slice(0, 10);
+
+        const topArtists = Object.values(accumulatedStats.artists || {})
+          .map((item: any) => ({
+            name: item.name,
+            minutes: Math.floor(item.seconds / 60),
+            count: item.count,
+            thumbnail: item.thumbnail
+          }))
+          .sort((a: any, b: any) => b.minutes - a.minutes || b.count - a.count)
+          .slice(0, 10);
+
+        await supabase.from("user_monthly_stats").upsert({
+          user_id: user.id,
+          month: currentMonth,
+          username: username || user.email?.split("@")[0] || "Anonymous",
+          avatar_url: pfp || "",
+          minutes: totalMinutes,
+          top_tracks: topTracks,
+          top_artists: topArtists,
+          updated_at: new Date().toISOString()
+        });
+
+      } catch (err) {
+        console.error("Auto-sync listening stats failed:", err);
+      }
+    };
+
+    // Debounce cloud sync by 5 seconds of inactivity/playback updates
+    const timer = setTimeout(() => {
+      syncStatsToCloud();
+    }, 5000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [user, accumulatedStats, username, pfp]);
 
   // Synchronize public_playlists to Supabase when playlists change
   useEffect(() => {
@@ -2019,6 +2138,14 @@ const MainLayout: React.FC = () => {
             handleOpenArtist(a);
           }}
           userEmail={user?.email}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => {
+            setSidebarCollapsed(prev => {
+              const next = !prev;
+              localStorage.setItem("ibrastream_sidebar_collapsed", String(next));
+              return next;
+            });
+          }}
         />
 
 
@@ -2124,7 +2251,8 @@ const MainLayout: React.FC = () => {
 
         {/* Main Panel Content */}
         <main
-          className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 md:ml-64 lg:mr-[380px] transition-all duration-300"
+          ref={mainContentRef}
+          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
         >
 
           {/* Desktop-only Top Header Bar */}
@@ -3343,7 +3471,7 @@ const MainLayout: React.FC = () => {
 
                           {/* Tracks */}
                           <div className="flex flex-col gap-2 mt-2">
-                            {sortedTracks.map((track, idx) => {
+                            {sortedTracks.slice(0, visiblePlaylistCount).map((track, idx) => {
                               const isChecked = selectedTrackIds.has(track.id);
                               return (
                                 <div
@@ -3392,6 +3520,12 @@ const MainLayout: React.FC = () => {
                               );
                             })}
                           </div>
+                          {sortedTracks.length > visiblePlaylistCount && (
+                            <div
+                              ref={playlistSentinelRef}
+                              className="h-10 w-full opacity-0 pointer-events-none"
+                            />
+                          )}
                         </>
                       );
                     })()}
@@ -4157,7 +4291,7 @@ const MainLayout: React.FC = () => {
                       </div>
                     )}
 
-                    {filtered.map((track, idx) => {
+                    {filtered.slice(0, visibleFavoritesCount).map((track, idx) => {
                       const isChecked = selectedTrackIds.has(track.id);
                       return (
                         <div
@@ -4202,6 +4336,12 @@ const MainLayout: React.FC = () => {
                         </div>
                       );
                     })}
+                    {filtered.length > visibleFavoritesCount && (
+                      <div
+                        ref={favoritesSentinelRef}
+                        className="h-10 w-full opacity-0 pointer-events-none"
+                      />
+                    )}
                   </div>
                 );
               })()}
@@ -4757,11 +4897,94 @@ const MainLayout: React.FC = () => {
                 </div>
               </div>
             </section>
+          ) : activeTab === "stats" ? (
+            /* STATS PANEL */
+            <StatsPanel
+              accumulatedStats={accumulatedStats}
+              currentUser={user}
+              username={username}
+              pfp={pfp}
+              showToast={showToast}
+            />
+          ) : activeTab === "wrapped" ? (
+            /* WRAPPED PANEL */
+            <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page text-left max-w-2xl">
+              <div className="flex flex-col gap-1.5">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Gift className="w-6 h-6 text-brand-accent animate-bounce" /> Your Year in Sound
+                </h2>
+                <p className="text-xs text-gray-500">Uncover your listening habits, top tracks, and music personality.</p>
+              </div>
+
+              <div className="glass-panel p-6 rounded-3xl border border-white/10 flex flex-col items-center text-center gap-5 relative overflow-hidden bg-cover bg-center">
+                {/* Decorative background lights */}
+                <div className="absolute -top-24 -left-24 w-48 h-48 bg-brand-accent/25 rounded-full blur-3xl pointer-events-none" />
+                <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-purple-600/20 rounded-full blur-3xl pointer-events-none" />
+
+                <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-brand-accent shadow-md">
+                  <Sparkles className="w-8 h-8 animate-pulse" />
+                </div>
+
+                <div className="flex flex-col gap-2 relative z-10 max-w-md">
+                  <h3 className="text-xl font-bold text-white">Ready for your Wrapped?</h3>
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    Discover your top artists, most played tracks, total listening time, and your music personality archetype. 
+                    {history.length < 5 && " (You don't have enough listening history yet, but you can experience it in Demo Mode!)"}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setIsWrappedModalOpen(true)}
+                  className="py-3 px-8 bg-brand-accent hover:bg-brand-accent/90 text-black font-extrabold rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-brand-accent/25 z-10"
+                >
+                  Launch Wrapped Experience
+                </button>
+              </div>
+
+              {/* Quick Stats overview */}
+              {history.length >= 5 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                  <div className="glass-panel p-5 rounded-2xl border border-white/15 flex flex-col gap-1.5">
+                    <span className="text-[10px] uppercase font-bold text-gray-400">Total plays logged</span>
+                    <span className="text-2xl font-black text-white">{history.length} songs</span>
+                  </div>
+                  <div className="glass-panel p-5 rounded-2xl border border-white/15 flex flex-col gap-1.5">
+                    <span className="text-[10px] uppercase font-bold text-gray-400">Unique tracks</span>
+                    <span className="text-2xl font-black text-white">{new Set(history.map(t => t.id)).size} tracks</span>
+                  </div>
+                </div>
+              )}
+            </section>
           ) : activeTab === "settings" ? (
             <SettingsPanel />
           ) : (
             /* MAIN HOME VIEW */
             <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page">
+
+              {/* Spotify Wrapped Banner */}
+              {new Date().getMonth() === 11 && (
+                <div 
+                  onClick={() => setIsWrappedModalOpen(true)}
+                  className="relative overflow-hidden rounded-[32px] bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-950 p-6 md:p-8 border border-white/10 flex flex-col md:flex-row justify-between items-center gap-6 cursor-pointer group hover:border-brand-accent/30 transition-all duration-300 select-none text-left"
+                >
+                  <div className="absolute -top-10 -right-10 w-32 h-32 bg-brand-accent/25 rounded-full blur-3xl pointer-events-none group-hover:bg-brand-accent/35 transition-colors"></div>
+                  <div className="flex flex-col gap-2 relative z-10">
+                    <span className="text-[10px] font-bold tracking-widest text-brand-accent uppercase flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 animate-spin animate-mobile-subpage" style={{ animationDuration: '4s' }} />
+                      Now Available
+                    </span>
+                    <h3 className="text-2xl font-black text-white leading-tight">Your Wrapped 2026</h3>
+                    <p className="text-xs text-gray-300 max-w-sm mt-1">
+                      Discover your year in sound. Top tracks, listening minutes, music personality, and more.
+                    </p>
+                  </div>
+                  <button
+                    className="py-3 px-6 bg-brand-accent group-hover:bg-brand-accent/90 text-black font-extrabold rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-brand-accent/20 shrink-0 z-10"
+                  >
+                    Explore Wrapped
+                  </button>
+                </div>
+              )}
 
               {/* Customizable Hero Card */}
               <div className="relative overflow-hidden rounded-[32px] bg-brand-darkBg p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]">
@@ -6344,6 +6567,11 @@ const MainLayout: React.FC = () => {
           onSelect={() => handleSelectTrack(contextMenu.track.id)}
         />
       )}
+      <WrappedModal
+        isOpen={isWrappedModalOpen}
+        onClose={() => setIsWrappedModalOpen(false)}
+        history={history || []}
+      />
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import React from "react";
-import { Home, Search, Heart, ListMusic, Sparkles, Settings } from "lucide-react";
+import { Home, Search, Heart, ListMusic, Sparkles, Settings, Gift, Award, ChevronLeft, ChevronRight } from "lucide-react";
+import { motion } from "framer-motion";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -53,6 +54,8 @@ interface SidebarProps {
   onSelectPlaylist: (playlist: any) => void;
   onSelectArtist: (artist: any) => void;
   userEmail?: string | null;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -63,12 +66,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectPlaylist,
   onSelectArtist,
   userEmail,
+  collapsed = false,
+  onToggleCollapse,
 }) => {
+  const isDecember = new Date().getMonth() === 11;
   const menuItems = [
     { id: "home", label: "Home", icon: Home },
     { id: "search", label: "Search", icon: Search },
     { id: "favorites", label: "Favorites", icon: Heart },
     { id: "playlists", label: "Playlists", icon: ListMusic },
+    { id: "stats", label: "Stats", icon: Award },
+    ...(isDecember ? [{ id: "wrapped", label: "Wrapped", icon: Gift }] : []),
     { id: "settings", label: "Settings", icon: Settings },
     ...(userEmail === "ibradramee123@gmail.com" ? [{ id: "admin", label: "Dashboard", icon: Sparkles }] : []),
     { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
@@ -137,28 +145,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex flex-col w-64 h-[calc(100vh-96px)] fixed left-0 top-0 glass-panel border-r border-gray-800 p-5 z-10 select-none justify-between">
+      <aside className={`hidden md:flex flex-col ${collapsed ? "w-20" : "w-64"} h-[calc(100vh-96px)] fixed left-0 top-0 glass-panel border-r border-gray-800 ${collapsed ? "p-3" : "p-5"} z-10 select-none justify-between transition-all duration-300`}>
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {/* Logo */}
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center p-1.5 overflow-hidden">
-              <Logo className="w-full h-full" />
+          <div className={`flex items-center ${collapsed ? "flex-col gap-3 justify-center" : "justify-between"} shrink-0`}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center p-1.5 overflow-hidden">
+                <Logo className="w-full h-full" />
+              </div>
+              {!collapsed && (
+                <div>
+                  <span className="text-base font-semibold tracking-tight text-white">
+                    ibrastream
+                  </span>
+                  <span className="block text-[9px] text-gray-500 font-medium tracking-widest uppercase">
+                    Music Player
+                  </span>
+                </div>
+              )}
             </div>
-            <div>
-              <span className="text-base font-semibold tracking-tight text-white">
-                ibrastream
-              </span>
-              <span className="block text-[9px] text-gray-500 font-medium tracking-widest uppercase">
-                Music Player
-              </span>
-            </div>
+            {onToggleCollapse && (
+              <button
+                onClick={onToggleCollapse}
+                className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-all"
+                title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+              </button>
+            )}
           </div>
 
           {/* Navigation Menu */}
           <nav className="flex flex-col gap-1.5 shrink-0">
-            <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider mb-1 pl-3">
-              Menu
-            </span>
+            {!collapsed && (
+              <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider mb-1 pl-3">
+                Menu
+              </span>
+            )}
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -169,11 +192,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between px-3.5 py-2.5 rounded-lg transition-all duration-200 font-medium text-xs w-full text-gray-500 hover:text-gray-200 hover:bg-white/4"
+                    className={`flex items-center ${collapsed ? "justify-center" : "justify-between"} px-3.5 py-2.5 rounded-lg transition-all duration-200 font-medium text-xs w-full text-gray-500 hover:text-gray-200 hover:bg-white/4`}
+                    title={collapsed ? item.label : undefined}
                   >
-                    <div className="flex items-center gap-3.5">
-                      <Icon className="w-4 h-4" />
-                      <span>{item.label}</span>
+                    <div className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} w-full`}>
+                      <Icon className="w-4 h-4 shrink-0" />
+                      {!collapsed && <span>{item.label}</span>}
                     </div>
                   </a>
                 );
@@ -184,15 +208,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => {
                     setActiveTab(item.id);
                   }}
-                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg transition-all duration-200 font-medium text-xs w-full ${
+                  className={`relative flex items-center ${collapsed ? "justify-center" : "justify-between"} px-3.5 py-2.5 rounded-lg transition-colors duration-200 font-medium text-xs w-full ${
                     isActive
-                      ? "bg-white/8 text-white"
+                      ? "text-white"
                       : "text-gray-500 hover:text-gray-200 hover:bg-white/4"
                   }`}
+                  title={collapsed ? item.label : undefined}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <Icon className={`w-4 h-4 ${isActive ? "text-white" : ""}`} />
-                    <span>{item.label}</span>
+                  {isActive && (
+                    <motion.span
+                      layoutId="activeTabHighlight"
+                      className="absolute inset-0 bg-white/8 rounded-lg z-0"
+                      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} z-10 w-full`}>
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? "text-white" : ""}`} />
+                    {!collapsed && <span>{item.label}</span>}
                   </div>
                 </button>
               );
@@ -201,10 +233,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Your Library List (Spotify Left Sidebar style) */}
           <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto pr-1 select-none">
-            <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider mb-1 pl-3">
-              Your Library
-            </span>
-            <div className="flex flex-col gap-1.5 pl-1.5">
+            {!collapsed && (
+              <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider mb-1 pl-3">
+                Your Library
+              </span>
+            )}
+            <div className={`flex flex-col gap-1.5 ${collapsed ? "" : "pl-1.5"}`}>
               {combinedLibrary.map((item, idx) => {
                 const isPlaylist = item.type === 'playlist';
                 return (
@@ -215,9 +249,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onDragStart={() => handleDragStart(idx)}
                     onDragOver={(e) => handleDragOver(e, idx)}
                     onDragEnd={handleDragEnd}
-                    className={`flex items-center gap-3.5 p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group ${
+                    className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group ${
                       draggedIdx === idx ? 'opacity-40 bg-white/10 scale-95' : ''
                     }`}
+                    title={collapsed ? item.name : undefined}
                   >
                     {isPlaylist ? (
                       <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
@@ -235,12 +270,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       />
                     )}
 
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{item.name}</p>
-                      <p className="text-[10px] text-gray-400 truncate">
-                        {isPlaylist ? `Playlist • ${item.tracks ? item.tracks.length : 0} Songs` : "Artist"}
-                      </p>
-                    </div>
+                    {!collapsed && (
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{item.name}</p>
+                        <p className="text-[10px] text-gray-400 truncate">
+                          {isPlaylist ? `Playlist • ${item.tracks ? item.tracks.length : 0} Songs` : "Artist"}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -271,6 +308,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           { id: "search",    icon: Search,    label: "Search" },
           { id: "favorites", icon: Heart,     label: "Liked" },
           { id: "playlists", icon: ListMusic, label: "Library" },
+          { id: "stats",     icon: Award,     label: "Stats" },
+          ...(isDecember ? [{ id: "wrapped", icon: Gift, label: "Wrapped" }] : []),
           { id: "settings",  icon: Settings,  label: "Settings" },
           ...(userEmail === "ibradramee123@gmail.com"
             ? [{ id: "admin", icon: Sparkles, label: "Dashboard" }]
@@ -299,12 +338,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className="flex flex-col items-center justify-center flex-1 h-full gap-1 transition-all active:scale-90"
+              className="relative flex flex-col items-center justify-center flex-1 h-full gap-1 transition-all active:scale-95"
             >
-              <div className={`p-1.5 rounded-xl transition-all ${isActive ? "bg-white/10" : ""}`}>
-                <Icon className={`w-5 h-5 transition-all ${isActive ? "text-white" : "text-gray-500"}`} />
+              <div className="relative p-1.5 rounded-xl transition-all">
+                {isActive && (
+                  <motion.span
+                    layoutId="activeMobileTabHighlight"
+                    className="absolute inset-0 bg-white/10 rounded-xl z-0"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
+                )}
+                <Icon className={`relative w-5 h-5 transition-all z-10 ${isActive ? "text-white" : "text-gray-500"}`} />
               </div>
-              <span className={`text-[9px] font-semibold tracking-wide transition-all ${isActive ? "text-white" : "text-gray-600"}`}>
+              <span className={`text-[9px] font-semibold tracking-wide transition-all z-10 ${isActive ? "text-white" : "text-gray-600"}`}>
                 {label}
               </span>
             </button>

@@ -1,5 +1,6 @@
 import React, { useRef } from "react";
 import { Play, Pause, Heart, ListPlus, Plus, MoreVertical } from "lucide-react";
+import { motion } from "framer-motion";
 import type { Track } from "../services/musicApi";
 import { useAudio } from "../context/AudioContext";
 
@@ -89,7 +90,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
 
   if (variant === "square") {
     return (
-      <div
+      <motion.div
         onClick={handlePlayClick}
         onContextMenu={(e) => {
           if (onContextMenu) {
@@ -100,6 +101,9 @@ export const TrackCard = React.memo<TrackCardProps>(({
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        whileHover={{ y: -4, scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        transition={{ type: "spring", stiffness: 300, damping: 20 }}
         className="group relative flex flex-col gap-2 rounded-xl cursor-pointer select-none"
       >
         {/* Cover Art Container */}
@@ -192,13 +196,13 @@ export const TrackCard = React.memo<TrackCardProps>(({
             )}
           </div>
         </div>
-      </div>
+      </motion.div>
     );
   }
 
   // Row layout representing Popular Songs / search items
   return (
-    <div
+    <motion.div
       onClick={handlePlayClick}
       onContextMenu={(e) => {
         if (onContextMenu) {
@@ -209,6 +213,8 @@ export const TrackCard = React.memo<TrackCardProps>(({
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      whileHover={{ x: 4 }}
+      transition={{ type: "spring", stiffness: 300, damping: 25 }}
       className={`group flex items-center justify-between md:grid md:grid-cols-10 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
         isCurrent ? "bg-white/10 border-l-4 border-brand-accent" : "hover:bg-white/5 border-l-4 border-transparent"
       }`}
@@ -346,7 +352,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
           {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, "0")}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 });
 

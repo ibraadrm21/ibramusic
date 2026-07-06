@@ -5,6 +5,7 @@ export interface SyncData {
   playlists?: any[];
   followedArtists?: any[];
   themeSettings?: any;
+  accumulatedStats?: any;
 }
 
 /**

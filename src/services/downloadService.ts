@@ -32,6 +32,34 @@ class DownloadService {
       } catch (e) {}
     }
 
+    // Electron integration
+    if (typeof window !== 'undefined' && (window as any).electronAPI) {
+      const electronAPI = (window as any).electronAPI;
+      try {
+        const ids = await electronAPI.getDownloadedTrackIds();
+        this.downloadedTracks = new Set(ids);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(ids));
+
+        electronAPI.onDownloadProgress((data: { trackId: string; progress: number }) => {
+          this.downloadingTracks.set(data.trackId, data.progress / 100);
+          this.notifyStatusChange();
+        });
+        electronAPI.onDownloadCompleted((data: { trackId: string; filePath: string }) => {
+          this.downloadedTracks.add(data.trackId);
+          this.downloadingTracks.delete(data.trackId);
+          localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+          this.notifyStatusChange();
+        });
+        electronAPI.onDownloadFailed((data: { trackId: string; error: string }) => {
+          this.downloadingTracks.delete(data.trackId);
+          this.notifyStatusChange();
+        });
+      } catch (err) {
+        console.error("Failed to initialize Electron download sync:", err);
+      }
+      return;
+    }
+
     if (!Capacitor.isNativePlatform()) {
       // Web Cache API syncing
       try {
@@ -104,6 +132,12 @@ class DownloadService {
 
       // 1. Resolve stream URL
       const streamUrl = await getStreamUrl(track.id);
+
+      // Electron Integration
+      if (typeof window !== 'undefined' && (window as any).electronAPI) {
+        (window as any).electronAPI.downloadTrack(track, streamUrl);
+        return;
+      }
 
       // Web Browser Cache API Fallback
       if (!Capacitor.isNativePlatform()) {
@@ -325,6 +359,19 @@ class DownloadService {
   }
 
   public async removeDownload(trackId: string): Promise<void> {
+    // Electron Integration
+    if (typeof window !== 'undefined' && (window as any).electronAPI) {
+      try {
+        await (window as any).electronAPI.deleteOfflineTrack(trackId);
+        this.downloadedTracks.delete(trackId);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+        this.notifyStatusChange();
+      } catch (e) {
+        console.error("Failed to delete Electron offline download:", e);
+      }
+      return;
+    }
+
     if (!Capacitor.isNativePlatform()) {
       try {
         const cache = await caches.open('ibrastream_offline_music');
@@ -363,6 +410,16 @@ class DownloadService {
 
   public async getLocalUri(trackId: string): Promise<string | null> {
     if (!this.downloadedTracks.has(trackId)) return null;
+
+    // Electron Integration
+    if (typeof window !== 'undefined' && (window as any).electronAPI) {
+      try {
+        return await (window as any).electronAPI.getOfflineTrackPath(trackId);
+      } catch (e) {
+        console.error("Failed to resolve Electron offline path:", e);
+        return null;
+      }
+    }
 
     if (!Capacitor.isNativePlatform()) {
       try {

@@ -134,6 +134,8 @@ interface AudioContextType {
   playlistIndex: number;
   currentTrackSource: 'playlist' | 'user_queue' | null;
   history: Track[];
+  accumulatedStats: any;
+  setAccumulatedStats: React.Dispatch<React.SetStateAction<any>>;
   // Listen Together
   roomId: string | null;
   isHost: boolean;
@@ -210,6 +212,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return saved ? parseInt(saved, 10) : -1;
   });
   const [history, setHistory] = useState<Track[]>(() => {
+    const hasReset = localStorage.getItem("ibrastream_history_reset_20260704");
+    if (!hasReset) {
+      localStorage.removeItem("ibrastream_history");
+      localStorage.setItem("ibrastream_history_reset_20260704", "true");
+      return [];
+    }
     const saved = localStorage.getItem("ibrastream_history");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
@@ -340,6 +348,167 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.removeItem("ibrastream_current_track");
     }
   }, [queue, currentIndex, currentTrack, userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, history, currentTrackSource]);
+
+  const [accumulatedStats, setAccumulatedStats] = useState(() => {
+    const hasResetAcc = localStorage.getItem("ibrastream_accumulated_reset_20260704_v3");
+    if (!hasResetAcc) {
+      localStorage.removeItem("ibrastream_accumulated_stats");
+      localStorage.setItem("ibrastream_accumulated_reset_20260704_v3", "true");
+      return { totalSeconds: 0, tracks: {}, artists: {} };
+    }
+    const saved = localStorage.getItem("ibrastream_accumulated_stats");
+    try {
+      return saved ? JSON.parse(saved) : { totalSeconds: 0, tracks: {}, artists: {} };
+    } catch {
+      return { totalSeconds: 0, tracks: {}, artists: {} };
+    }
+  });
+
+  const prevTimeRef = useRef<number>(0);
+  const lastTrackIdRef = useRef<string | null>(null);
+  const playCountLockRef = useRef<boolean>(false);
+
+  // Track play count once after 50% of duration or 30 seconds (whichever is earlier)
+  useEffect(() => {
+    if (!currentTrack) {
+      playCountLockRef.current = false;
+      lastTrackIdRef.current = null;
+      return;
+    }
+
+    if (lastTrackIdRef.current !== currentTrack.id) {
+      lastTrackIdRef.current = currentTrack.id;
+      playCountLockRef.current = false;
+    }
+
+    const playThreshold = duration ? Math.min(duration * 0.5, 30) : 30;
+
+    if (!playCountLockRef.current && currentTime >= playThreshold) {
+      playCountLockRef.current = true;
+      setAccumulatedStats((prev: any) => {
+        const next = {
+          ...prev,
+          tracks: { ...prev.tracks },
+          artists: { ...prev.artists }
+        };
+
+        if (!next.tracks[currentTrack.id]) {
+          next.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
+        } else {
+          next.tracks[currentTrack.id] = { ...next.tracks[currentTrack.id] };
+        }
+        next.tracks[currentTrack.id].count += 1;
+
+        const artistName = currentTrack.artist || "Unknown Artist";
+        if (!next.artists[artistName]) {
+          next.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
+        } else {
+          next.artists[artistName] = { ...next.artists[artistName] };
+        }
+        next.artists[artistName].count += 1;
+
+        return next;
+      });
+    }
+  }, [currentTime, currentTrack, duration]);
+
+  // Track seconds played 1:1 in real-time
+  useEffect(() => {
+    if (!currentTrack || !isPlaying) {
+      prevTimeRef.current = currentTime;
+      return;
+    }
+
+    const diff = currentTime - prevTimeRef.current;
+    prevTimeRef.current = currentTime;
+
+    if (diff > 0 && diff < 3) {
+      setAccumulatedStats((prev: any) => {
+        const next = {
+          ...prev,
+          tracks: { ...prev.tracks },
+          artists: { ...prev.artists }
+        };
+        
+        next.totalSeconds = (prev.totalSeconds || 0) + diff;
+
+        if (!next.tracks[currentTrack.id]) {
+          next.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
+        } else {
+          next.tracks[currentTrack.id] = { ...next.tracks[currentTrack.id] };
+        }
+        next.tracks[currentTrack.id].seconds = (next.tracks[currentTrack.id].seconds || 0) + diff;
+
+        const artistName = currentTrack.artist || "Unknown Artist";
+        if (!next.artists[artistName]) {
+          next.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
+        } else {
+          next.artists[artistName] = { ...next.artists[artistName] };
+        }
+        next.artists[artistName].seconds = (next.artists[artistName].seconds || 0) + diff;
+
+        return next;
+      });
+      
+      // Dispatch update event for Supabase sync
+      window.dispatchEvent(new Event("ibrastream_history_updated"));
+    }
+  }, [currentTime, isPlaying, currentTrack]);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(accumulatedStats));
+  }, [accumulatedStats]);
+
+  // Electron Tray controls listener
+  useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && (window as any).electronAPI !== undefined;
+    if (!isElectron) return;
+
+    const electronAPI = (window as any).electronAPI;
+
+    electronAPI.onTrayPlayPause(() => {
+      togglePlayRef.current?.();
+    });
+    electronAPI.onTrayNext(() => {
+      nextTrackRef.current?.();
+    });
+    electronAPI.onTrayPrev(() => {
+      prevTrackRef.current?.();
+    });
+  }, []);
+
+  // Update Discord Rich Presence (RPC) activity
+  const lastRPCStateRef = useRef({ trackId: "", isPlaying: false, seekTime: 0 });
+  useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && (window as any).electronAPI !== undefined;
+    if (!isElectron) return;
+
+    const electronAPI = (window as any).electronAPI;
+
+    if (!currentTrack) {
+      if (lastRPCStateRef.current.trackId !== "") {
+        lastRPCStateRef.current = { trackId: "", isPlaying: false, seekTime: 0 };
+        electronAPI.clearDiscordPresence();
+      }
+      return;
+    }
+
+    const timeDiff = Math.abs(currentTime - lastRPCStateRef.current.seekTime);
+    const hasTrackChanged = lastRPCStateRef.current.trackId !== currentTrack.id;
+    const hasPlayingChanged = lastRPCStateRef.current.isPlaying !== isPlaying;
+    const hasSeeked = timeDiff > 3;
+
+    if (hasTrackChanged || hasPlayingChanged || hasSeeked) {
+      lastRPCStateRef.current = { trackId: currentTrack.id, isPlaying, seekTime: currentTime };
+      electronAPI.updateDiscordPresence({
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        currentTime,
+        duration,
+        isPlaying
+      });
+    }
+  }, [currentTrack, isPlaying, currentTime, duration]);
 
   // Android: Sync the remaining queue natively to Media3Session
   useEffect(() => {
@@ -803,9 +972,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!isRemoteSync) {
       if (newQueue) {
         setOriginalPlaylistQueue(newQueue);
-        if (currentTrack) {
-          setHistory(prev => [...prev, currentTrack]);
-        }
         if (isShuffle) {
           const otherTracks = newQueue.filter(t => t.id !== track.id);
           const shuffled = [track, ...shuffleArray(otherTracks)];
@@ -821,9 +987,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (currentTrack && currentTrack.id === track.id) {
           // Same track, do nothing
         } else {
-          if (currentTrack) {
-            setHistory(prev => [...prev, currentTrack]);
-          }
           const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
           if (userQueueIdx !== -1) {
             setUserQueue(prev => prev.slice(userQueueIdx + 1));
@@ -1129,10 +1292,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       return;
     }
-    if (currentTrack) {
-      setHistory(prev => [...prev, currentTrack]);
-    }
-
     if (userQueue.length > 0) {
       const nextTrk = userQueue[0];
       setUserQueue(prev => prev.slice(1));
@@ -1823,6 +1982,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playlistIndex,
     currentTrackSource,
     history,
+    accumulatedStats,
+    setAccumulatedStats,
     roomId,
     isHost,
     isConnected,
@@ -1874,6 +2035,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playlistIndex,
     currentTrackSource,
     history,
+    accumulatedStats,
+    setAccumulatedStats,
     roomId,
     isHost,
     isConnected,

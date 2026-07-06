@@ -31,3 +31,9 @@ test-*.cjs
 test-*.js
 src/test-*.js
 src/test-*.cjs
+
+# Builds and logs
+out/
+release/
+web-build/
+logcat_*.txt
