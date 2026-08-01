@@ -37,3 +37,7 @@ out/
 release/
 web-build/
 logcat_*.txt
+
+# Exclude Android folder
+android/
+

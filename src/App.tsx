@@ -183,7 +183,8 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTh
 
 const MainLayout: React.FC = () => {
   useEffect(() => {
-    if (Capacitor.isNativePlatform()) {
+    const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
+    if (Capacitor.isNativePlatform() || isFlutter) {
       document.body.classList.add("is-native");
     }
   }, []);
@@ -716,9 +717,9 @@ const MainLayout: React.FC = () => {
   const [loadingYouTubePlaylistId, setLoadingYouTubePlaylistId] = useState<string | null>(null);
 
   // Hero Banner State
-  const [heroTitle, setHeroTitle] = useState<string>("Let The Music");
-  const [heroSubtitle, setHeroSubtitle] = useState<string>("Take You Away");
-  const [heroDescription, setHeroDescription] = useState<string>("IbraSexyStream Music Player Free Gay Pro Max.");
+  const [heroTitle, setHeroTitle] = useState<string>("bla bla car");
+  const [heroSubtitle, setHeroSubtitle] = useState<string>("Brrrrrr");
+  const [heroDescription, setHeroDescription] = useState<string>("Underbarber");
   const [heroBgGradient, setHeroBgGradient] = useState<string>("from-brand-accent/20 via-pink-500/10 to-transparent");
   const [heroTextColor, setHeroTextColor] = useState<string>("text-white");
 
@@ -733,8 +734,8 @@ const MainLayout: React.FC = () => {
 
         const heroEntry = data.find((item: any) => item.type === "hero_banner");
         if (heroEntry) {
-          setHeroTitle(heroEntry.name || "Let The Music");
-          setHeroSubtitle(heroEntry.pfp || "Take You Away");
+          setHeroTitle(heroEntry.name || "bla bla car");
+          setHeroSubtitle(heroEntry.pfp || "Brrrrrr");
           if (heroEntry.tracks && !Array.isArray(heroEntry.tracks)) {
             const meta = heroEntry.tracks as any;
             if (meta.description) setHeroDescription(meta.description);
@@ -2252,11 +2253,11 @@ const MainLayout: React.FC = () => {
         {/* Main Panel Content */}
         <main
           ref={mainContentRef}
-          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-8 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
+          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-6 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
         >
 
           {/* Desktop-only Top Header Bar */}
-          <header className="hidden md:flex items-center justify-between gap-4 mb-8">
+          <header className="hidden md:flex items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3 flex-1 max-w-lg">
               {/* Back / Forward history arrows */}
               <div className="flex items-center gap-2">
@@ -3128,26 +3129,28 @@ const MainLayout: React.FC = () => {
                         <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                           <Plus className="w-6 h-6 text-white mb-1" />
                           <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
-                          <button
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (!selectedPlaylist) return;
-                              await handleDownloadPlaylist(selectedPlaylist);
-                            }}
-                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
-                              downloadingPlaylistId === selectedPlaylist.id
-                                ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
-                                : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
-                            }`}
-                            title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
-                            disabled={downloadingPlaylistId === selectedPlaylist.id}
-                          >
-                            {downloadingPlaylistId === selectedPlaylist.id ? (
-                              <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <Download className="w-5 h-5" />
-                            )}
-                          </button>
+                          {((Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined))) && (
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!selectedPlaylist) return;
+                                await handleDownloadPlaylist(selectedPlaylist);
+                              }}
+                              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
+                                downloadingPlaylistId === selectedPlaylist.id
+                                  ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
+                                  : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
+                              }`}
+                              title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
+                              disabled={downloadingPlaylistId === selectedPlaylist.id}
+                            >
+                              {downloadingPlaylistId === selectedPlaylist.id ? (
+                                <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Download className="w-5 h-5" />
+                              )}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3246,7 +3249,7 @@ const MainLayout: React.FC = () => {
                           >
                             <Shuffle className="w-5 h-5" />
                           </button>
-                          {Capacitor.isNativePlatform() && (
+                          {(Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined)) && (
                             <button
                               onClick={async (e) => {
                                 e.stopPropagation();
@@ -4959,7 +4962,7 @@ const MainLayout: React.FC = () => {
             <SettingsPanel />
           ) : (
             /* MAIN HOME VIEW */
-            <section className="flex flex-col gap-8 animate-[fadeIn_0.3s_ease] animate-mobile-page">
+            <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
 
               {/* Spotify Wrapped Banner */}
               {new Date().getMonth() === 11 && (
@@ -4986,11 +4989,12 @@ const MainLayout: React.FC = () => {
                 </div>
               )}
 
-              {/* Customizable Hero Card */}
-              <div className="relative overflow-hidden rounded-[32px] bg-brand-darkBg p-6 md:p-10 border border-white/5 flex flex-col justify-between min-h-[220px]">
-                <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand-accent/20 rounded-full blur-3xl pointer-events-none"></div>
-                <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-pink-500/10 rounded-full blur-3xl pointer-events-none"></div>
-                <div className="max-w-md relative z-10 flex flex-col gap-3">
+              {/* Hero Card - Native Liquid Glass */}
+              <div className="relative overflow-hidden rounded-[32px] p-6 md:p-10 min-h-[200px] flex flex-col justify-between border border-white/20 shadow-[inset_0_1.5px_1px_0_rgba(255,255,255,0.4),0_20px_50px_rgba(0,0,0,0.4)] bg-gradient-to-br from-white/10 via-white/[0.03] to-white/[0.08]">
+                {/* Specular glare edge */}
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-white/60 to-transparent pointer-events-none z-10" />
+
+                <div className="max-w-md relative z-10 flex flex-col gap-2">
                   <span className={`inline-block font-semibold bg-gradient-to-r from-gray-400 via-white to-gray-400 bg-clip-text text-transparent bg-[length:200%_auto] animate-[shine_4s_linear_infinite] text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`} style={{ animationDuration: "4s" }}>{heroTitle}</span>
                   <span className={`inline-flex flex-wrap text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`}>
                     {heroSubtitle.split("").map((char, index) => (
@@ -5007,7 +5011,7 @@ const MainLayout: React.FC = () => {
                       </span>
                     ))}
                   </span>
-                  <p className="text-xs md:text-sm text-gray-400 mt-2 leading-relaxed">{heroDescription}</p>
+                  <p className="text-xs md:text-sm text-gray-400 mt-1 leading-relaxed">{heroDescription}</p>
                 </div>
               </div>
 

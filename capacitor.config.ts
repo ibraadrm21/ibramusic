@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.ibrastream.app',
   appName: 'IbraStream',
-  webDir: 'dist',
+  webDir: 'web-build',
   android: {
     buildOptions: {
       keystorePath: undefined,

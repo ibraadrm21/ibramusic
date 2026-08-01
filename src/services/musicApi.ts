@@ -583,11 +583,19 @@ let youtubeWebClientPromise: Promise<Innertube> | null = null;
 const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
   
-  // 1. Resolve relative URLs (e.g. /youtubei/v1/player) or localhost-resolved URLs back to absolute youtube.com URLs
+  // 1. Resolve relative URLs (e.g. /youtubei/v1/player) or localhost-resolved URLs back to absolute youtube.com/googleapis URLs
   if (url.startsWith("http://localhost") || url.startsWith("https://localhost") || url.startsWith("http://127.0.0.1") || url.startsWith("https://127.0.0.1")) {
-    url = url.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, "https://www.youtube.com");
+    if (url.includes("/youtubei/v1/")) {
+      url = url.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, "https://youtubei.googleapis.com");
+    } else {
+      url = url.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, "https://www.youtube.com");
+    }
   } else if (url.startsWith("/")) {
-    url = `https://www.youtube.com${url}`;
+    if (url.startsWith("/youtubei/v1/")) {
+      url = `https://youtubei.googleapis.com${url}`;
+    } else {
+      url = `https://www.youtube.com${url}`;
+    }
   }
 
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
@@ -648,8 +656,12 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
     if (url.includes("youtubei.googleapis.com") || url.includes("youtube.com")) {
       const isIOSClient = (typeof body === 'string' && body.includes('"clientName":"IOS"')) || 
                           (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'IOS');
+      const isAndroidMusic = (typeof body === 'string' && body.includes('"clientName":"ANDROID_MUSIC"')) || 
+                             (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'ANDROID_MUSIC');
       if (isIOSClient) {
         normalizedHeaders["user-agent"] = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
+      } else if (isAndroidMusic) {
+        normalizedHeaders["user-agent"] = "com.google.android.apps.youtube.music/7.02.52 (Linux; U; Android 12L; Build/SQ3A.220605.009.A1) gzip";
       } else {
         normalizedHeaders["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
       }
@@ -705,7 +717,6 @@ const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): 
 export const getYoutubeClient = (): Promise<Innertube> => {
   if (!youtubeClientPromise) {
     youtubeClientPromise = Innertube.create({
-      client_type: 'ANDROID_VR' as any,
       fetch: sharedCustomFetch
     });
   }
@@ -757,6 +768,46 @@ async function getHealthyCobaltHosts(): Promise<string[]> {
 
 // Helper to perform native-first requests to bypass CORS and auto-patching issues on Android
 export async function fetchNative(url: string, options: any = {}) {
+  const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
+  if (isFlutter) {
+    return new Promise<Response>((resolve, reject) => {
+      const id = Math.floor(Math.random() * 1000000);
+      const pendingFetch = (window as any)._pendingFetches || {};
+      (window as any)._pendingFetches = pendingFetch;
+      pendingFetch[id] = { resolve, reject };
+
+      if (!(window as any).onFlutterHttpFetchResponse) {
+        (window as any).onFlutterHttpFetchResponse = (respId: number, status: number, bodyStr: string, headersJson: any) => {
+          const handler = (window as any)._pendingFetches?.[respId];
+          if (handler) {
+            delete (window as any)._pendingFetches[respId];
+            const responseHeaders = new Headers();
+            if (headersJson) {
+              for (const [key, val] of Object.entries(headersJson)) {
+                responseHeaders.set(key, val as string);
+              }
+            }
+            const res = new Response(bodyStr, {
+              status,
+              headers: responseHeaders
+            });
+            Object.defineProperty(res, 'url', { value: url });
+            handler.resolve(res);
+          }
+        };
+      }
+
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'httpFetch',
+        id,
+        url,
+        method: options.method || 'GET',
+        headers: options.headers || {},
+        body: options.body
+      }));
+    });
+  }
+
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
   if (isNative) {
     const { CapacitorHttp } = await import('@capacitor/core');
@@ -914,33 +965,8 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
           // Find best stream (M4A or high bitrate)
           const bestStream = streams.find((s: any) => s.mimeType?.includes("audio/mp4")) || streams[0];
           if (bestStream && bestStream.url) {
-            console.log(`[Downloader] Piped resolved stream: ${bestStream.url}. Validating accessibility...`);
-            try {
-              const check = await fetchNative(bestStream.url, { 
-                method: "GET", 
-                headers: { "Range": "bytes=0-0" },
-                timeout: 2500 
-              });
-              const contentLength = check.headers.get("content-length");
-              const bodyText = await check.text();
-              if (check.status === 200 || check.status === 206) {
-                if (contentLength === "0" || (check.status === 200 && bodyText.length === 0)) {
-                  console.warn(`[Downloader] Piped stream has content-length 0. Skipping.`);
-                } else {
-                  const contentType = check.headers.get("content-type") || "";
-                  if (contentType.includes("text/html") || contentType.includes("application/json")) {
-                    console.warn(`[Downloader] Piped stream returned HTML/JSON. Skipping.`);
-                  } else {
-                    console.log(`[Downloader] Piped stream validated successfully.`);
-                    return bestStream.url;
-                  }
-                }
-              } else {
-                console.warn(`[Downloader] Piped stream validation returned status ${check.status}. Skipping.`);
-              }
-            } catch (e) {
-              console.warn(`[Downloader] Piped stream validation failed:`, e);
-            }
+            console.log(`[Downloader] Piped resolved stream successfully: ${bestStream.url}`);
+            return bestStream.url;
           }
         } else {
           console.warn(`[Downloader] Piped stream returned empty audioStreams list for ${baseUrl}`);
@@ -987,8 +1013,8 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
             'Referer': 'https://cobalt.tools/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           },
-          connectTimeout: 3000,
-          readTimeout: 3000,
+          connectTimeout: 6000,
+          readTimeout: 6000,
           data: {
             url: `https://www.youtube.com/watch?v=${videoId}`,
             downloadMode: 'audio',
@@ -1000,7 +1026,7 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
         }
       } else {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
@@ -1028,33 +1054,8 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
       }
 
       if (responseData && responseData.url) {
-        console.log(`[Downloader] Cobalt resolved stream: ${responseData.url}. Validating accessibility...`);
-        try {
-          const check = await fetchNative(responseData.url, { 
-            method: "GET", 
-            headers: { "Range": "bytes=0-0" },
-            timeout: 2500 
-          });
-          const contentLength = check.headers.get("content-length");
-          const bodyText = await check.text();
-          if (check.status === 200 || check.status === 206) {
-            if (contentLength === "0" || (check.status === 200 && bodyText.length === 0)) {
-              console.warn(`[Downloader] Cobalt stream is empty. Skipping.`);
-            } else {
-              const contentType = check.headers.get("content-type") || "";
-              if (contentType.includes("text/html") || contentType.includes("application/json")) {
-                console.warn(`[Downloader] Cobalt stream returned HTML/JSON instead of audio. Skipping.`);
-              } else {
-                console.log(`[Downloader] Cobalt stream validated successfully.`);
-                return responseData.url;
-              }
-            }
-          } else {
-            console.warn(`[Downloader] Cobalt stream validation returned status ${check.status}. Skipping.`);
-          }
-        } catch (e) {
-          console.warn(`[Downloader] Cobalt stream validation failed:`, e);
-        }
+        console.log(`[Downloader] Cobalt resolved stream successfully: ${responseData.url}`);
+        return responseData.url;
       }
     } catch (err) {
       console.warn(`[Downloader] Cobalt endpoint ${endpoint} failed:`, err);
@@ -1127,12 +1128,12 @@ export async function searchPublicPlaylists(query: string): Promise<any[]> {
   for (const baseUrl of PIPED_HOSTS) {
     try {
       const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(query)}&filter=playlists`;
-      const res = await fetchWithTimeout(searchUrl, {
+      const res = await fetchNative(searchUrl, {
         headers: {
           'Referer': 'https://piped.video/',
           'Origin': 'https://piped.video'
         }
-      }, 10000);
+      });
       if (!res.ok) continue;
       const data = await res.json();
       const items = data.items || [];

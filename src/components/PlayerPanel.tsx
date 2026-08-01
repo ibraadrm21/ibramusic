@@ -8,6 +8,7 @@ import type { Track } from "../services/musicApi";
 import { Capacitor } from "@capacitor/core";
 
 const isAndroid = Capacitor.getPlatform() === "android";
+const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
 
 interface PlayerPanelProps {
   onToggleFavorite?: (track: Track) => void;
@@ -563,7 +564,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         </div>
 
         {/* Volume Indicator */}
-        {!isAndroid && (
+        {!isAndroid && !isFlutter && (
           <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
             <button onClick={toggleMute} className="text-gray-400 hover:text-white">
               {isMuted || volume === 0 ? (

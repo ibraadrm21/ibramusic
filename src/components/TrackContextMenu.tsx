@@ -164,7 +164,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       )}
 
       {/* Download option */}
-      {Capacitor.isNativePlatform() && (
+      {(Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined)) && (
         <button
           onClick={handleDownload}
           disabled={downloadStatus.isDownloading}

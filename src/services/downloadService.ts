@@ -126,6 +126,33 @@ class DownloadService {
       return;
     }
 
+    // Flutter WebView Integration: Delegate to native downloader
+    const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
+    if (isFlutter) {
+      console.log(`[Downloader] Delegating track download natively to Flutter: ${track.title}`);
+      this.downloadingTracks.set(track.id, 0);
+      this.notifyStatusChange();
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'downloadTrack',
+        track: {
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          duration: track.duration,
+          thumbnail: track.thumbnail || ''
+        }
+      }));
+      // Set to downloaded state for UI presentation
+      setTimeout(() => {
+        this.downloadedTracks.add(track.id);
+        this.downloadingTracks.delete(track.id);
+        localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+        localStorage.setItem(`ibrastream_meta_${track.id}`, JSON.stringify(track));
+        this.notifyStatusChange();
+      }, 1000);
+      return;
+    }
+
     try {
       this.downloadingTracks.set(track.id, 0);
       this.notifyStatusChange();
@@ -359,6 +386,21 @@ class DownloadService {
   }
 
   public async removeDownload(trackId: string): Promise<void> {
+    // Flutter WebView Integration: Delegate delete to native downloader database
+    const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
+    if (isFlutter) {
+      console.log(`[Downloader] Requesting native track delete from Flutter: ${trackId}`);
+      this.downloadedTracks.delete(trackId);
+      localStorage.setItem('ibrastream_downloaded_ids', JSON.stringify(Array.from(this.downloadedTracks)));
+      localStorage.removeItem(`ibrastream_meta_${trackId}`);
+      this.notifyStatusChange();
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'deleteDownload',
+        trackId: trackId
+      }));
+      return;
+    }
+
     // Electron Integration
     if (typeof window !== 'undefined' && (window as any).electronAPI) {
       try {

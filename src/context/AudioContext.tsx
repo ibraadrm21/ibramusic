@@ -14,6 +14,7 @@ declare global {
 }
 
 const isAndroid = Capacitor.getPlatform() === "android";
+const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
 const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 
 function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage = "Request timed out"): Promise<T> {
@@ -412,7 +413,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [currentTime, currentTrack, duration]);
 
-  // Track seconds played 1:1 in real-time
+  // Track seconds played buffered in ref to eliminate high-frequency React re-renders
+  const accumulatedStatsRef = useRef(accumulatedStats);
+  useEffect(() => {
+    accumulatedStatsRef.current = accumulatedStats;
+  }, [accumulatedStats]);
+
   useEffect(() => {
     if (!currentTrack || !isPlaying) {
       prevTimeRef.current = currentTime;
@@ -423,41 +429,31 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     prevTimeRef.current = currentTime;
 
     if (diff > 0 && diff < 3) {
-      setAccumulatedStats((prev: any) => {
-        const next = {
-          ...prev,
-          tracks: { ...prev.tracks },
-          artists: { ...prev.artists }
-        };
-        
-        next.totalSeconds = (prev.totalSeconds || 0) + diff;
+      const stats = accumulatedStatsRef.current;
+      stats.totalSeconds = (stats.totalSeconds || 0) + diff;
 
-        if (!next.tracks[currentTrack.id]) {
-          next.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
-        } else {
-          next.tracks[currentTrack.id] = { ...next.tracks[currentTrack.id] };
-        }
-        next.tracks[currentTrack.id].seconds = (next.tracks[currentTrack.id].seconds || 0) + diff;
+      if (!stats.tracks[currentTrack.id]) {
+        stats.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
+      }
+      stats.tracks[currentTrack.id].seconds = (stats.tracks[currentTrack.id].seconds || 0) + diff;
 
-        const artistName = currentTrack.artist || "Unknown Artist";
-        if (!next.artists[artistName]) {
-          next.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
-        } else {
-          next.artists[artistName] = { ...next.artists[artistName] };
-        }
-        next.artists[artistName].seconds = (next.artists[artistName].seconds || 0) + diff;
-
-        return next;
-      });
-      
-      // Dispatch update event for Supabase sync
-      window.dispatchEvent(new Event("ibrastream_history_updated"));
+      const artistName = currentTrack.artist || "Unknown Artist";
+      if (!stats.artists[artistName]) {
+        stats.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
+      }
+      stats.artists[artistName].seconds = (stats.artists[artistName].seconds || 0) + diff;
     }
   }, [currentTime, isPlaying, currentTrack]);
 
+  // Flush stats to localStorage every 10 seconds or on unmount
   useEffect(() => {
-    localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(accumulatedStats));
-  }, [accumulatedStats]);
+    const interval = setInterval(() => {
+      if (accumulatedStatsRef.current) {
+        localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(accumulatedStatsRef.current));
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Electron Tray controls listener
   useEffect(() => {
@@ -670,7 +666,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Initialize YouTube IFrame Player (web only)
   useEffect(() => {
-    if (isAndroid) return;
+    if (isAndroid || isFlutter) return;
 
     // Silent audio for Media Session background capability
     const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
@@ -841,12 +837,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [toast]);
 
-  // Sync volume to YT player or Android
+  // Sync volume to YT player or Android (always 100% on native/flutter platforms)
   useEffect(() => {
+    const targetVol = isFlutter || isAndroid ? 1.0 : (isMuted ? 0 : volume);
     if (isAndroid) {
-      Media3Session.setVolume({ volume: isMuted ? 0 : 1.0 }).catch(() => {});
+      Media3Session.setVolume({ volume: targetVol }).catch(() => {});
+    } else if (isFlutter) {
+      // Flutter handles hardware controls natively, lock WebView output to 1.0
     } else if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === "function") {
-      ytPlayerRef.current.setVolume(isMuted ? 0 : volume * 100);
+      ytPlayerRef.current.setVolume(targetVol * 100);
     }
   }, [volume, isMuted]);
 
@@ -913,6 +912,96 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setUserQueue([]);
       setPlayingPlaylistId(null);
       localStorage.removeItem("ibrastream_playing_playlist_id");
+    }
+
+    if (isFlutter && !isRemoteSync) {
+      setIsLoading(true);
+      let videoId = "";
+      try {
+        videoId = await getYouTubeVideoId(track, abortController.signal);
+        if (abortController.signal.aborted) return;
+      } catch (e) {
+        console.error("Failed to resolve videoId for Flutter:", e);
+        showToast(`Failed to play "${track.title}". Stream unavailable.`, "error");
+        setIsLoading(false);
+        setIsPlaying(false);
+        return;
+      }
+
+      const resolvedTrack = {
+        ...track,
+        id: `yt-${videoId}`
+      };
+
+      if (newQueue) {
+        setOriginalPlaylistQueue(newQueue);
+        if (isShuffle) {
+          const otherTracks = newQueue.filter(t => t.id !== track.id);
+          const shuffled = [resolvedTrack, ...shuffleArray(otherTracks)];
+          setPlaylistQueue(shuffled);
+          setPlaylistIndex(0);
+        } else {
+          setPlaylistQueue(newQueue);
+          const index = newQueue.findIndex(t => t.id === track.id);
+          setPlaylistIndex(index !== -1 ? index : 0);
+        }
+        setCurrentTrackSource('playlist');
+      } else {
+        if (currentTrack && currentTrack.id === track.id) {
+          // Same track, do nothing
+        } else {
+          const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
+          if (userQueueIdx !== -1) {
+            setUserQueue(prev => prev.slice(userQueueIdx + 1));
+            setCurrentTrackSource('user_queue');
+          } else {
+            const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
+            if (playlistIdx !== -1) {
+              setPlaylistIndex(playlistIdx);
+              setCurrentTrackSource('playlist');
+            } else {
+              setPlaylistQueue([resolvedTrack]);
+              setPlaylistIndex(0);
+              setCurrentTrackSource('playlist');
+            }
+          }
+        }
+      }
+      setCurrentTrack(resolvedTrack);
+      setIsPlaying(true);
+      setIsLoading(false);
+
+      const activeQueue = newQueue || queue;
+      // Pre-map activeQueue to ensure track IDs matched to cached videoIds are sent as "yt-videoId"
+      const mappedActiveQueue = activeQueue.map(t => {
+        if (t.id === track.id || t.id === resolvedTrack.id) return resolvedTrack;
+        const cached = resolutionCache.get(t.id);
+        if (cached && cached.videoId) {
+          return { ...t, id: `yt-${cached.videoId}` };
+        }
+        return t;
+      });
+
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'play',
+        track: {
+          id: resolvedTrack.id,
+          title: resolvedTrack.title,
+          artist: resolvedTrack.artist,
+          duration: resolvedTrack.duration,
+          thumbnail: resolvedTrack.thumbnail || ''
+        },
+        queue: mappedActiveQueue.map(t => {
+          return {
+            id: t.id,
+            title: t.title,
+            artist: t.artist,
+            duration: t.duration,
+            thumbnail: t.thumbnail || ''
+          };
+        })
+      }));
+      return;
     }
 
     if (isAndroid && !isRemoteSync) {
@@ -1068,29 +1157,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         console.log(`[Cache Hit] Playing pre-resolved track: ${track.title}`);
         videoId = cached.videoId;
         if (isAndroid) {
-          if (cached.streamUrl) {
-            const isCachedValid = await validateStreamUrl(cached.streamUrl, 2500, abortController.signal);
-            if (isCachedValid) {
-              streamUrl = cached.streamUrl;
-            } else {
-              console.log("Cached streamUrl is invalid or hung. Re-resolving stream URL...");
-              cached.streamUrl = undefined;
-              streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-              if (abortController.signal.aborted) return;
-              cached.streamUrl = streamUrl;
-            }
-          } else {
-            streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-            if (abortController.signal.aborted) return;
-            cached.streamUrl = streamUrl;
-          }
+          streamUrl = `https://ibrastream.resolve/${encodeURIComponent(track.id)}?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
         }
       } else {
         videoId = await getYouTubeVideoId(track, abortController.signal);
         if (abortController.signal.aborted) return;
         if (isAndroid) {
-          streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-          if (abortController.signal.aborted) return;
+          streamUrl = `https://ibrastream.resolve/${encodeURIComponent(track.id.startsWith('yt-') ? track.id : `yt-${videoId}`)}?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
         }
         resolutionCache.set(track.id, { videoId, streamUrl, timestamp: Date.now() });
       }
@@ -1257,6 +1330,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (!currentTrack) return;
 
+    if (isFlutter) {
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'togglePlay'
+      }));
+      return;
+    }
+
     const nextState = !isPlaying;
     playbackExpectedRef.current = nextState;
 
@@ -1284,6 +1364,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
+    if (isFlutter) {
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'next'
+      }));
+      return;
+    }
     if (isAndroid) {
       Media3Session.playTrackAtIndex({ index: currentIndex + 1 })
         .catch(() => {
@@ -1292,6 +1378,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       return;
     }
+    if (currentTrack) {
+      setHistory(prev => [...prev.slice(-49), currentTrack]);
+    }
+
     if (userQueue.length > 0) {
       const nextTrk = userQueue[0];
       setUserQueue(prev => prev.slice(1));
@@ -1323,6 +1413,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (currentTime >= 3) {
       seek(0);
+      return;
+    }
+    if (isFlutter) {
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'prev'
+      }));
       return;
     }
     if (isAndroid) {
@@ -1358,6 +1454,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const seek = (time: number, isRemoteSync?: boolean) => {
     if (roomIdRef.current && !isHostRef.current && !isRemoteSync) {
       showToast("Controls are disabled for listeners in Listen Together", "error");
+      return;
+    }
+    if (isFlutter) {
+      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
+        action: 'seek',
+        seconds: time
+      }));
       return;
     }
     if (isAndroid) {
@@ -2054,6 +2157,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onlyDownloaded,
     currentUser,
   ]);
+
+  // Listen to state changes from Flutter
+  useEffect(() => {
+    if (isFlutter) {
+      (window as any).onFlutterPlayerStateChanged = (state: any) => {
+        setIsPlaying(state.isPlaying);
+        setCurrentTime(state.position);
+        setDuration(state.duration);
+        
+        if (state.ended) {
+          handleTrackEndedRef.current();
+          return;
+        }
+
+        const videoId = (state.currentTrackId || '').replace('yt-', '');
+        if (videoId) {
+          const found = queueRef.current.find(t => t.id === videoId) || playlistQueue.find(t => t.id === videoId);
+          if (found) {
+            setCurrentTrack(found);
+          }
+        }
+        
+        if (state.queueIndex !== undefined && state.queueIndex !== null) {
+          const activeQueue = queueRef.current;
+          if (activeQueue && activeQueue[state.queueIndex]) {
+            setCurrentTrack(activeQueue[state.queueIndex]);
+            if (currentTrackSource === 'playlist') {
+              setPlaylistIndex(state.queueIndex);
+            }
+          }
+        }
+      };
+      return () => {
+        delete (window as any).onFlutterPlayerStateChanged;
+      };
+    }
+  }, [isFlutter, playlistQueue, currentTrackSource]);
 
   return (
     <AudioContext.Provider value={audioContextValue}>
