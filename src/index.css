@@ -165,8 +165,8 @@ body.is-native {
 /* ─── Glass panels (GPU optimized) ───────────────────────────── */
 .glass-panel {
   background: color-mix(in srgb, var(--app-bg-color-val, #0f0f0f) 75%, transparent);
-  backdrop-filter: blur(12px) saturate(110%);
-  -webkit-backdrop-filter: blur(12px) saturate(110%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 

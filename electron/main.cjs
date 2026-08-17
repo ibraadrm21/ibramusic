@@ -5,8 +5,7 @@ const DiscordRPC = require("discord-rpc");
 const https = require("https");
 const http = require("http");
 
-// Disable hardware acceleration to resolve black screen rendering issues on Xeon/GPU configurations
-app.disableHardwareAcceleration();
+// Hardware acceleration enabled for GPU rendering & smooth animations
 
 let mainWindow;
 let tray;
@@ -76,33 +75,26 @@ function createWindow() {
     }
   });
 
-  // Modify headers for outgoing requests to bypass YouTube/GoogleVideo CORS and blockages
-  const { session } = require("electron");
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: ["*://*.youtube.com/*", "*://*.youtubei.googleapis.com/*", "*://*.googlevideo.com/*", "*://*.piped.video/*", "*://*.pipedapi.kavin.rocks/*"] },
-    (details, callback) => {
-      const url = details.url;
-      const requestHeaders = { ...details.requestHeaders };
-
-      if (url.includes("youtube.com") || url.includes("youtubei.googleapis.com") || url.includes("googlevideo.com")) {
-        requestHeaders["Origin"] = "https://www.youtube.com";
-        requestHeaders["Referer"] = "https://www.youtube.com/";
-        requestHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-      }
-
-      callback({ cancel: false, requestHeaders });
-    }
-  );
-
   // Modify response headers to bypass CORS restriction in Electron renderer
+  const { session } = require("electron");
   session.defaultSession.webRequest.onHeadersReceived(
     { urls: ["*://*/*"] },
     (details, callback) => {
       const responseHeaders = { ...details.responseHeaders };
+      const url = details.url;
 
-      responseHeaders["Access-Control-Allow-Origin"] = ["*"];
-      responseHeaders["Access-Control-Allow-Headers"] = ["*"];
-      responseHeaders["Access-Control-Allow-Methods"] = ["*"];
+      // Ensure Frame-Options don't block embedded player
+      delete responseHeaders["x-frame-options"];
+      delete responseHeaders["X-Frame-Options"];
+      delete responseHeaders["content-security-policy"];
+      delete responseHeaders["Content-Security-Policy"];
+
+      // Do NOT modify CORS headers on googlevideo/youtube domains to prevent "multiple values 'https://www.youtube.com, *'" browser errors
+      if (!url.includes("googlevideo.com") && !url.includes("youtube.com") && !url.includes("gstatic.com") && !url.includes("googleapis.com")) {
+        responseHeaders["Access-Control-Allow-Origin"] = ["*"];
+        responseHeaders["Access-Control-Allow-Headers"] = ["*"];
+        responseHeaders["Access-Control-Allow-Methods"] = ["*"];
+      }
 
       if (responseHeaders["www-authenticate"]) {
         delete responseHeaders["www-authenticate"];
@@ -117,8 +109,8 @@ function createWindow() {
 
   // Load URL
   if (process.env.NODE_ENV === "development" || !app.isPackaged) {
-    mainWindow.loadURL("http://localhost:5173");
-    mainWindow.webContents.openDevTools();
+    const devUrl = process.env.ELECTRON_START_URL || "http://localhost:5173";
+    mainWindow.loadURL(devUrl);
   } else {
     const MIME_TYPES = {
       ".html": "text/html",
@@ -168,88 +160,108 @@ function createWindow() {
       const port = global.localServer.address().port;
       console.log(`Local production server listening on http://127.0.0.1:${port}`);
       mainWindow.loadURL(`http://127.0.0.1:${port}`);
-      mainWindow.webContents.openDevTools();
     });
   }
-
-  // Intercept close event to minimize to tray
-  mainWindow.on("close", (event) => {
-    if (!app.isQuitting) {
-      event.preventDefault();
-      mainWindow.hide();
-    }
-  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
 
+let rpcConnected = false;
+
 // Discord Rich Presence Setup
 function initDiscordRPC() {
+  rpcConnected = false;
+  if (rpc) {
+    try { rpc.destroy(); } catch (e) {}
+    rpc = null;
+  }
   rpc = new DiscordRPC.Client({ transport: "ipc" });
 
   rpc.on("ready", () => {
-    console.log("Discord Rich Presence ready!");
+    rpcConnected = true;
+    console.log("Discord Rich Presence connected & ready!");
   });
 
-  rpc.login({ clientId }).catch((err) => {
-    console.warn("Failed to connect to Discord RPC:", err.message);
+  rpc.on("disconnected", () => {
+    rpcConnected = false;
+  });
+
+  rpc.login({ clientId }).catch(() => {
+    rpcConnected = false;
+    setTimeout(initDiscordRPC, 10000);
   });
 }
 
 function updateDiscordPresence(details) {
-  if (!rpc) return;
+  if (!rpc || !rpcConnected) return;
 
-  const startTimestamp = details.isPlaying ? Date.now() - (details.currentTime * 1000) : undefined;
-  const endTimestamp = details.isPlaying && details.duration ? startTimestamp + (details.duration * 1000) : undefined;
+  if (!details || !details.title) {
+    rpc.clearActivity().catch(() => {});
+    return;
+  }
 
-  rpc.setActivity({
-    details: details.title ? details.title.slice(0, 127) : "Idle",
-    state: details.artist ? `by ${details.artist.slice(0, 127)}` : undefined,
-    startTimestamp,
-    endTimestamp,
-    largeImageKey: "logo",
-    largeImageText: "ibramusic - Let the Music Play",
+  const isPlaying = !!details.isPlaying;
+  const now = Date.now();
+  const startTimestamp = isPlaying && typeof details.currentTime === "number" ? Math.floor(now - (details.currentTime * 1000)) : undefined;
+  const endTimestamp = isPlaying && details.duration && startTimestamp ? Math.floor(startTimestamp + (details.duration * 1000)) : undefined;
+
+  const activity = {
+    details: details.title ? details.title.slice(0, 128) : "Listening to Music",
+    state: details.artist ? `by ${details.artist.slice(0, 128)}` : "ibramusic",
     instance: false,
-  }).catch((err) => {
+  };
+
+  if (isPlaying) {
+    if (startTimestamp) activity.startTimestamp = startTimestamp;
+    if (endTimestamp && endTimestamp > now) activity.endTimestamp = endTimestamp;
+  }
+
+  rpc.setActivity(activity).catch((err) => {
     console.warn("Failed to set Discord activity:", err.message);
   });
 }
 
 // System Tray Setup
 function initTray() {
-  const iconPath = path.join(__dirname, "tray_icon.png");
-  // Fallback to simple colored dot if icon does not exist
-  let trayImage;
-  if (fs.existsSync(iconPath)) {
-    trayImage = nativeImage.createFromPath(iconPath);
-  } else {
-    // Create an empty image as fallback
-    trayImage = nativeImage.createEmpty();
-  }
-
-  tray = new Tray(trayImage);
-  const contextMenu = Menu.buildFromTemplate([
-    { label: "Restore App", click: () => mainWindow.show() },
-    { type: "separator" },
-    { label: "Play / Pause", click: () => mainWindow.webContents.send("tray:play-pause") },
-    { label: "Next Track", click: () => mainWindow.webContents.send("tray:next") },
-    { label: "Previous Track", click: () => mainWindow.webContents.send("tray:prev") },
-    { type: "separator" },
-    { label: "Quit", click: () => {
-        app.isQuitting = true;
-        app.quit();
-      } 
+  try {
+    const iconPath = path.join(__dirname, "tray_icon.png");
+    let trayImage;
+    if (fs.existsSync(iconPath)) {
+      trayImage = nativeImage.createFromPath(iconPath);
+    } else {
+      // Create a 16x16 transparent image fallback
+      trayImage = nativeImage.createFromBitmap(Buffer.alloc(16 * 16 * 4), { width: 16, height: 16 });
     }
-  ]);
 
-  tray.setToolTip("ibramusic");
-  tray.setContextMenu(contextMenu);
+    tray = new Tray(trayImage);
+    const contextMenu = Menu.buildFromTemplate([
+      { label: "Restore App", click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+      { type: "separator" },
+      { label: "Play / Pause", click: () => mainWindow?.webContents.send("tray:play-pause") },
+      { label: "Next Track", click: () => mainWindow?.webContents.send("tray:next") },
+      { label: "Previous Track", click: () => mainWindow?.webContents.send("tray:prev") },
+      { type: "separator" },
+      { label: "Quit", click: () => {
+          app.isQuitting = true;
+          app.quit();
+        } 
+      }
+    ]);
 
-  tray.on("double-click", () => {
-    mainWindow.show();
-  });
+    tray.setToolTip("ibramusic");
+    tray.setContextMenu(contextMenu);
+
+    tray.on("double-click", () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  } catch (err) {
+    console.warn("Could not create system tray icon:", err.message);
+  }
 }
 
 // App Lifecycle

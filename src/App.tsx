@@ -429,6 +429,18 @@ const MainLayout: React.FC = () => {
   const [showAccountDropdown, setShowAccountDropdown] = useState<boolean>(false);
   const accountDropdownRef = React.useRef<HTMLDivElement>(null);
   const mobileAccountOverlayRef = React.useRef<HTMLDivElement>(null);
+  const [isHeaderScrolled, setIsHeaderScrolled] = useState(false);
+
+  useEffect(() => {
+    const mainEl = mainContentRef.current;
+    if (!mainEl) return;
+    const handleScroll = () => {
+      setIsHeaderScrolled(mainEl.scrollTop > 20);
+    };
+    mainEl.addEventListener("scroll", handleScroll);
+    return () => mainEl.removeEventListener("scroll", handleScroll);
+  }, []);
+
   const [username, setUsername] = useState<string>(() => {
     return localStorage.getItem("ibrastream_username") || "Guest";
   });
@@ -2253,11 +2265,15 @@ const MainLayout: React.FC = () => {
         {/* Main Panel Content */}
         <main
           ref={mainContentRef}
-          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-6 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
+          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-0 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
         >
 
-          {/* Desktop-only Top Header Bar */}
-          <header className="hidden md:flex items-center justify-between gap-4 mb-6">
+          {/* Desktop-only Top Header Bar (Sticky) */}
+          <header className={`hidden md:flex items-center justify-between gap-4 py-3 mb-4 sticky top-0 z-30 pt-4 px-8 -mx-8 transition-all duration-200 ${
+            isHeaderScrolled 
+              ? "bg-black/20 backdrop-blur-xl border-b border-white/5" 
+              : "bg-transparent backdrop-blur-none border-b border-transparent"
+          }`}>
             <div className="flex items-center gap-3 flex-1 max-w-lg">
               {/* Back / Forward history arrows */}
               <div className="flex items-center gap-2">
@@ -5252,9 +5268,9 @@ const MainLayout: React.FC = () => {
         </main>
 
         {/* PC Right Player Sidebar panel */}
-        <aside className="hidden lg:block fixed right-0 top-0 w-[380px] h-[calc(100vh-96px)] z-10 overflow-y-auto border-l border-white/5 bg-brand-darkBg/95 backdrop-blur-md">
+        <aside className="hidden lg:block fixed right-0 top-0 w-[380px] h-[calc(100vh-96px)] z-10 overflow-hidden border-l border-white/5 bg-brand-darkBg/95 backdrop-blur-md">
           {showQueueOverlay ? (
-            <div className="h-full flex flex-col p-6 select-none">
+            <div className="h-full flex flex-col p-6 select-none overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
                 <div className="flex items-center gap-2">
@@ -5436,6 +5452,7 @@ const MainLayout: React.FC = () => {
                                 }}
                                 onClick={() => playTrack(track)}
                               >
+                                <span className="text-[10px] font-medium text-gray-500 w-4 text-right shrink-0">{originalIdx - currentIndex}</span>
                                 <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
                                 <div className="flex-1 min-w-0">
                                   <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">

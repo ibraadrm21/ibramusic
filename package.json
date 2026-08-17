@@ -5,7 +5,7 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5173 --strictPort",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

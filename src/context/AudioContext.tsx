@@ -102,6 +102,15 @@ async function validateStreamUrl(url: string, ms = 2500, signal?: AbortSignal): 
 // Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
 const resolutionCache = new Map<string, { videoId: string; streamUrl?: string; timestamp: number }>();
 
+// Keep cache memory footprint strictly capped at 100 items
+const setResolutionCache = (key: string, value: { videoId: string; streamUrl?: string; timestamp: number }) => {
+  if (resolutionCache.size > 100) {
+    const oldestKey = resolutionCache.keys().next().value;
+    if (oldestKey) resolutionCache.delete(oldestKey);
+  }
+  resolutionCache.set(key, value);
+};
+
 interface AudioContextType {
   currentTrack: Track | null;
   isPlaying: boolean;
@@ -700,6 +709,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           showinfo: 0,
           modestbranding: 1,
           playsinline: 1,
+          origin: typeof window !== 'undefined' ? window.location.origin : 'https://www.youtube.com',
         },
         events: {
           onReady: (event: any) => {
@@ -816,7 +826,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           broadcastState(ct, true, currentTrackRef.current);
         }
       }
-    }, 500);
+    }, 1000);
   };
 
   const stopPollingProgress = () => {
@@ -1078,11 +1088,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } else {
           const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
           if (userQueueIdx !== -1) {
+            // Clicked a user-queued track: remove it and all user-queued tracks before it
             setUserQueue(prev => prev.slice(userQueueIdx + 1));
             setCurrentTrackSource('user_queue');
           } else {
             const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
             if (playlistIdx !== -1) {
+              // Clicked a playlist track: keep userQueue intact, update playlistIndex
               setPlaylistIndex(playlistIdx);
               setCurrentTrackSource('playlist');
             } else {
@@ -1292,7 +1304,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       if (signal?.aborted) return;
       
-      resolutionCache.set(track.id, {
+      setResolutionCache(track.id, {
         videoId,
         streamUrl,
         timestamp: Date.now()
@@ -1388,7 +1400,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentTrackSource('user_queue');
       playTrack(nextTrk);
     } else {
-      const playStartIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+      // Always advance to playlistIndex + 1 when playing next track from playlist
+      const playStartIdx = playlistIndex + 1;
       if (playStartIdx >= 0 && playStartIdx < playlistQueue.length) {
         setPlaylistIndex(playStartIdx);
         setCurrentTrackSource('playlist');
@@ -1608,27 +1621,50 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     if (fromIndex < 0 || fromIndex >= queue.length || toIndex < 0 || toIndex >= queue.length) return;
+    if (fromIndex === toIndex) return;
 
-    const userQueueStart = history.length + (currentTrack ? 1 : 0);
-    if (fromIndex >= userQueueStart && toIndex >= userQueueStart) {
-      const playStartIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
-      const upcoming = [...userQueue, ...playlistQueue.slice(playStartIdx)];
-      const fromOffset = fromIndex - userQueueStart;
-      const toOffset = toIndex - userQueueStart;
+    // Calculate boundary between userQueue and playlistQueue items in the merged upcoming queue
+    const startIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+    const userQueueLength = userQueue.length;
+    const userQueueStartInQueue = currentTrack ? 1 : 0;
+    const userQueueEndInQueue = userQueueStartInQueue + userQueueLength;
 
-      if (fromOffset >= 0 && fromOffset < upcoming.length && toOffset >= 0 && toOffset < upcoming.length) {
-        const [moved] = upcoming.splice(fromOffset, 1);
-        upcoming.splice(toOffset, 0, moved);
+    if (fromIndex >= userQueueStartInQueue && fromIndex < userQueueEndInQueue) {
+      // Reordering within userQueue
+      const fromOffset = fromIndex - userQueueStartInQueue;
+      let toOffset = toIndex - userQueueStartInQueue;
+      toOffset = Math.max(0, Math.min(userQueueLength - 1, toOffset));
 
-        const newUserQueue = upcoming.filter(t => t.isUserAdded);
-        const newRemainingPlaylist = upcoming.filter(t => !t.isUserAdded);
+      setUserQueue(prev => {
+        const next = [...prev];
+        const [moved] = next.splice(fromOffset, 1);
+        next.splice(toOffset, 0, moved);
+        return next;
+      });
+    } else if (fromIndex >= userQueueEndInQueue) {
+      // Reordering within playlistQueue
+      const playlistStartInQueue = userQueueEndInQueue;
+      const fromOffset = fromIndex - playlistStartInQueue;
+      let toOffset = toIndex - playlistStartInQueue;
+      const remainingPlaylistLength = playlistQueue.length - startIdx;
+      toOffset = Math.max(0, Math.min(remainingPlaylistLength - 1, toOffset));
 
-        setUserQueue(newUserQueue);
-        setPlaylistQueue(prev => [
-          ...prev.slice(0, playStartIdx),
-          ...newRemainingPlaylist
-        ]);
-      }
+      const actualFromIdx = startIdx + fromOffset;
+      const actualToIdx = startIdx + toOffset;
+
+      setPlaylistQueue(prev => {
+        const next = [...prev];
+        const [moved] = next.splice(actualFromIdx, 1);
+        next.splice(actualToIdx, 0, moved);
+        return next;
+      });
+      setOriginalPlaylistQueue(prev => {
+        if (prev.length === 0) return prev;
+        const next = [...prev];
+        const [moved] = next.splice(actualFromIdx, 1);
+        next.splice(actualToIdx, 0, moved);
+        return next;
+      });
     }
   };
 

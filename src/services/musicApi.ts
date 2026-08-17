@@ -101,6 +101,32 @@ export async function searchTracks(query: string): Promise<Track[]> {
     }
   }
 
+  // SoundCloud Link Detection
+  if (query.includes("soundcloud.com/")) {
+    try {
+      const res = await fetch(`https://soundcloud.com/oembed?format=json&url=${encodeURIComponent(query.trim())}`);
+      if (res.ok) {
+        const data = await res.json();
+        const title = data.title || "SoundCloud Track";
+        const artist = data.author_name || "SoundCloud Artist";
+        const thumbnail = data.thumbnail_url || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+
+        const track: Track = {
+          id: `sc-${Date.now()}`,
+          title,
+          artist,
+          duration: 180,
+          thumbnail,
+          audioUrl: "",
+          youtubeUrl: ""
+        };
+        return [track];
+      }
+    } catch (err) {
+      console.error("Failed to resolve SoundCloud link via oEmbed:", err);
+    }
+  }
+
   let retries = 3;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();

@@ -231,16 +231,12 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
   return (
     <div
-      className="h-full flex flex-col justify-start gap-5 p-6 md:p-8 glass-panel border-l border-gray-800/50 relative overflow-y-auto select-none"
-      style={{
-        paddingTop: 'calc(1.5rem + var(--safe-top))',
-        paddingBottom: 'calc(1.5rem + var(--safe-bottom))'
-      }}
+      className="h-full w-full flex flex-col justify-between p-5 md:p-6 glass-panel border-l border-gray-800/50 relative overflow-hidden select-none"
     >
       {/* Immersive blurred backdrop overlay */}
       {ambientGlowEnabled && (
         <div 
-          className="absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none scale-125 filter blur-[100px] bg-center bg-cover"
+          className="absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none filter blur-[100px] bg-center bg-cover"
           style={{
             backgroundImage: `url(${currentTrack.thumbnail})`,
           }}
@@ -248,7 +244,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       )}
       
       {/* Header Controls */}
-      <div className="flex items-center justify-between mb-6 shrink-0 relative">
+      <div className="flex items-center justify-between mb-2 shrink-0 relative z-10">
         {sleepTimerRemaining !== null && (
           <div className="absolute -top-3.5 left-1/2 transform -translate-x-1/2 bg-brand-accent/20 border border-brand-accent/35 text-white text-[9px] px-2.5 py-0.5 rounded-full font-extrabold flex items-center gap-1.5 animate-pulse shrink-0 backdrop-blur-md">
             <Clock className="w-2.5 h-2.5 text-brand-accent" />
@@ -288,8 +284,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
       {/* Main Content Area: Album Art or Lyrics */}
       {view === "info" ? (
-        <div className="flex-1 shrink-0 flex flex-col items-center justify-center my-4 relative w-full min-h-[300px]">
-          <div className="relative group w-64 md:w-72 aspect-square rounded-[32px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink-0 z-10">
+        <div className="flex-1 shrink flex flex-col items-center justify-center my-2 relative w-full overflow-hidden">
+          <div className="relative group w-48 sm:w-56 md:w-60 aspect-square rounded-[24px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink z-10">
             <div className="w-full h-full rounded-[28px] overflow-hidden relative">
               <img
                 src={currentTrack.thumbnail}
@@ -395,8 +391,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       )}
 
       {/* Metadata & Actions */}
-      <div className="w-full flex items-center justify-between mt-6 mb-4 shrink-0">
-        <div className="min-w-0 flex-1">
+      <div className="w-full flex items-center justify-between mt-3 mb-2 shrink-0 overflow-hidden">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <h2 
             onClick={() => {
               if (onOpenAlbum && currentTrack.albumId) {
@@ -404,7 +400,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                 if (onClose) onClose();
               }
             }}
-            className="text-2xl font-bold text-white truncate tracking-wide cursor-pointer hover:text-brand-accent hover:underline"
+            className="text-2xl font-bold text-white truncate tracking-wide cursor-pointer hover:text-brand-accent hover:underline block max-w-full"
           >
             {currentTrack.title}
           </h2>
