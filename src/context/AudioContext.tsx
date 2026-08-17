@@ -241,12 +241,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       q.push(currentTrack);
     }
     q.push(...userQueue);
-    const startIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+    const startIdx = playlistIndex + 1;
     if (startIdx >= 0 && startIdx < playlistQueue.length) {
       q.push(...playlistQueue.slice(startIdx));
     }
     return q;
-  }, [currentTrack, userQueue, playlistQueue, playlistIndex, currentTrackSource]);
+  }, [currentTrack, userQueue, playlistQueue, playlistIndex]);
 
   const currentIndex = useMemo(() => {
     return currentTrack ? 0 : -1;
@@ -1624,7 +1624,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (fromIndex === toIndex) return;
 
     // Calculate boundary between userQueue and playlistQueue items in the merged upcoming queue
-    const startIdx = currentTrackSource === 'playlist' ? playlistIndex + 1 : playlistIndex;
+    const startIdx = playlistIndex + 1;
     const userQueueLength = userQueue.length;
     const userQueueStartInQueue = currentTrack ? 1 : 0;
     const userQueueEndInQueue = userQueueStartInQueue + userQueueLength;
