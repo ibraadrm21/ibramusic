@@ -109,7 +109,7 @@ function createWindow() {
 
   // Load URL
   if (process.env.NODE_ENV === "development" || !app.isPackaged) {
-    const devUrl = process.env.ELECTRON_START_URL || "http://localhost:5173";
+    const devUrl = process.env.ELECTRON_START_URL || "http://localhost:5174";
     mainWindow.loadURL(devUrl);
   } else {
     const MIME_TYPES = {

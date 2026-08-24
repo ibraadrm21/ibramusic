@@ -8,7 +8,12 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 const isAndroid = Capacitor.getPlatform() === "android";
 
-export const SettingsPanel: React.FC = () => {
+interface SettingsPanelProps {
+  themeSettings?: { theme: "dark" | "bright" | "noir"; [key: string]: any };
+  setThemeSettings?: React.Dispatch<React.SetStateAction<any>>;
+}
+
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ themeSettings, setThemeSettings }) => {
   const {
     ambientGlowEnabled,
     setAmbientGlowEnabled,
@@ -21,6 +26,9 @@ export const SettingsPanel: React.FC = () => {
     onlyDownloaded,
     setOnlyDownloaded
   } = useAudio();
+
+  const currentTheme = themeSettings?.theme || (document.documentElement.getAttribute("data-theme") as "dark" | "bright" | "noir") || "dark";
+  const isNoir = currentTheme === "noir";
 
   const [customTimerMinutes, setCustomTimerMinutes] = useState<number>(30);
   const [downloadCount, setDownloadCount] = useState<number>(0);
@@ -133,6 +141,37 @@ export const SettingsPanel: React.FC = () => {
             Visual Customization
           </h2>
 
+          {/* Theme Mode Selector */}
+          <div className="flex flex-col gap-2 border-b border-white/5 pb-4">
+            <span className="text-sm font-semibold text-white">Theme Mode</span>
+            <div className="grid grid-cols-3 gap-2">
+              {(["dark", "bright", "noir"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    if (t === "noir") {
+                      setAmbientGlowEnabled(false);
+                    }
+                    if (setThemeSettings) {
+                      setThemeSettings((prev: any) => ({
+                        ...prev,
+                        theme: t,
+                        bgColor: t === "noir" ? "#000000" : prev.bgColor
+                      }));
+                    }
+                  }}
+                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold capitalize transition-all ${
+                    currentTheme === t
+                      ? "bg-white text-black border-white"
+                      : "bg-white/5 text-gray-400 border-white/5 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  {t === "dark" ? "Dark" : t === "bright" ? "Bright" : "Noir"}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Ambient Glow Toggle */}
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-0.5 max-w-[70%]">
@@ -140,16 +179,32 @@ export const SettingsPanel: React.FC = () => {
               <span className="text-[11px] text-gray-400">
                 Slowly shifting fluid gradient background matching active artwork colors.
               </span>
+              {isNoir && (
+                <span className="text-[10px] text-amber-400 font-semibold mt-1">
+                  Disabled in Noir mode (Pure Black)
+                </span>
+              )}
             </div>
             <button
-              onClick={() => setAmbientGlowEnabled(!ambientGlowEnabled)}
+              disabled={isNoir}
+              onClick={() => {
+                if (isNoir) {
+                  showToast("Ambient Glow is disabled in Noir mode", "info");
+                  return;
+                }
+                setAmbientGlowEnabled(!ambientGlowEnabled);
+              }}
               className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ${
-                ambientGlowEnabled ? "bg-white" : "bg-white/10"
+                isNoir
+                  ? "bg-white/5 cursor-not-allowed opacity-40"
+                  : ambientGlowEnabled
+                  ? "bg-white"
+                  : "bg-white/10"
               }`}
             >
               <div
                 className={`w-4 h-4 rounded-full transition-transform duration-300 ${
-                  ambientGlowEnabled ? "bg-black translate-x-5" : "bg-gray-400 translate-x-0"
+                  ambientGlowEnabled && !isNoir ? "bg-black translate-x-5" : "bg-gray-400 translate-x-0"
                 }`}
               />
             </button>

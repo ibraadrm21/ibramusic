@@ -1,8 +1,6 @@
 import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
-import { Capacitor, registerPlugin } from '@capacitor/core';
-
-const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
+import { Capacitor } from '@capacitor/core';
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -123,14 +121,10 @@ export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateIn
       token: pat
     };
 
-    // If auto-update is enabled and we are on Android, trigger download immediately
+    // If auto-update is enabled and we are on Android, log availability
     const lastAttempt = localStorage.getItem('ibrastream_last_update_attempt');
     if (isAuto && hasUpdate && apkUrl && Capacitor.getPlatform() === 'android' && lastAttempt !== latestVersion) {
-      console.log("Auto-update triggered: Downloading new version...");
-      localStorage.setItem('ibrastream_last_update_attempt', latestVersion);
-      Media3Session.downloadAndInstallApk({ url: apkUrl, token: pat }).catch((err: any) => {
-        console.error("Auto-update download failed:", err);
-      });
+      console.log("Auto-update available: New version " + latestVersion);
     }
 
     return updateInfo;
@@ -153,21 +147,15 @@ export function startAutoUpdatePolling(intervalMinutes: number = 30) {
   }, intervalMinutes * 60 * 1000);
 }
 
-export async function redirectToUpdate(url: string, token?: string): Promise<void> {
-  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-    try {
-      await Media3Session.downloadAndInstallApk({ url, token });
-      return;
-    } catch (error) {
-      console.error('Direct APK installation failed, falling back to browser:', error);
-    }
-  }
-
+export async function redirectToUpdate(url: string, _token?: string): Promise<void> {
   try {
-    await Browser.open({ url });
+    if (Capacitor.isNativePlatform()) {
+      await Browser.open({ url });
+    } else {
+      window.open(url, '_blank');
+    }
   } catch (error) {
-    console.error('Failed to open browser:', error);
-    // Fallback
+    console.error('Failed to open update URL:', error);
     window.open(url, '_blank');
   }
 }

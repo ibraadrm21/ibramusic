@@ -1014,94 +1014,36 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    if (isAndroid && !isRemoteSync) {
-      if (newQueue) {
-        setOriginalPlaylistQueue(newQueue);
-        let activeQueue = newQueue;
-        let playIndex = 0;
-        if (isShuffle) {
-          const otherTracks = newQueue.filter(t => t.id !== track.id);
-          const shuffled = [track, ...shuffleArray(otherTracks)];
-          setPlaylistQueue(shuffled);
-          setPlaylistIndex(0);
-          activeQueue = shuffled;
-        } else {
-          setPlaylistQueue(newQueue);
-          const index = newQueue.findIndex(t => t.id === track.id);
-          setPlaylistIndex(index !== -1 ? index : 0);
-          playIndex = index !== -1 ? index : 0;
-        }
-        setCurrentTrackSource('playlist');
-        setCurrentTrack(track);
-        setIsPlaying(true);
-        setIsLoading(false);
-
-        const remainingQueue = activeQueue.slice(playIndex);
-        const slicedQueue = remainingQueue.slice(0, 15).map(t => {
-          const cached = resolutionCache.get(t.id);
-          return {
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            thumbnail: t.thumbnail,
-            duration: t.duration,
-            streamUrl: cached?.streamUrl || ""
-          };
-        });
-
-        console.log(`[Media3Session] Synchronously syncing native queue with ${slicedQueue.length} items`);
-        Media3Session.setQueue({ tracks: slicedQueue })
-          .then(() => {
-            Media3Session.playTrackAtIndex({ index: 0 }).catch(() => {});
-          })
-          .catch((err: any) => {
-            console.warn("Failed to sync native queue on playTrack:", err);
-          });
-        return;
+    if (newQueue && !isRemoteSync) {
+      setOriginalPlaylistQueue(newQueue);
+      if (isShuffle) {
+        const otherTracks = newQueue.filter(t => t.id !== track.id);
+        const shuffled = [track, ...shuffleArray(otherTracks)];
+        setPlaylistQueue(shuffled);
+        setPlaylistIndex(0);
       } else {
-        const q = [...userQueue, ...playlistQueue];
-        const idx = q.findIndex(t => t.id === track.id);
-        if (idx !== -1) {
-          Media3Session.playTrackAtIndex({ index: idx }).catch(() => {});
-          return;
-        }
+        setPlaylistQueue(newQueue);
+        const index = newQueue.findIndex(t => t.id === track.id);
+        setPlaylistIndex(index !== -1 ? index : 0);
       }
-    }
-
-    if (!isRemoteSync) {
-      if (newQueue) {
-        setOriginalPlaylistQueue(newQueue);
-        if (isShuffle) {
-          const otherTracks = newQueue.filter(t => t.id !== track.id);
-          const shuffled = [track, ...shuffleArray(otherTracks)];
-          setPlaylistQueue(shuffled);
-          setPlaylistIndex(0);
-        } else {
-          setPlaylistQueue(newQueue);
-          const index = newQueue.findIndex(t => t.id === track.id);
-          setPlaylistIndex(index !== -1 ? index : 0);
-        }
-        setCurrentTrackSource('playlist');
+      setCurrentTrackSource('playlist');
+    } else if (!isRemoteSync) {
+      if (currentTrack && currentTrack.id === track.id) {
+        // Same track, do nothing
       } else {
-        if (currentTrack && currentTrack.id === track.id) {
-          // Same track, do nothing
+        const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
+        if (userQueueIdx !== -1) {
+          setUserQueue(prev => prev.slice(userQueueIdx + 1));
+          setCurrentTrackSource('user_queue');
         } else {
-          const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
-          if (userQueueIdx !== -1) {
-            // Clicked a user-queued track: remove it and all user-queued tracks before it
-            setUserQueue(prev => prev.slice(userQueueIdx + 1));
-            setCurrentTrackSource('user_queue');
+          const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
+          if (playlistIdx !== -1) {
+            setPlaylistIndex(playlistIdx);
+            setCurrentTrackSource('playlist');
           } else {
-            const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
-            if (playlistIdx !== -1) {
-              // Clicked a playlist track: keep userQueue intact, update playlistIndex
-              setPlaylistIndex(playlistIdx);
-              setCurrentTrackSource('playlist');
-            } else {
-              setPlaylistQueue([track]);
-              setPlaylistIndex(0);
-              setCurrentTrackSource('playlist');
-            }
+            setPlaylistQueue([track]);
+            setPlaylistIndex(0);
+            setCurrentTrackSource('playlist');
           }
         }
       }
@@ -1151,6 +1093,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           mediaId: track.id
         });
         await Media3Session.setPlaybackState({ isPlaying: true });
+        setIsLoading(false);
+        setIsPlaying(true);
         return;
       }
     }
@@ -1168,15 +1112,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (cached && cached.videoId) {
         console.log(`[Cache Hit] Playing pre-resolved track: ${track.title}`);
         videoId = cached.videoId;
-        if (isAndroid) {
-          streamUrl = `https://ibrastream.resolve/${encodeURIComponent(track.id)}?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
+        if (isAndroid && cached.streamUrl) {
+          streamUrl = cached.streamUrl;
         }
       } else {
         videoId = await getYouTubeVideoId(track, abortController.signal);
         if (abortController.signal.aborted) return;
-        if (isAndroid) {
-          streamUrl = `https://ibrastream.resolve/${encodeURIComponent(track.id.startsWith('yt-') ? track.id : `yt-${videoId}`)}?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
-        }
+      }
+
+      if (isAndroid && !streamUrl) {
+        streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+        if (abortController.signal.aborted) return;
         resolutionCache.set(track.id, { videoId, streamUrl, timestamp: Date.now() });
       }
 
@@ -1212,6 +1158,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           mediaId: track.id
         });
         await Media3Session.setPlaybackState({ isPlaying: true });
+        setIsLoading(false);
+        setIsPlaying(true);
       } else {
         // Web: use YouTube IFrame API
         if (!ytPlayerRef.current || typeof ytPlayerRef.current.loadVideoById !== "function") {
@@ -1382,14 +1330,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }));
       return;
     }
-    if (isAndroid) {
-      Media3Session.playTrackAtIndex({ index: currentIndex + 1 })
-        .catch(() => {
-          playbackExpectedRef.current = false;
-          setIsPlaying(false);
-        });
-      return;
-    }
     if (currentTrack) {
       setHistory(prev => [...prev.slice(-49), currentTrack]);
     }
@@ -1414,6 +1354,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } else {
           playbackExpectedRef.current = false;
           setIsPlaying(false);
+          if (isAndroid) {
+            Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
+          }
         }
       }
     }
@@ -1432,12 +1375,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
         action: 'prev'
       }));
-      return;
-    }
-    if (isAndroid) {
-      if (currentIndex > 0) {
-        Media3Session.playTrackAtIndex({ index: currentIndex - 1 }).catch(() => {});
-      }
       return;
     }
 

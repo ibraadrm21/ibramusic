@@ -234,7 +234,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       className="h-full w-full flex flex-col justify-between p-5 md:p-6 glass-panel border-l border-gray-800/50 relative overflow-hidden select-none"
     >
       {/* Immersive blurred backdrop overlay */}
-      {ambientGlowEnabled && (
+      {ambientGlowEnabled && document.documentElement.getAttribute("data-theme") !== "noir" && (
         <div 
           className="absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none filter blur-[100px] bg-center bg-cover"
           style={{

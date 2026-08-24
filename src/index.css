@@ -56,6 +56,37 @@ body.is-native {
   border-radius: var(--app-radius-xl) !important;
 }
 
+/* ─── Noir theme overrides (Pure Black) ──────────────────────── */
+[data-theme="noir"] {
+  --color-brand-darkBg:   var(--app-bg-color-val, #000000);
+  --color-brand-cardBg:   #000000;
+  --color-brand-glassBg:  rgba(0, 0, 0, 0.95);
+  --app-text-main:  #ffffff;
+  --app-text-muted: #888888;
+  color: var(--app-text-main);
+}
+
+[data-theme="noir"] body {
+  background-color: var(--app-bg-color-val, #000000) !important;
+  background-image: var(--app-bg-image-val, none);
+  color: var(--app-text-main);
+}
+
+[data-theme="noir"] .glass-panel {
+  background: #000000 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+[data-theme="noir"] .glass-card {
+  background: #050505 !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+[data-theme="noir"] .glass-card:hover {
+  background: #0d0d0d !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
 /* ─── Bright theme overrides ─────────────────────────────────── */
 [data-theme="bright"] {
   --color-brand-darkBg:   var(--app-bg-color-val, #fafafa);

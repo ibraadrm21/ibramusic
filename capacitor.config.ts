@@ -12,7 +12,7 @@ const config: CapacitorConfig = {
   },
   /*
   server: {
-    url: 'http://localhost:5173',
+    url: 'http://localhost:5174',
     cleartext: true
   },
   */

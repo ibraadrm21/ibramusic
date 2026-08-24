@@ -86,14 +86,16 @@ interface RecentItem {
 }
 
 interface ThemeSettings {
-  theme: "dark" | "bright";
+  theme: "dark" | "bright" | "noir";
   corners: "rounded" | "soft";
   bgColor: string;
   bgImage: string;
 }
 
-const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTheme: "dark" | "bright") => {
+const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright" | "noir", toTheme: "dark" | "bright" | "noir") => {
   if (!color) return "";
+  if (toTheme === "noir") return "#000000";
+
   const darkPresets = [
     "#0f0f0f","#0f0f1a","#0a0f1e","#0d1117","#0f1923","#10151f","#1a0a0a","#120a0f",
     "#1e1e2e","#1a1a2e","#16213e","#0d2137","#0a2540","#162032","#2d1b1b","#1f0d24",
@@ -107,8 +109,8 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTh
     "#fda4af","#fdbb2d","#ffe066","#a7f3d0","#80f1d5","#7dd3fc","#d8b4fe","#f472b6"
   ];
   
-  const fromList = fromTheme === "dark" ? darkPresets : brightPresets;
-  const toList = toTheme === "dark" ? darkPresets : brightPresets;
+  const fromList = fromTheme === "bright" ? brightPresets : darkPresets;
+  const toList = toTheme === "bright" ? brightPresets : darkPresets;
   
   // Find exact index
   const exactIdx = fromList.findIndex(c => c.toLowerCase() === color.toLowerCase());
@@ -137,7 +139,9 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTh
   const rgbToHsl = (r: number, g: number, b: number) => {
     r /= 255; g /= 255; b /= 255;
     const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h = 0, s = 0, l = (max + min) / 2;
+    let h = 0, s = 0;
+    const l = (max + min) / 2;
+
     if (max !== min) {
       const d = max - min;
       s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -148,36 +152,37 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright", toTh
       }
       h /= 6;
     }
-    return { h: h * 360, s: s * 100, l: l * 100 };
+
+    return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
   };
 
   // Convert HSL to Hex
   const hslToHex = (h: number, s: number, l: number) => {
-    s /= 100; l /= 100;
-    const k = (n: number) => (n + h / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
-    const toHex = (x: number) => {
-      const hex = Math.round(x * 255).toString(16);
-      return hex.length === 1 ? '0' + hex : hex;
+    l /= 100;
+    const a = (s * Math.min(l, 1 - l)) / 100;
+    const f = (n: number) => {
+      const k = (n + h / 30) % 12;
+      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round(255 * color).toString(16).padStart(2, '0');
     };
-    return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+    return `#${f(0)}${f(8)}${f(4)}`;
   };
 
   try {
     const rgb = parseHex(color);
     const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-    if (toTheme === "dark") {
-      // Make it a dark color: set Lightness between 5% and 15%
-      const newL = Math.max(5, Math.min(15, hsl.l * 0.15));
-      return hslToHex(hsl.h, Math.max(30, hsl.s), newL);
-    } else {
+
+    if (toTheme === "bright") {
       // Make it a pastel/bright color: set Lightness between 85% and 95%
       const newL = Math.max(85, Math.min(95, 100 - (100 - hsl.l) * 0.15));
       return hslToHex(hsl.h, Math.max(20, Math.min(60, hsl.s)), newL);
+    } else {
+      // Make it a dark color: set Lightness between 5% and 15%
+      const newL = Math.max(5, Math.min(15, hsl.l * 0.15));
+      return hslToHex(hsl.h, Math.max(30, hsl.s), newL);
     }
   } catch {
-    return toTheme === "dark" ? "#0f0f0f" : "#fafafa";
+    return toTheme === "bright" ? "#fafafa" : "#0f0f0f";
   }
 };
 
@@ -191,7 +196,7 @@ const MainLayout: React.FC = () => {
 
   const {
     currentTrack, playTrack,
-    ambientGlowEnabled,
+    ambientGlowEnabled, setAmbientGlowEnabled,
     queue, currentIndex, removeFromQueue, clearQueue, reorderQueue,
     toast, showToast,
     playNext,
@@ -2102,7 +2107,7 @@ const MainLayout: React.FC = () => {
     <div
       className="h-screen w-screen flex flex-col overflow-hidden relative"
       style={{
-        backgroundColor: themeSettings.theme === "bright" ? "var(--app-bg-color-val, #fafafa)" : "var(--app-bg-color-val, #0f0f0f)",
+        backgroundColor: themeSettings.theme === "bright" ? "var(--app-bg-color-val, #fafafa)" : themeSettings.theme === "noir" ? "var(--app-bg-color-val, #000000)" : "var(--app-bg-color-val, #0f0f0f)",
         backgroundImage: "var(--app-bg-image-val, none)",
         backgroundSize: "cover",
         backgroundPosition: "center",
@@ -2110,7 +2115,7 @@ const MainLayout: React.FC = () => {
       }}
     >
       {/* Ambient Glow Background */}
-      {ambientGlowEnabled && currentTrack && (
+      {ambientGlowEnabled && themeSettings.theme !== "noir" && currentTrack && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-0 select-none">
           <div 
             className="absolute inset-0 scale-125 blur-[100px] md:blur-[140px] opacity-35 transition-all duration-1000 ease-in-out"
@@ -2173,13 +2178,16 @@ const MainLayout: React.FC = () => {
                 <input
                   type="text"
                   autoFocus
-                  placeholder="Search songs, artists, albums..."
+                  placeholder="Search songs, artists, YouTube links..."
                   value={searchQuery}
                   onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    if (e.target.value.trim() === "") {
+                    const val = e.target.value;
+                    setSearchQuery(val);
+                    if (val.trim() === "") {
                       setSearchResults([]);
                       setSearchRecommendations([]);
+                    } else if (val.includes("youtube.com/") || val.includes("youtu.be/")) {
+                      handleSearch(val);
                     }
                   }}
                   className="w-full px-4 py-2.5 rounded-xl bg-white/7 border border-white/8 text-white text-sm focus:outline-none placeholder:text-gray-500"
@@ -2326,15 +2334,18 @@ const MainLayout: React.FC = () => {
                   <Search className="w-4.5 h-4.5 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    placeholder="What do you want to play?"
+                    placeholder="Search songs, artists, or paste a YouTube link..."
                     value={searchQuery}
                     onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    if (e.target.value.trim() === "") {
-                      setSearchResults([]);
-                      setSearchRecommendations([]);
-                    }
-                  }}
+                      const val = e.target.value;
+                      setSearchQuery(val);
+                      if (val.trim() === "") {
+                        setSearchResults([]);
+                        setSearchRecommendations([]);
+                      } else if (val.includes("youtube.com/") || val.includes("youtu.be/")) {
+                        handleSearch(val);
+                      }
+                    }}
                     className="w-full pl-11 pr-4 py-2.5 rounded-full bg-white/5 border border-white/5 focus:border-brand-accent/50 focus:bg-white/10 text-white text-sm focus:outline-none transition-all placeholder:text-gray-500"
                   />
                 </form>
@@ -2506,11 +2517,12 @@ const MainLayout: React.FC = () => {
                         <span className="text-xs font-medium text-gray-300">Theme</span>
                         <button
                           onClick={() => {
-                            const newTheme = themeSettings.theme === "dark" ? "bright" : "dark";
+                            const nextTheme = themeSettings.theme === "dark" ? "bright" : themeSettings.theme === "bright" ? "noir" : "dark";
+                            if (nextTheme === "noir") setAmbientGlowEnabled(false);
                             setThemeSettings(prev => ({
                               ...prev,
-                              theme: newTheme,
-                              bgColor: mapColorBetweenThemes(prev.bgColor, prev.theme, newTheme)
+                              theme: nextTheme,
+                              bgColor: nextTheme === "noir" ? "#000000" : mapColorBetweenThemes(prev.bgColor, prev.theme, nextTheme)
                             }));
                           }}
                           className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] font-bold text-white transition-all uppercase"
@@ -3633,13 +3645,16 @@ const MainLayout: React.FC = () => {
                   <Search className="w-4 h-4 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
-                    placeholder="Songs, artists, albums..."
+                    placeholder="Search songs, artists, or paste a YouTube link..."
                     value={searchQuery}
                     onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      if (e.target.value.trim() === "") {
+                      const val = e.target.value;
+                      setSearchQuery(val);
+                      if (val.trim() === "") {
                         setSearchResults([]);
                         setSearchRecommendations([]);
+                      } else if (val.includes("youtube.com/") || val.includes("youtu.be/")) {
+                        handleSearch(val);
                       }
                     }}
                     className="w-full pl-11 pr-10 py-3 rounded-2xl bg-white/7 border border-white/8 text-white text-sm focus:outline-none focus:border-brand-accent/50 focus:bg-white/10 transition-all placeholder:text-gray-500"
@@ -4711,21 +4726,24 @@ const MainLayout: React.FC = () => {
               <div className="rounded-2xl bg-white/4 border border-white/5 p-5 flex flex-col gap-4">
                 <h3 className="font-semibold text-sm text-white">Theme</h3>
                 <div className="flex gap-3">
-                  {(["dark", "bright"] as const).map(t => (
+                  {(["dark", "bright", "noir"] as const).map(t => (
                     <button
                       key={t}
-                      onClick={() => setThemeSettings({
-                        ...themeSettings,
-                        theme: t,
-                        bgColor: mapColorBetweenThemes(themeSettings.bgColor, themeSettings.theme, t)
-                      })}
+                      onClick={() => {
+                        if (t === "noir") setAmbientGlowEnabled(false);
+                        setThemeSettings({
+                          ...themeSettings,
+                          theme: t,
+                          bgColor: t === "noir" ? "#000000" : mapColorBetweenThemes(themeSettings.bgColor, themeSettings.theme, t)
+                        });
+                      }}
                       className={`flex-1 py-3 rounded-xl border text-xs font-semibold capitalize transition-all ${
                         themeSettings.theme === t
                           ? "bg-white/10 border-white/30 text-white"
                           : "bg-white/3 border-white/5 text-gray-500 hover:text-white hover:bg-white/8"
                       }`}
                     >
-                      {t === "dark" ? "Dark" : "Bright"} Mode
+                      {t === "dark" ? "Dark" : t === "bright" ? "Bright" : "Noir"} Mode
                     </button>
                   ))}
                 </div>
@@ -4975,7 +4993,7 @@ const MainLayout: React.FC = () => {
               )}
             </section>
           ) : activeTab === "settings" ? (
-            <SettingsPanel />
+            <SettingsPanel themeSettings={themeSettings} setThemeSettings={setThemeSettings} />
           ) : (
             /* MAIN HOME VIEW */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
@@ -5832,11 +5850,12 @@ const MainLayout: React.FC = () => {
                   <span className="text-xs font-medium text-gray-300">Theme</span>
                   <button
                     onClick={() => {
-                      const newTheme = themeSettings.theme === "dark" ? "bright" : "dark";
+                      const nextTheme = themeSettings.theme === "dark" ? "bright" : themeSettings.theme === "bright" ? "noir" : "dark";
+                      if (nextTheme === "noir") setAmbientGlowEnabled(false);
                       setThemeSettings(prev => ({
                         ...prev,
-                        theme: newTheme,
-                        bgColor: mapColorBetweenThemes(prev.bgColor, prev.theme, newTheme)
+                        theme: nextTheme,
+                        bgColor: nextTheme === "noir" ? "#000000" : mapColorBetweenThemes(prev.bgColor, prev.theme, nextTheme)
                       }));
                     }}
                     className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] font-bold text-white transition-all uppercase"

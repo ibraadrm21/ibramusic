@@ -71,34 +71,109 @@ export const switchToNextInstance = () => {
 export async function searchTracks(query: string): Promise<Track[]> {
   if (!query.trim()) return MOCK_LIBRARY;
 
-  // Regex to match YouTube video URLs (standard, mobile, shorts, y2u.be, etc.)
-  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
-  const ytMatch = query.match(ytRegex);
+  const cleanQuery = query.trim();
+
+  // YouTube Playlist Link Detection
+  const ytPlaylistMatch = cleanQuery.match(/(?:youtube\.com|music\.youtube\.com)\/.*[?&]list=([a-zA-Z0-9_-]+)/i);
+  if (ytPlaylistMatch && (!cleanQuery.includes("v=") || cleanQuery.includes("/playlist?"))) {
+    const playlistId = ytPlaylistMatch[1];
+    try {
+      console.log(`Resolving direct YouTube playlist link for playlistId: ${playlistId}`);
+      const tracks = await getPublicPlaylistTracks(playlistId);
+      if (tracks && tracks.length > 0) {
+        return tracks;
+      }
+    } catch (err) {
+      console.error("Failed to resolve direct YouTube playlist search:", err);
+    }
+  }
+
+  // YouTube Video Link Detection (standard, mobile, music, shorts, live, embed, youtu.be, etc.)
+  const ytRegex = /(?:youtu\.be\/|(?:youtube\.com|music\.youtube\.com|m\.youtube\.com)\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i;
+  const ytParamMatch = cleanQuery.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+  const ytMatch = cleanQuery.match(ytRegex) || (cleanQuery.includes("youtu") ? ytParamMatch : null);
+
   if (ytMatch) {
     const videoId = ytMatch[1];
+    console.log(`Resolving direct YouTube link for videoId: ${videoId}`);
+    let title = "YouTube Track";
+    let artist = "YouTube Channel";
+    let duration = 180;
+    let thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+
+    let resolved = false;
+
+    // Tier 1: YouTube Innertube
     try {
-      console.log(`Resolving direct YouTube link for videoId: ${videoId}`);
       const yt = await getYoutubeClient();
       const info = await yt.getBasicInfo(videoId);
-      
-      const title = info.basic_info.title || "YouTube Track";
-      const artist = info.basic_info.author || "YouTube Channel";
-      const duration = info.basic_info.duration || 180;
-      const thumbnail = info.basic_info.thumbnail?.[0]?.url || "";
-      
-      const track: Track = {
-        id: `yt-${videoId}`,
-        title,
-        artist,
-        duration,
-        thumbnail,
-        audioUrl: "",
-        youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`
-      };
-      return [track];
+      if (info?.basic_info) {
+        title = info.basic_info.title || title;
+        artist = info.basic_info.author || artist;
+        duration = info.basic_info.duration || duration;
+        if (info.basic_info.thumbnail?.[0]?.url) {
+          thumbnail = info.basic_info.thumbnail[0].url;
+        }
+        resolved = true;
+      }
     } catch (err) {
-      console.error("Failed to resolve direct YouTube search:", err);
+      console.warn("Innertube getBasicInfo failed, attempting YouTube oEmbed fallback:", err);
     }
+
+    // Tier 2: YouTube oEmbed API fallback
+    if (!resolved) {
+      try {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+        const res = await fetchNative(oembedUrl);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.title) title = data.title;
+          if (data.author_name) artist = data.author_name;
+          if (data.thumbnail_url) thumbnail = data.thumbnail_url;
+          resolved = true;
+        }
+      } catch (err) {
+        console.warn("YouTube oEmbed fallback failed, attempting Piped fallback:", err);
+      }
+    }
+
+    // Tier 3: Piped API fallback
+    if (!resolved) {
+      const PIPED_HOSTS = [
+        "https://pipedapi.kavin.rocks",
+        "https://api.piped.video",
+        "https://pipedapi.drgns.space"
+      ];
+      for (const host of PIPED_HOSTS) {
+        try {
+          const res = await fetchNative(`${host}/streams/${videoId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.title) title = data.title;
+            if (data.uploader) artist = data.uploader;
+            if (data.duration) duration = data.duration;
+            if (data.thumbnailUrl) thumbnail = data.thumbnailUrl;
+            resolved = true;
+            break;
+          }
+        } catch (e) {
+          // ignore host failure
+        }
+      }
+    }
+
+    const track: Track = {
+      id: `yt-${videoId}`,
+      title,
+      artist,
+      duration,
+      thumbnail,
+      audioUrl: "",
+      youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      isUserAdded: true
+    };
+
+    return [track];
   }
 
   // SoundCloud Link Detection
@@ -889,6 +964,12 @@ export async function fetchNative(url: string, options: any = {}) {
 export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Promise<string> {
   if (track.id.startsWith("yt-")) {
     return track.id.substring(3);
+  }
+  if (track.youtubeUrl) {
+    const ytUrlMatch = track.youtubeUrl.match(/(?:youtu\.be\/|(?:youtube\.com|music\.youtube\.com|m\.youtube\.com)\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i) || track.youtubeUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+    if (ytUrlMatch) {
+      return ytUrlMatch[1];
+    }
   }
   const lowercaseTitle = track.title.toLowerCase();
   const lowercaseArtist = track.artist.toLowerCase();

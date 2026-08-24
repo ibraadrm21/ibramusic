@@ -1,16 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
-import 'dart:ui';
 
+import 'services/audio_handler.dart';
 import 'services/search_service.dart';
-import 'services/youtube_service.dart';
+import 'services/supabase_service.dart';
 import 'models/music_models.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize background AudioService
+  audioHandler = await AudioService.init(
+    builder: () => HarmonyAudioHandler(),
+    config: AudioServiceConfig(
+      androidNotificationChannelId: 'com.ibramusic.android_flutter.channel.audio',
+      androidNotificationChannelName: 'IbraMusic Playback',
+      androidNotificationChannelDescription: 'Background audio playback for IbraMusic',
+      androidNotificationOngoing: true,
+      androidStopForegroundOnPause: false,
+    ),
+  );
+
+  // Initialize Supabase
+  try {
+    await SupabaseSyncService.init();
+  } catch (e) {
+    debugPrint("Supabase init error: $e");
+  }
+
   runApp(const IbraMusicApp());
 }
 
@@ -30,7 +49,6 @@ class IbraMusicApp extends StatelessWidget {
             primary: Color(0xFF1DB954),
             surface: Color(0xFF121214),
           ),
-          useMaterial3: true,
         ),
         home: const MainNavigationScreen(),
       ),
@@ -39,7 +57,6 @@ class IbraMusicApp extends StatelessWidget {
 }
 
 class MusicStateProvider extends ChangeNotifier {
-  final AudioPlayer _audioPlayer = AudioPlayer();
   Track? _currentTrack;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
@@ -52,19 +69,43 @@ class MusicStateProvider extends ChangeNotifier {
   int _currentIndex = -1;
 
   MusicStateProvider() {
-    _audioPlayer.positionStream.listen((pos) {
+    _initListeners();
+  }
+
+  void _initListeners() {
+    audioHandler.playbackState.listen((state) {
+      _isPlaying = state.playing;
+      _position = state.position;
+      notifyListeners();
+    });
+
+    audioHandler.player.positionStream.listen((pos) {
       _position = pos;
       notifyListeners();
     });
-    _audioPlayer.durationStream.listen((dur) {
+
+    audioHandler.player.durationStream.listen((dur) {
       if (dur != null) {
         _duration = dur;
         notifyListeners();
       }
     });
-    _audioPlayer.playerStateStream.listen((state) {
-      _isPlaying = state.playing;
-      notifyListeners();
+
+    audioHandler.mediaItem.listen((item) {
+      if (item != null) {
+        _currentTrack = Track(
+          id: item.id,
+          title: item.title,
+          artist: item.artist ?? "Desconocido",
+          album: item.album ?? "",
+          coverUrl: item.artUri?.toString() ?? "",
+          duration: item.duration ?? Duration.zero,
+          isFavorite: _favorites.any((f) => f.id == item.id),
+        );
+        _queue = audioHandler.currentPlaylist;
+        _currentIndex = audioHandler.currentTrackIndex;
+        notifyListeners();
+      }
     });
   }
 
@@ -77,6 +118,7 @@ class MusicStateProvider extends ChangeNotifier {
   List<Playlist> get playlists => _playlists;
   bool get isSearching => _isSearching;
   List<Track> get queue => _queue;
+  int get currentIndex => _currentIndex;
 
   Future<void> search(String query) async {
     if (query.trim().isEmpty) return;
@@ -103,52 +145,22 @@ class MusicStateProvider extends ChangeNotifier {
   }
 
   Future<void> playTrack(Track track, {List<Track>? newQueue}) async {
-    if (newQueue != null && newQueue.isNotEmpty) {
-      _queue = List.from(newQueue);
-    } else if (!_queue.any((t) => t.id == track.id)) {
-      _queue.add(track);
-    }
-    _currentIndex = _queue.indexWhere((t) => t.id == track.id);
     _currentTrack = track;
     _isPlaying = true;
     notifyListeners();
-
-    try {
-      final query = "${track.title} ${track.artist}";
-      final streamUrl = await YouTubeAudioExtractor.getAudioStreamUrl(query);
-      if (streamUrl != null && streamUrl.isNotEmpty) {
-        final audioSource = AudioSource.uri(
-          Uri.parse(streamUrl),
-          tag: MediaItem(
-            id: track.id,
-            album: "IbraMusic",
-            title: track.title,
-            artist: track.artist,
-            artUri: Uri.tryParse(track.coverUrl),
-          ),
-        );
-        await _audioPlayer.setAudioSource(audioSource);
-        await _audioPlayer.play();
-      } else {
-        _isPlaying = false;
-        notifyListeners();
-      }
-    } catch (e) {
-      _isPlaying = false;
-      notifyListeners();
-    }
+    await audioHandler.playTrack(track, newQueue: newQueue);
   }
 
   Future<void> togglePlayPause() async {
     if (_isPlaying) {
-      await _audioPlayer.pause();
+      await audioHandler.pause();
     } else {
-      await _audioPlayer.play();
+      await audioHandler.play();
     }
   }
 
   Future<void> seek(Duration pos) async {
-    await _audioPlayer.seek(pos);
+    await audioHandler.seek(pos);
   }
 
   void toggleFavorite(Track track) {
@@ -162,15 +174,11 @@ class MusicStateProvider extends ChangeNotifier {
   }
 
   Future<void> nextTrack() async {
-    if (_queue.isNotEmpty && _currentIndex + 1 < _queue.length) {
-      await playTrack(_queue[_currentIndex + 1]);
-    }
+    await audioHandler.skipToNext();
   }
 
   Future<void> prevTrack() async {
-    if (_queue.isNotEmpty && _currentIndex - 1 >= 0) {
-      await playTrack(_queue[_currentIndex - 1]);
-    }
+    await audioHandler.skipToPrevious();
   }
 }
 
@@ -304,7 +312,7 @@ class HomeScreen extends StatelessWidget {
                             width: 48,
                             height: 48,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
+                            errorBuilder: (_, __, _) => Container(
                               width: 48,
                               height: 48,
                               color: Colors.white10,
@@ -346,7 +354,7 @@ class _SearchScreenState extends State<SearchScreen> {
         title: Container(
           height: 44,
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.08),
+            color: Colors.white.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(22),
           ),
           child: TextField(
@@ -378,6 +386,12 @@ class _SearchScreenState extends State<SearchScreen> {
                       width: 48,
                       height: 48,
                       fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 48,
+                        height: 48,
+                        color: Colors.white10,
+                        child: const Icon(LucideIcons.music, color: Colors.white54),
+                      ),
                     ),
                   ),
                   title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -454,7 +468,18 @@ class MiniPlayerWidget extends StatelessWidget {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: Image.network(track.coverUrl, width: 42, height: 42, fit: BoxFit.cover),
+              child: Image.network(
+                track.coverUrl,
+                width: 42,
+                height: 42,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, _) => Container(
+                  width: 42,
+                  height: 42,
+                  color: Colors.white10,
+                  child: const Icon(LucideIcons.music, size: 20, color: Colors.white54),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -481,11 +506,20 @@ class MiniPlayerWidget extends StatelessWidget {
 class FullPlayerSheet extends StatelessWidget {
   const FullPlayerSheet({super.key});
 
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes;
+    final seconds = d.inSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<MusicStateProvider>(context);
     final track = provider.currentTrack;
     if (track == null) return const SizedBox.shrink();
+
+    final currentPos = provider.position;
+    final totalDur = provider.duration > Duration.zero ? provider.duration : track.duration;
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.92,
@@ -500,7 +534,18 @@ class FullPlayerSheet extends StatelessWidget {
           const SizedBox(height: 32),
           ClipRRect(
             borderRadius: BorderRadius.circular(16),
-            child: Image.network(track.coverUrl, width: 280, height: 280, fit: BoxFit.cover),
+            child: Image.network(
+              track.coverUrl,
+              width: 280,
+              height: 280,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, _) => Container(
+                width: 280,
+                height: 280,
+                color: Colors.white10,
+                child: const Icon(LucideIcons.music, size: 80, color: Colors.white54),
+              ),
+            ),
           ),
           const SizedBox(height: 32),
           Align(
@@ -511,6 +556,36 @@ class FullPlayerSheet extends StatelessWidget {
                 Text(track.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
                 Text(track.artist, style: const TextStyle(fontSize: 16, color: Colors.white54), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          // Progress Slider
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              trackHeight: 3,
+              activeTrackColor: const Color(0xFF1DB954),
+              inactiveTrackColor: Colors.white12,
+              thumbColor: Colors.white,
+            ),
+            child: Slider(
+              value: totalDur > Duration.zero
+                  ? currentPos.inMilliseconds.clamp(0, totalDur.inMilliseconds).toDouble()
+                  : 0.0,
+              max: totalDur > Duration.zero ? totalDur.inMilliseconds.toDouble() : 1.0,
+              onChanged: (val) {
+                provider.seek(Duration(milliseconds: val.toInt()));
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(_formatDuration(currentPos), style: const TextStyle(fontSize: 12, color: Colors.white54)),
+                Text(_formatDuration(totalDur), style: const TextStyle(fontSize: 12, color: Colors.white54)),
               ],
             ),
           ),
