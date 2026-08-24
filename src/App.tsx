@@ -65,6 +65,7 @@ import { checkForUpdates, redirectToUpdate, startAutoUpdatePolling } from "./ser
 import type { UpdateInfo } from "./services/updateChecker";
 import { signUp, signIn, signOut, saveUserData, getUserData } from "./services/authSync";
 import { supabase } from "./services/supabaseClient";
+import { StorageService } from "./services/storageService";
 
 
 
@@ -512,10 +513,21 @@ const MainLayout: React.FC = () => {
         ...p,
         tracks: Array.isArray(p.tracks) ? p.tracks : []
       })) : [];
-    } catch {
-      return [];
-    }
   });
+
+  // Hydrate playlists and favorites from IndexedDB if available
+  useEffect(() => {
+    StorageService.getItem<Playlist[]>("ibrastream_playlists").then(idbPlaylists => {
+      if (idbPlaylists && Array.isArray(idbPlaylists) && idbPlaylists.length > 0) {
+        setPlaylists(idbPlaylists);
+      }
+    }).catch(() => {});
+    StorageService.getItem<Track[]>("ibrastream_favorites").then(idbFavs => {
+      if (idbFavs && Array.isArray(idbFavs) && idbFavs.length > 0) {
+        setFavorites(idbFavs);
+      }
+    }).catch(() => {});
+  }, []);
   const [showPlaylistCreateModal, setShowPlaylistCreateModal] = useState<boolean>(false);
   const [newPlaylistName, setNewPlaylistName] = useState<string>("");
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
@@ -1075,7 +1087,7 @@ const MainLayout: React.FC = () => {
 
   const savePlaylists = (updated: Playlist[]) => {
     setPlaylists(updated);
-    localStorage.setItem("ibrastream_playlists", JSON.stringify(updated));
+    StorageService.setItemSync("ibrastream_playlists", updated);
   };
 
   const handleCreatePlaylist = (name: string) => {
@@ -1864,7 +1876,7 @@ const MainLayout: React.FC = () => {
       updated = [...favorites, track];
     }
     setFavorites(updated);
-    localStorage.setItem("ibrastream_favorites", JSON.stringify(updated));
+    StorageService.setItemSync("ibrastream_favorites", updated);
   };
 
   const handleSearch = async (query: string, type: "track" | "album" | "artist" | "community" = searchType) => {

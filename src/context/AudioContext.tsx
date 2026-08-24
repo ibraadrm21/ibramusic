@@ -5,6 +5,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { supabase } from "../services/supabaseClient";
 import { downloadService } from "../services/downloadService";
+import { StorageService } from "../services/storageService";
 
 declare global {
   interface Window {
@@ -338,24 +339,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem("ibrastream_is_repeat", isRepeat);
   }, [volume, isMuted, isShuffle, isRepeat]);
 
-  // Persist queue and playing track state
+  // Persist queue and playing track state safely
   useEffect(() => {
-    localStorage.setItem("ibrastream_queue", JSON.stringify(queue));
-    localStorage.setItem("ibrastream_current_index", String(currentIndex));
-    localStorage.setItem("ibrastream_user_queue", JSON.stringify(userQueue));
-    localStorage.setItem("ibrastream_playlist_queue", JSON.stringify(playlistQueue));
-    localStorage.setItem("ibrastream_original_playlist_queue", JSON.stringify(originalPlaylistQueue));
-    localStorage.setItem("ibrastream_playlist_index", String(playlistIndex));
-    localStorage.setItem("ibrastream_history", JSON.stringify(history));
+    StorageService.setItemSync("ibrastream_queue", queue);
+    StorageService.setItemSync("ibrastream_current_index", currentIndex);
+    StorageService.setItemSync("ibrastream_user_queue", userQueue);
+    StorageService.setItemSync("ibrastream_playlist_queue", playlistQueue);
+    StorageService.setItemSync("ibrastream_original_playlist_queue", originalPlaylistQueue);
+    StorageService.setItemSync("ibrastream_playlist_index", playlistIndex);
+    StorageService.setItemSync("ibrastream_history", history);
     if (currentTrackSource) {
-      localStorage.setItem("ibrastream_current_track_source", currentTrackSource);
+      StorageService.setItemSync("ibrastream_current_track_source", currentTrackSource);
     } else {
-      localStorage.removeItem("ibrastream_current_track_source");
+      StorageService.removeItem("ibrastream_current_track_source");
     }
     if (currentTrack) {
-      localStorage.setItem("ibrastream_current_track", JSON.stringify(currentTrack));
+      StorageService.setItemSync("ibrastream_current_track", currentTrack);
     } else {
-      localStorage.removeItem("ibrastream_current_track");
+      StorageService.removeItem("ibrastream_current_track");
     }
   }, [queue, currentIndex, currentTrack, userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, history, currentTrackSource]);
 
