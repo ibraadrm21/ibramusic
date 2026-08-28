@@ -109,8 +109,17 @@ export const TrackCard = React.memo<TrackCardProps>(({
         {/* Cover Art Container */}
         <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
           <img
-            src={track.thumbnail}
+            src={track.thumbnail || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
             alt={track.title}
+            loading="lazy"
+            onError={(e) => {
+              const ytId = track.id.startsWith("yt-") ? track.id.substring(3) : (/^[a-zA-Z0-9_-]{11}$/.test(track.id) ? track.id : null);
+              if (ytId && !e.currentTarget.src.includes("i.ytimg.com")) {
+                e.currentTarget.src = `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`;
+              } else {
+                e.currentTarget.src = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+              }
+            }}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
           />
           {/* Glass Overlay Play Button */}
@@ -251,8 +260,17 @@ export const TrackCard = React.memo<TrackCardProps>(({
 
         {/* Album Cover */}
         <img
-          src={track.thumbnail}
+          src={track.thumbnail || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
           alt={track.title}
+          loading="lazy"
+          onError={(e) => {
+            const ytId = track.id.startsWith("yt-") ? track.id.substring(3) : (/^[a-zA-Z0-9_-]{11}$/.test(track.id) ? track.id : null);
+            if (ytId && !e.currentTarget.src.includes("i.ytimg.com")) {
+              e.currentTarget.src = `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`;
+            } else {
+              e.currentTarget.src = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+            }
+          }}
           className="w-10 h-10 rounded-lg object-cover shadow-md shadow-black/30 shrink-0"
         />
 

@@ -513,6 +513,9 @@ const MainLayout: React.FC = () => {
         ...p,
         tracks: Array.isArray(p.tracks) ? p.tracks : []
       })) : [];
+    } catch (e) {
+      return [];
+    }
   });
 
   // Hydrate playlists and favorites from IndexedDB if available

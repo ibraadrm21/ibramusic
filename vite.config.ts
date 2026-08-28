@@ -11,6 +11,15 @@ export default defineConfig({
       ignored: ['**/android_flutter/**']
     },
     proxy: {
+      '/api-deezer': {
+        target: 'https://api.deezer.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-deezer/, ''),
+        headers: {
+          'Origin': 'https://www.deezer.com',
+          'Referer': 'https://www.deezer.com/'
+        }
+      },
       '/api-piped-kavin': {
         target: 'https://pipedapi.kavin.rocks',
         changeOrigin: true,

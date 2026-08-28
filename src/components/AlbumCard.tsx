@@ -16,8 +16,12 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({ album, onClick }) => {
       {/* Cover Art Container */}
       <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
         <img
-          src={album.thumbnail}
+          src={album.thumbnail || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80"}
           alt={album.title}
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.src = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+          }}
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
         />
         {/* Cover Overlay details on hover */}

@@ -288,8 +288,16 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
           <div className="relative group w-48 sm:w-56 md:w-60 aspect-square rounded-[24px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink z-10">
             <div className="w-full h-full rounded-[28px] overflow-hidden relative">
               <img
-                src={currentTrack.thumbnail}
+                src={currentTrack.thumbnail || (currentTrack.id?.startsWith("yt-") ? `https://i.ytimg.com/vi/${currentTrack.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
                 alt={currentTrack.title}
+                onError={(e) => {
+                  const ytId = currentTrack.id?.startsWith("yt-") ? currentTrack.id.substring(3) : (/^[a-zA-Z0-9_-]{11}$/.test(currentTrack.id) ? currentTrack.id : null);
+                  if (ytId && !e.currentTarget.src.includes("i.ytimg.com")) {
+                    e.currentTarget.src = `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`;
+                  } else {
+                    e.currentTarget.src = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+                  }
+                }}
                 className={`w-full h-full object-cover transition-transform duration-700 ${
                   isPlaying ? "scale-105" : "scale-100"
                 }`}
