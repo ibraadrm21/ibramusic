@@ -60,6 +60,7 @@ ipcMain.on("log:write", (event, { level, msg }) => {
 });
 
 function createWindow() {
+  const iconPath = path.join(__dirname, "icon.png");
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -67,6 +68,7 @@ function createWindow() {
     minHeight: 600,
     title: "ibraadrm - ibramusic",
     backgroundColor: "#09090b",
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -116,17 +118,32 @@ function createWindow() {
       ".html": "text/html",
       ".css": "text/css",
       ".js": "application/javascript",
+      ".mjs": "application/javascript",
       ".json": "application/json",
       ".png": "image/png",
       ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
       ".gif": "image/gif",
       ".svg": "image/svg+xml",
       ".ico": "image/x-icon",
+      ".webp": "image/webp",
       ".webm": "video/webm",
-      ".mp3": "audio/mpeg"
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".wasm": "application/wasm"
     };
 
-    const serverPath = path.join(__dirname, "../web-build");
+    // Robust static server path detection for production / packaged apps
+    const candidatePaths = [
+      path.join(process.resourcesPath || "", "web-build"),
+      path.join(app.getAppPath(), "web-build"),
+      path.join(__dirname, "../web-build"),
+      path.join(__dirname, "web-build")
+    ];
+    let serverPath = candidatePaths.find(p => fs.existsSync(p)) || candidatePaths[0];
+    console.log(`[Static Server] Serving assets from: ${serverPath}`);
+
     global.localServer = http.createServer((req, res) => {
       let safeUrl = decodeURIComponent(req.url.split("?")[0]);
       if (safeUrl === "/") {
@@ -135,23 +152,45 @@ function createWindow() {
 
       const filePath = path.join(serverPath, safeUrl);
 
-      fs.readFile(filePath, (err, content) => {
-        if (err) {
+      fs.stat(filePath, (statErr, stats) => {
+        if (statErr || !stats.isFile()) {
           const indexPath = path.join(serverPath, "index.html");
           fs.readFile(indexPath, (errIndex, indexContent) => {
             if (errIndex) {
               res.writeHead(404);
               res.end("Not Found");
             } else {
-              res.writeHead(200, { "Content-Type": "text/html" });
+              res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
               res.end(indexContent, "utf-8");
             }
           });
+          return;
+        }
+
+        const ext = path.extname(filePath).toLowerCase();
+        const contentType = MIME_TYPES[ext] || "application/octet-stream";
+        const range = req.headers.range;
+
+        // Support HTTP Range requests for audio / video files
+        if (range) {
+          const parts = range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+          const chunksize = (end - start) + 1;
+          const stream = fs.createReadStream(filePath, { start, end });
+          res.writeHead(206, {
+            "Content-Range": `bytes ${start}-${end}/${stats.size}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": chunksize,
+            "Content-Type": contentType
+          });
+          stream.pipe(res);
         } else {
-          const ext = path.extname(filePath).toLowerCase();
-          const contentType = MIME_TYPES[ext] || "application/octet-stream";
-          res.writeHead(200, { "Content-Type": contentType });
-          res.end(content, "utf-8");
+          res.writeHead(200, {
+            "Content-Length": stats.size,
+            "Content-Type": contentType
+          });
+          fs.createReadStream(filePath).pipe(res);
         }
       });
     });
@@ -162,6 +201,14 @@ function createWindow() {
       mainWindow.loadURL(`http://127.0.0.1:${port}`);
     });
   }
+
+  // Graceful hide to tray on close if user wants background music
+  mainWindow.on("close", (event) => {
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -177,21 +224,30 @@ function initDiscordRPC() {
     try { rpc.destroy(); } catch (e) {}
     rpc = null;
   }
-  rpc = new DiscordRPC.Client({ transport: "ipc" });
+  try {
+    rpc = new DiscordRPC.Client({ transport: "ipc" });
 
-  rpc.on("ready", () => {
-    rpcConnected = true;
-    console.log("Discord Rich Presence connected & ready!");
-  });
+    rpc.on("ready", () => {
+      rpcConnected = true;
+      console.log("Discord Rich Presence connected & ready!");
+    });
 
-  rpc.on("disconnected", () => {
-    rpcConnected = false;
-  });
+    rpc.on("disconnected", () => {
+      rpcConnected = false;
+    });
 
-  rpc.login({ clientId }).catch(() => {
-    rpcConnected = false;
-    setTimeout(initDiscordRPC, 10000);
-  });
+    rpc.on("error", (err) => {
+      console.warn("Discord RPC warning:", err?.message || err);
+      rpcConnected = false;
+    });
+
+    rpc.login({ clientId }).catch(() => {
+      rpcConnected = false;
+      setTimeout(initDiscordRPC, 15000);
+    });
+  } catch (err) {
+    console.warn("Could not initialize Discord RPC:", err.message);
+  }
 }
 
 function updateDiscordPresence(details) {
@@ -231,7 +287,6 @@ function initTray() {
     if (fs.existsSync(iconPath)) {
       trayImage = nativeImage.createFromPath(iconPath);
     } else {
-      // Create a 16x16 transparent image fallback
       trayImage = nativeImage.createFromBitmap(Buffer.alloc(16 * 16 * 4), { width: 16, height: 16 });
     }
 
@@ -273,9 +328,13 @@ app.on("ready", () => {
   initDiscordRPC();
 });
 
+app.on("before-quit", () => {
+  app.isQuitting = true;
+});
+
 app.on("window-all-closed", () => {
   if (global.localServer) {
-    global.localServer.close();
+    try { global.localServer.close(); } catch {}
   }
   if (process.platform !== "darwin") {
     app.quit();
@@ -285,6 +344,9 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   if (mainWindow === null) {
     createWindow();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
   }
 });
 
@@ -297,6 +359,60 @@ ipcMain.on("discord-rpc:clear", () => {
   if (rpc) rpc.clearActivity().catch(() => {});
 });
 
+// Helper function to download with HTTP/HTTPS redirect support
+function downloadFileWithRedirects(targetUrl, destPath, onProgress, maxRedirects = 5) {
+  return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) {
+      return reject(new Error("Too many HTTP redirects"));
+    }
+
+    const client = targetUrl.startsWith("https") ? https : http;
+    const req = client.get(targetUrl, { headers: { "User-Agent": "Mozilla/5.0" } }, (res) => {
+      // Handle redirects
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        const redirectedUrl = new URL(res.headers.location, targetUrl).toString();
+        res.resume(); // Discard previous stream
+        return downloadFileWithRedirects(redirectedUrl, destPath, onProgress, maxRedirects - 1)
+          .then(resolve)
+          .catch(reject);
+      }
+
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        res.resume();
+        return reject(new Error(`HTTP Status ${res.statusCode}`));
+      }
+
+      const totalLength = parseInt(res.headers["content-length"], 10) || 0;
+      let downloadedLength = 0;
+      const file = fs.createWriteStream(destPath);
+
+      res.on("data", (chunk) => {
+        downloadedLength += chunk.length;
+        if (onProgress && totalLength) {
+          const progress = Math.round((downloadedLength / totalLength) * 100);
+          onProgress(progress);
+        }
+      });
+
+      res.pipe(file);
+
+      file.on("finish", () => {
+        file.close(() => resolve());
+      });
+
+      file.on("error", (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
+    });
+
+    req.on("error", (err) => {
+      fs.unlink(destPath, () => {});
+      reject(err);
+    });
+  });
+}
+
 // File Downloader implementation
 ipcMain.on("download-track", async (event, { track, url }) => {
   initPaths();
@@ -306,55 +422,38 @@ ipcMain.on("download-track", async (event, { track, url }) => {
 
   console.log(`[Electron Downloader] Starting download for: ${track.title} from ${url}`);
 
-  const file = fs.createWriteStream(filePath);
-  https.get(url, (response) => {
-    if (response.statusCode !== 200) {
-      event.sender.send("download-failed", { trackId, error: `HTTP Status ${response.statusCode}` });
-      return;
-    }
-
-    const totalLength = parseInt(response.headers["content-length"], 10) || 0;
-    let downloadedLength = 0;
-
-    response.on("data", (chunk) => {
-      downloadedLength += chunk.length;
-      const progress = totalLength ? Math.round((downloadedLength / totalLength) * 100) : 0;
+  try {
+    await downloadFileWithRedirects(url, filePath, (progress) => {
       event.sender.send("download-progress", { trackId, progress });
     });
 
-    response.pipe(file);
+    // Save metadata
+    let downloadsMeta = {};
+    if (fs.existsSync(metaPath)) {
+      try {
+        downloadsMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+      } catch {}
+    }
 
-    file.on("finish", () => {
-      file.close();
-      
-      // Save metadata
-      let downloadsMeta = {};
-      if (fs.existsSync(metaPath)) {
-        try {
-          downloadsMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-        } catch {}
-      }
-      
-      downloadsMeta[trackId] = {
-        ...track,
-        localPath: filePath,
-        downloadedAt: Date.now()
-      };
-      fs.writeFileSync(metaPath, JSON.stringify(downloadsMeta, null, 2));
+    downloadsMeta[trackId] = {
+      ...track,
+      localPath: filePath,
+      downloadedAt: Date.now()
+    };
+    fs.writeFileSync(metaPath, JSON.stringify(downloadsMeta, null, 2));
 
-      event.sender.send("download-completed", { trackId, filePath });
-      console.log(`[Electron Downloader] Download completed: ${track.title}`);
-    });
-  }).on("error", (err) => {
-    fs.unlink(filePath, () => {});
+    event.sender.send("download-completed", { trackId, filePath });
+    console.log(`[Electron Downloader] Download completed: ${track.title}`);
+  } catch (err) {
+    console.error(`[Electron Downloader] Download failed: ${track.title}`, err);
     event.sender.send("download-failed", { trackId, error: err.message });
-  });
+  }
 });
 
 ipcMain.handle("get-offline-track-path", (event, trackId) => {
   initPaths();
   const filePath = path.join(downloadsDir, `${trackId}.mp3`);
-  return fs.existsSync(filePath) ? `file://${filePath}` : null;
+  return fs.existsSync(filePath) ? `file://${filePath.replace(/\\/g, "/")}` : null;
 });
 
 ipcMain.handle("delete-offline-track", (event, trackId) => {
@@ -363,7 +462,7 @@ ipcMain.handle("delete-offline-track", (event, trackId) => {
   const metaPath = path.join(downloadsDir, "downloads.json");
 
   if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+    try { fs.unlinkSync(filePath); } catch {}
   }
 
   if (fs.existsSync(metaPath)) {

@@ -397,7 +397,7 @@ const MainLayout: React.FC = () => {
     setRecentlyPlayed(prev => {
       const filtered = prev.filter(r => !(r.id === item.id && r.type === item.type));
       const updated = [item, ...filtered].slice(0, 12);
-      localStorage.setItem("ibrastream_recently_played", JSON.stringify(updated));
+      StorageService.setItemSync("ibrastream_recently_played", updated);
       return updated;
     });
   };
@@ -466,8 +466,8 @@ const MainLayout: React.FC = () => {
       const metaPfp = user.user_metadata?.avatar_url || "";
       setUsername(metaUsername);
       setPfp(metaPfp);
-      localStorage.setItem("ibrastream_username", metaUsername);
-      localStorage.setItem("ibrastream_pfp", metaPfp);
+      StorageService.setItemSync("ibrastream_username", metaUsername);
+      StorageService.setItemSync("ibrastream_pfp", metaPfp);
     } else {
       setUsername("Guest");
       setPfp("");
@@ -476,7 +476,7 @@ const MainLayout: React.FC = () => {
 
   const handleUpdatePfp = async (base64Data: string) => {
     setPfp(base64Data);
-    localStorage.setItem("ibrastream_pfp", base64Data);
+    StorageService.setItemSync("ibrastream_pfp", base64Data);
     if (user) {
       try {
         await supabase.auth.updateUser({
@@ -1431,7 +1431,7 @@ const MainLayout: React.FC = () => {
 
       setHomeRecommendations(recs);
       setTrendingTracks(trending);
-      localStorage.setItem("ibrastream_home_recommendations", JSON.stringify(recs));
+      StorageService.setItemSync("ibrastream_home_recommendations", recs);
       lastRecsUpdate.current = Date.now();
     } catch (err) {
       console.error("Failed to load home recommendations", err);
@@ -6765,6 +6765,8 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
     toggleMute,
     toggleShuffle,
     toggleRepeat,
+    seamlessTransitions,
+    setSeamlessTransitions,
     roomId,
     isHost
   } = useAudio();
@@ -6912,6 +6914,20 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
 
       {/* Right: Queue / Volume */}
       <div className="flex items-center justify-end gap-3 w-1/3 min-w-[200px]">
+        <button
+          onClick={() => setSeamlessTransitions(!seamlessTransitions)}
+          className={`p-2 rounded-full transition-all relative group ${
+            seamlessTransitions 
+              ? "text-white bg-white/10 shadow-[0_0_10px_rgba(255,255,255,0.2)]" 
+              : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
+          }`}
+          title={seamlessTransitions ? "Seamless Transitions activadas (Crossfade suave)" : "Activar Seamless Transitions"}
+        >
+          <Waves className="w-4.5 h-4.5" />
+          {seamlessTransitions && (
+            <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-400 rounded-full animate-pulse ring-2 ring-brand-darkBg" />
+          )}
+        </button>
         <button
           onClick={() => setShowQueueOverlay(prev => !prev)}
           className={`p-2 rounded-full hover:bg-white/5 transition-all ${showQueueOverlay ? "text-white bg-white/5" : "text-gray-400 hover:text-white"}`}

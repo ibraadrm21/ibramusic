@@ -179,17 +179,34 @@ export class StorageService {
   /**
    * Remove non-essential items from localStorage if quota is reached.
    */
-  private static clearNonEssentialLocalStorage(): void {
+  public static clearNonEssentialLocalStorage(): void {
     try {
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (k && (k.startsWith("ibrastream_recommendation_") || k.startsWith("ibrastream_meta_") || k.includes("cache"))) {
+        if (!k) continue;
+        // Check for recommendation caches, meta caches, heavy search history, or old big items
+        if (
+          k.startsWith("ibrastream_recommendation_") ||
+          k.startsWith("ibrastream_meta_") ||
+          k.startsWith("ibrastream_home_recommendations") ||
+          k.includes("cache")
+        ) {
           keysToRemove.push(k);
         }
       }
       for (const key of keysToRemove) {
         localStorage.removeItem(key);
+      }
+
+      // If still bloated, check if recently_played or history or other keys exceed 100KB
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const val = localStorage.getItem(k) || "";
+        if (val.length > 50000 && !k.startsWith("sb-") && k !== "ibrastream_queue") {
+          localStorage.removeItem(k);
+        }
       }
     } catch {}
   }

@@ -8,6 +8,7 @@ async function bundle() {
     name: "ibramusic",
     platform: "win32",
     arch: "x64",
+    icon: path.join(__dirname, "icon.ico"),
     out: "release",
     overwrite: true,
     prune: true,

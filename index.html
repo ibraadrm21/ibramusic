@@ -11,6 +11,11 @@
         if (window.electronAPI && window.electronAPI.writeLog) {
           window.electronAPI.writeLog("CRITICAL_ERROR", message + " at " + source + ":" + lineno + ":" + colno + (error ? "\n" + error.stack : ""));
         }
+        // Don't pop up browser modal for benign storage quota warnings
+        if (String(message).includes("QuotaExceededError") || (error && error.name === "QuotaExceededError")) {
+          console.warn("Storage quota exceeded caught by window.onerror:", message);
+          return true;
+        }
         alert("Startup error: " + message + "\nSource: " + source + "\nLine: " + lineno + ":" + colno + "\nStack: " + (error ? error.stack : "N/A"));
         return false;
       };

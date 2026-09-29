@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { 
-  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive, Zap
+  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive, Zap, Waves
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
 import { Capacitor, registerPlugin } from "@capacitor/core";
@@ -17,6 +17,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ themeSettings, set
   const {
     ambientGlowEnabled,
     setAmbientGlowEnabled,
+    seamlessTransitions,
+    setSeamlessTransitions,
+    seamlessDuration,
+    setSeamlessDuration,
     eqPreset,
     setEqPreset,
     sleepTimerRemaining,
@@ -245,6 +249,60 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ themeSettings, set
                   {preset === "bass" ? "Bass Booster" : preset === "vocal" ? "Vocal Booster" : preset}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Seamless Transitions Card (Spotify Crossfade) */}
+        <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
+            <Waves className="w-5 h-5 text-brand-accent" />
+            Seamless Transitions
+          </h2>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5 max-w-[70%]">
+                <span className="text-sm font-semibold text-white">Transiciones Sin Pausas (Crossfade)</span>
+                <span className="text-[11px] text-gray-400">
+                  Desvanece el final de cada pista suavemente mientras arranca la siguiente, como en Spotify.
+                </span>
+              </div>
+              <button
+                onClick={() => setSeamlessTransitions(!seamlessTransitions)}
+                className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 focus:outline-none ${
+                  seamlessTransitions ? "bg-white" : "bg-white/10"
+                }`}
+                title="Activar / Desactivar Seamless Transitions"
+              >
+                <div
+                  className={`w-4 h-4 rounded-full transition-transform duration-300 ${
+                    seamlessTransitions ? "bg-black translate-x-5" : "bg-gray-400 translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Crossfade Duration Slider */}
+            <div className={`flex flex-col gap-2 pt-2 border-t border-white/5 transition-opacity ${seamlessTransitions ? "opacity-100" : "opacity-30 pointer-events-none"}`}>
+              <div className="flex justify-between text-xs font-semibold text-gray-300">
+                <span className="text-gray-400">Duración del crossfade:</span>
+                <span className="text-white font-bold">{seamlessDuration} segundos</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={12}
+                step={1}
+                value={seamlessDuration}
+                onChange={(e) => setSeamlessDuration(parseInt(e.target.value, 10))}
+                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
+              />
+              <div className="flex justify-between text-[10px] text-gray-500 font-medium">
+                <span>1s (Rápido)</span>
+                <span>4s (Recomendado)</span>
+                <span>12s (Largo)</span>
+              </div>
             </div>
           </div>
         </div>

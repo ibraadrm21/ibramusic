@@ -1,6 +1,7 @@
 import React from "react";
 import { Home, Search, Heart, ListMusic, Sparkles, Settings, Gift, Award, ChevronLeft, ChevronRight } from "lucide-react";
 import { motion } from "framer-motion";
+import { animate } from "animejs";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -149,13 +150,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {/* Logo */}
           <div className={`flex items-center ${collapsed ? "flex-col gap-3 justify-center" : "justify-between"} shrink-0`}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center p-1.5 overflow-hidden">
+            <div
+              className="flex items-center gap-3 cursor-pointer group"
+              onClick={(e) => {
+                const logoBox = e.currentTarget.querySelector(".sidebar-logo-box");
+                if (logoBox) {
+                  animate(logoBox, {
+                    scale: [0.85, 1.15, 1],
+                    rotate: [-10, 10, 0],
+                    duration: 600,
+                    ease: "outElastic(1, .5)"
+                  });
+                }
+              }}
+            >
+              <div className="sidebar-logo-box w-10 h-10 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center p-1.5 overflow-hidden transition-all group-hover:border-white/30 group-hover:bg-white/10">
                 <Logo className="w-full h-full" />
               </div>
               {!collapsed && (
                 <div>
-                  <span className="text-base font-semibold tracking-tight text-white">
+                  <span className="text-base font-semibold tracking-tight text-white group-hover:text-brand-accent transition-colors">
                     ibrastream
                   </span>
                   <span className="block text-[9px] text-gray-500 font-medium tracking-widest uppercase">

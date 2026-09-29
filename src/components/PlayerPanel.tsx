@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
-  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock
+  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock, Waves
 } from "lucide-react";
 import { useAudio, useAudioProgress } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
 import { Capacitor } from "@capacitor/core";
+import { animate } from "animejs";
 
 const isAndroid = Capacitor.getPlatform() === "android";
 const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
@@ -75,7 +76,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     isHost,
     sleepTimerRemaining,
     currentUser,
-    ambientGlowEnabled
+    ambientGlowEnabled,
+    seamlessTransitions,
+    setSeamlessTransitions
   } = useAudio();
 
   const { currentTime, duration } = useAudioProgress();
@@ -183,7 +186,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     return acc;
   }, -1);
 
-  // Auto-scroll lyrics container
+  // Auto-scroll lyrics container & animate active line with animejs
   useEffect(() => {
     if (view === "lyrics" && lyricsContainerRef.current) {
       const activeEl = lyricsContainerRef.current.querySelector(".lyrics-active-line");
@@ -191,6 +194,12 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         activeEl.scrollIntoView({
           behavior: "smooth",
           block: "center"
+        });
+        animate(activeEl, {
+          scale: [0.97, 1.05],
+          translateX: [-6, 0],
+          duration: 450,
+          ease: "outCubic"
         });
       } else if (activeLineIndex === -1) {
         lyricsContainerRef.current.scrollTo({
@@ -273,12 +282,28 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             <Mic className="w-3.5 h-3.5" /> Lyrics
           </button>
         </div>
-        <button 
-          onClick={() => setShowInfoModal(true)}
-          className="p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white"
-        >
-          <Info className="w-4.5 h-4.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setSeamlessTransitions(!seamlessTransitions)}
+            className={`p-2 rounded-full transition-all relative ${
+              seamlessTransitions
+                ? "text-white bg-white/10 shadow-[0_0_10px_rgba(255,255,255,0.2)]"
+                : "text-gray-400 hover:text-white hover:bg-white/10"
+            }`}
+            title={seamlessTransitions ? "Seamless Transitions (Crossfade) activo" : "Activar Seamless Transitions"}
+          >
+            <Waves className="w-4 h-4" />
+            {seamlessTransitions && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+            )}
+          </button>
+          <button 
+            onClick={() => setShowInfoModal(true)}
+            className="p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white"
+          >
+            <Info className="w-4.5 h-4.5" />
+          </button>
+        </div>
 
       </div>
 
@@ -313,7 +338,6 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
               )}
             </div>
           </div>
-
         </div>
       ) : (
         /* Synced Lyrics Container */
