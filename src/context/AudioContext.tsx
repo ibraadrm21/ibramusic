@@ -936,7 +936,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Track readiness status of the pre-cued deck
   const preCuedReadyRef = useRef<boolean>(false);
 
-  // Pre-cue the standby player ahead of time so the video stream is buffered and ready
+  // Pre-cue the standby player ahead of time so the video stream is buffered and ready.
+  // Uses cueVideoById which tells YouTube to download & buffer WITHOUT playing,
+  // avoiding the mute/play/pause/seek hack that caused audible flashes and re-buffering.
   const preCueStandbyPlayer = async (candidate: { track: Track; source: 'user_queue' | 'playlist'; nextIndex?: number }) => {
     const nextTrackItem = candidate.track;
     if (preCuedTrackIdRef.current === nextTrackItem.id) return; // Already pre-cued or pre-cueing
@@ -958,22 +960,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       if (!nextVideoId) return;
 
-      // Silence standby player completely while buffering
+      // Ensure standby player is silent before cueing
       if (typeof standbyPlayer.setVolume === "function") {
         standbyPlayer.setVolume(0);
       }
-      if (typeof standbyPlayer.mute === "function") {
-        try { standbyPlayer.mute(); } catch {}
+
+      // cueVideoById tells YouTube to download & buffer the stream without playing.
+      // The player transitions to state 5 (CUED) when ready — no audio leak possible.
+      if (typeof standbyPlayer.cueVideoById === "function") {
+        standbyPlayer.cueVideoById({ videoId: nextVideoId, startSeconds: 0 });
+      } else {
+        // Fallback for older API: load + immediately pause
+        standbyPlayer.loadVideoById({ videoId: nextVideoId, startSeconds: 0 });
+        try { standbyPlayer.pauseVideo?.(); } catch {}
       }
 
-      // Load video in background at volume 0
-      standbyPlayer.loadVideoById({
-        videoId: nextVideoId,
-        startSeconds: 0
-      });
-      standbyPlayer.playVideo?.();
-
-      // Wait until incoming player has actually reached PLAYING (state === 1) and buffered frames
+      // Poll until the player reaches CUED (5) or PAUSED (2) — meaning buffer is ready.
+      // Also accept PLAYING (1) as ready in case the browser auto-plays despite cue.
       let checkAttempts = 0;
       const warmupInterval = setInterval(() => {
         checkAttempts++;
@@ -984,26 +987,30 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         try {
           const state = standbyPlayer.getPlayerState?.();
-          const currTime = standbyPlayer.getCurrentTime?.() || 0;
 
-          // Once it's truly playing and has decoded the first fraction of a second:
-          if (state === 1 && currTime >= 0.05) {
+          // State 5 = CUED (buffered, ready to play instantly)
+          // State 2 = PAUSED (loaded and paused — also good)
+          // State 1 = PLAYING (auto-played despite cue — pause it and mark ready)
+          if (state === 5 || state === 2) {
+            clearInterval(warmupInterval);
+            standbyPlayer.setVolume?.(0);
+            preCuedReadyRef.current = true;
+            return;
+          }
+          if (state === 1) {
+            // Browser auto-played; pause immediately and mark ready
             clearInterval(warmupInterval);
             standbyPlayer.pauseVideo?.();
-            standbyPlayer.seekTo?.(0, true);
             standbyPlayer.setVolume?.(0);
             preCuedReadyRef.current = true;
             return;
           }
         } catch {}
 
-        if (checkAttempts > 40) { // 4 seconds max timeout
+        if (checkAttempts > 80) { // 8 seconds max timeout (generous for slow connections)
           clearInterval(warmupInterval);
-          try {
-            standbyPlayer.pauseVideo?.();
-            standbyPlayer.seekTo?.(0, true);
-            standbyPlayer.setVolume?.(0);
-          } catch {}
+          // Even if not confirmed ready, mark as ready so crossfade doesn't block forever
+          standbyPlayer.setVolume?.(0);
           preCuedReadyRef.current = true;
         }
       }, 100);
@@ -1055,10 +1062,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try { incomingPlayer.unMute(); } catch {}
       }
 
-      // If pre-cued and already warmed up, play immediately.
+      // If pre-cued and already warmed up, just hit play — no seekTo needed since
+      // cueVideoById already positioned at startSeconds:0 and the buffer is intact.
       // Otherwise, load and wait for it to actually begin playing before fading out outgoing.
       if (preCuedTrackIdRef.current === nextTrackItem.id && preCuedReadyRef.current) {
-        incomingPlayer.seekTo?.(0, true);
         incomingPlayer.playVideo?.();
       } else {
         incomingPlayer.loadVideoById({
@@ -1227,8 +1234,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           // Find what track is next up in queue or playlist using fresh refs
           const candidate = getNextUpcomingTrack();
 
-          // Early Pre-cue: 20 seconds before track ends, preload & buffer standby player completely!
-          if (candidate && remaining <= Math.max(20, fadeSecs + 12) && remaining > fadeSecs) {
+          // Early Pre-cue: 30 seconds before track ends, preload & buffer standby player completely!
+          // Extra margin ensures even first-listen / slow-connection tracks are fully buffered.
+          if (candidate && remaining <= Math.max(30, fadeSecs + 20) && remaining > fadeSecs) {
             preCueStandbyPlayer(candidate);
           }
 
