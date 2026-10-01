@@ -15,6 +15,8 @@ interface TrackCardProps {
   trackIndex?: number;
   onContextMenu?: (e: React.MouseEvent, track: Track) => void;
   playlistId?: string;
+  isExplicit?: boolean;
+  hasDualVersions?: boolean;
 }
 
 export const TrackCard = React.memo<TrackCardProps>(({
@@ -27,11 +29,44 @@ export const TrackCard = React.memo<TrackCardProps>(({
   onAddToPlaylist,
   trackIndex,
   onContextMenu,
-  playlistId
+  playlistId,
+  isExplicit,
+  hasDualVersions
 }) => {
   const { currentTrack, isPlaying, isLoading, playTrack, togglePlay, addToQueue } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
+
+  const [isDual, setIsDual] = React.useState<boolean>(
+    hasDualVersions ?? (track.hasDualVersions === true)
+  );
+
+  React.useEffect(() => {
+    let isMounted = true;
+    if (hasDualVersions !== undefined) {
+      setIsDual(hasDualVersions);
+      return;
+    }
+    if (track.hasDualVersions !== undefined) {
+      setIsDual(track.hasDualVersions);
+      return;
+    }
+    // Only resolve for explicit tracks to save network requests
+    if (isExplicit || track.isExplicit) {
+      import("../services/musicApi").then(({ checkTrackDualVersions }) => {
+        checkTrackDualVersions(track).then((res) => {
+          if (isMounted) setIsDual(res);
+        });
+      });
+    } else {
+      setIsDual(false);
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [track.id, track.artist, track.title, track.hasDualVersions, track.isExplicit, isExplicit, hasDualVersions]);
+
+  const showExplicitBadge = (isExplicit || track.isExplicit) && isDual;
 
   const longPressTimeoutRef = useRef<number | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -150,6 +185,18 @@ export const TrackCard = React.memo<TrackCardProps>(({
                   <span className="w-0.5 bg-white wave-bar" style={{ animationDelay: "0.2s" }}></span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Explicit badge for square variant */}
+          {showExplicitBadge && (
+            <div className="absolute top-2 left-2 z-10 pointer-events-none">
+              <span
+                className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-black/75 backdrop-blur-sm text-[9px] font-bold text-gray-200 select-none shadow-sm"
+                title="Explicit"
+              >
+                E
+              </span>
             </div>
           )}
 
@@ -276,11 +323,21 @@ export const TrackCard = React.memo<TrackCardProps>(({
 
         {/* Title & Artist subtitle */}
         <div className="min-w-0 flex-1">
-          <h4 
-            className={`font-semibold text-sm truncate ${isCurrent ? "text-brand-accent" : "text-white"}`}
-          >
-            {track.title}
-          </h4>
+          <div className="flex items-center gap-1.5 min-w-0">
+            {showExplicitBadge && (
+              <span
+                className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-white/20 text-[9px] font-bold text-gray-300 shrink-0 select-none"
+                title="Explicit"
+              >
+                E
+              </span>
+            )}
+            <h4 
+              className={`font-semibold text-sm truncate ${isCurrent ? "text-brand-accent" : "text-white"}`}
+            >
+              {track.title}
+            </h4>
+          </div>
           <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-1 select-none">
             {track.artists && track.artists.length > 0 ? (
               track.artists.map((art, i) => (

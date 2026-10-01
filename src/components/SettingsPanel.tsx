@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { 
-  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive, Zap, Waves
+  Sliders, Eye, Clock, Trash2, ShieldAlert, Sparkles, Volume2, HardDrive, Zap, Waves, ShieldOff
 } from "lucide-react";
 import { useAudio } from "../context/AudioContext";
 import { Capacitor, registerPlugin } from "@capacitor/core";
@@ -11,9 +11,16 @@ const isAndroid = Capacitor.getPlatform() === "android";
 interface SettingsPanelProps {
   themeSettings?: { theme: "dark" | "bright" | "noir"; [key: string]: any };
   setThemeSettings?: React.Dispatch<React.SetStateAction<any>>;
+  filterExplicit?: boolean;
+  onToggleFilterExplicit?: () => void;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ themeSettings, setThemeSettings }) => {
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ 
+  themeSettings, 
+  setThemeSettings,
+  filterExplicit,
+  onToggleFilterExplicit
+}) => {
   const {
     ambientGlowEnabled,
     setAmbientGlowEnabled,
@@ -428,6 +435,39 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ themeSettings, set
             </button>
           </div>
         </div>
+
+        {/* Content Settings Card */}
+        {onToggleFilterExplicit && (
+          <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
+              <ShieldOff className="w-5 h-5 text-brand-accent" />
+              Contenido
+            </h2>
+
+            <div className="flex flex-col gap-3.5 text-xs text-gray-400">
+              <div className="flex justify-between items-center bg-white/5 p-3.5 rounded-2xl border border-white/5">
+                <div className="flex flex-col gap-0.5 max-w-[75%]">
+                  <span className="font-bold text-white">Ocultar contenido explícito</span>
+                  <span className="text-[10px] text-gray-500">
+                    Las canciones marcadas como Explicit no aparecerán en búsquedas ni listas.
+                  </span>
+                </div>
+                <button
+                  onClick={onToggleFilterExplicit}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    filterExplicit ? "bg-brand-accent" : "bg-white/10"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      filterExplicit ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Android Background Settings Card */}
         {isAndroid && (

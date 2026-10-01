@@ -2,17 +2,18 @@ import React, { useEffect, useRef, useState } from "react";
 import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Download, CloudOff, ListPlus } from "lucide-react";
 import type { Track } from "../services/musicApi";
 import { downloadService } from "../services/downloadService";
-import { Capacitor } from "@capacitor/core";
 
 interface TrackContextMenuProps {
   x: number;
   y: number;
   track: Track;
   isFavorite: boolean;
+  isExplicit: boolean;
   playlists: Array<{ id: string; name: string }>;
   currentPlaylistId?: string | null;
   onClose: () => void;
   onToggleFavorite: () => void;
+  onToggleExplicit: () => void;
   onAddToQueue: () => void;
   onGoToArtist?: () => void;
   onGoToAlbum?: () => void;
@@ -28,10 +29,12 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   y,
   track,
   isFavorite,
+  isExplicit,
   playlists,
   currentPlaylistId,
   onClose,
   onToggleFavorite,
+  onToggleExplicit,
   onAddToQueue,
   onGoToArtist,
   onGoToAlbum,
@@ -46,6 +49,24 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   const [showPlaylistSubmenu, setShowPlaylistSubmenu] = useState(false);
   const submenuTimeoutRef = useRef<number | null>(null);
   const [downloadStatus, setDownloadStatus] = useState(downloadService.getStatus(track.id));
+  const [hasDualVersions, setHasDualVersions] = useState<boolean>(track.hasDualVersions === true);
+
+  // Check if track has both explicit and clean versions available
+  useEffect(() => {
+    let isMounted = true;
+    if (track.hasDualVersions !== undefined) {
+      setHasDualVersions(track.hasDualVersions);
+      return;
+    }
+    import("../services/musicApi").then(({ checkTrackDualVersions }) => {
+      checkTrackDualVersions(track).then((dual) => {
+        if (isMounted) setHasDualVersions(dual);
+      });
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [track.id, track.artist, track.title, track.hasDualVersions]);
 
   // Sync download status
   useEffect(() => {
@@ -61,8 +82,16 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       await downloadService.removeDownload(track.id);
     } else {
       try {
-        const { getYouTubeAudioStream, getYouTubeVideoId } = await import("../services/musicApi");
+        const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("../services/musicApi");
         await downloadService.downloadTrack(track, async () => {
+          // 1. Try Monochrome for high-fidelity audio first
+          try {
+            const monochromeStream = await getMonochromeAudioStream(track);
+            if (monochromeStream) return monochromeStream;
+          } catch (e) {
+            console.warn("[Download] Monochrome fallback:", e);
+          }
+          // 2. Fallback to YouTube stream
           const videoId = await getYouTubeVideoId(track);
           return await getYouTubeAudioStream(videoId);
         });
@@ -144,7 +173,14 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-8 h-8 rounded-lg object-cover shadow-md shrink-0"
         />
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-white truncate">{track.title}</p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            {isExplicit && hasDualVersions && (
+              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-[2px] bg-white/15 text-[8px] font-bold text-gray-300 shrink-0 select-none">
+                E
+              </span>
+            )}
+            <p className="font-bold text-white truncate">{track.title}</p>
+          </div>
           <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
         </div>
       </div>
@@ -164,7 +200,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       )}
 
       {/* Download option */}
-      {(Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined)) && (
+      {/* Download option - available across native and web */ true && (
         <button
           onClick={handleDownload}
           disabled={downloadStatus.isDownloading}
@@ -259,6 +295,34 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         {isFavorite ? "Eliminar de Canciones que te gustan" : "Añadir a Canciones que te gustan"}
       </button>
 
+      {/* Toggle Explicit/Clean */}
+      {hasDualVersions && (
+        <button
+          onClick={() => {
+            onToggleExplicit();
+            onClose();
+          }}
+          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
+          title={isExplicit ? "Reproducir versión Clean (sin censura desactivada)" : "Reproducir versión Explicit (con lenguaje explícito)"}
+        >
+          {isExplicit ? (
+            <>
+              <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-green-500/20 text-[9px] font-bold text-green-400 shrink-0">
+                C
+              </span>
+              <span>Cambiar a versión Clean</span>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-red-500/20 text-[9px] font-bold text-red-400 shrink-0">
+                E
+              </span>
+              <span>Cambiar a versión Explicit</span>
+            </>
+          )}
+        </button>
+      )}
+
       {/* Add to Queue */}
       <button
         onClick={() => {
@@ -300,7 +364,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       )}
 
       {/* Go to Album */}
-      {track.albumId && onGoToAlbum && (
+      {(track.albumId || track.albumName) && onGoToAlbum && (
         <button
           onClick={() => {
             onGoToAlbum();

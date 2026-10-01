@@ -17,6 +17,8 @@ export interface Track {
   plays?: string;
   dateAdded?: string;
   isUserAdded?: boolean;
+  isExplicit?: boolean;
+  hasDualVersions?: boolean;
 }
 
 export interface Artist {
@@ -428,6 +430,109 @@ export async function fetchDeezerApi(url: string): Promise<any> {
   return null;
 }
 
+export function tagDualVersionTracks(tracks: Track[]): Track[] {
+  if (!tracks || tracks.length === 0) return tracks;
+
+  const normalizeStr = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/\(feat\..*?\)/gi, "")
+      .replace(/\[feat\..*?\]/gi, "")
+      .replace(/\(with.*?\)/gi, "")
+      .replace(/\(.*?\)/g, "")
+      .replace(/\[.*?\]/g, "")
+      .replace(/[^a-z0-9]/g, "");
+
+  // Group tracks by normalized artist and clean title
+  const groups = new Map<string, Track[]>();
+  for (const track of tracks) {
+    const normTitle = normalizeStr(track.title);
+    const normArtist = normalizeStr(track.artist);
+    if (!normTitle) continue;
+    const key = `${normArtist}__${normTitle}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key)!.push(track);
+  }
+
+  // Find keys that have both explicit and clean tracks
+  const dualKeys = new Set<string>();
+  groups.forEach((groupTracks, key) => {
+    const hasExplicit = groupTracks.some((t) => t.isExplicit === true);
+    const hasClean = groupTracks.some((t) => !t.isExplicit);
+    if (hasExplicit && hasClean) {
+      dualKeys.add(key);
+    }
+  });
+
+  return tracks.map((track) => {
+    const normTitle = normalizeStr(track.title);
+    const normArtist = normalizeStr(track.artist);
+    const key = `${normArtist}__${normTitle}`;
+    if (dualKeys.has(key)) {
+      return { ...track, hasDualVersions: true };
+    }
+    return track;
+  });
+}
+
+const dualVersionsCache = new Map<string, boolean>();
+
+export async function checkTrackDualVersions(track: Track): Promise<boolean> {
+  if (track.hasDualVersions !== undefined) {
+    return track.hasDualVersions;
+  }
+
+  const cacheKey = `${track.artist} - ${track.title}`.toLowerCase();
+  if (dualVersionsCache.has(cacheKey)) {
+    return dualVersionsCache.get(cacheKey)!;
+  }
+
+  try {
+    const yt = await getYoutubeClient();
+    const cleanTitle = track.title
+      .replace(/\(feat\..*?\)/i, "")
+      .replace(/\[feat\..*?\]/i, "")
+      .replace(/\(with.*?\)/i, "")
+      .replace(/\(.*?\)/g, "")
+      .replace(/\[.*?\]/g, "")
+      .trim();
+
+    const query = `${track.artist} ${cleanTitle}`.trim();
+    const searchRes = await yt.music.search(query, { type: 'song' });
+    const songs = searchRes.songs?.contents || [];
+
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanT = norm(cleanTitle);
+
+    const matches = songs.filter(s => {
+      const st = norm((s.title || '').replace(/\(.*?\)|\[.*?\]/g, ''));
+      return st === cleanT || st.includes(cleanT) || cleanT.includes(st);
+    });
+
+    const hasExplicit = matches.some(s => {
+      const tl = (s.title || '').toLowerCase();
+      const hasBadge = s.badges?.some((b: any) => b.label?.toLowerCase() === 'explicit');
+      return hasBadge || tl.includes('explicit');
+    });
+
+    const hasClean = matches.some(s => {
+      const tl = (s.title || '').toLowerCase();
+      const hasBadge = s.badges?.some((b: any) => b.label?.toLowerCase() === 'explicit');
+      return !hasBadge && !tl.includes('explicit');
+    });
+
+    const isDual = hasExplicit && hasClean;
+    dualVersionsCache.set(cacheKey, isDual);
+    return isDual;
+  } catch (err) {
+    console.warn("[checkTrackDualVersions] Failed to check dual versions:", err);
+    dualVersionsCache.set(cacheKey, false);
+    return false;
+  }
+}
+
 export async function searchTracks(query: string): Promise<Track[]> {
   if (!query.trim()) return MOCK_LIBRARY;
 
@@ -567,7 +672,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
     const deezerData = await fetchDeezerApi(`https://api.deezer.com/search?q=${encodeURIComponent(cleanQuery)}&limit=30`);
     const items = deezerData?.data || [];
     if (Array.isArray(items) && items.length > 0) {
-      return items.map((item: any) => {
+      const tracks: Track[] = items.map((item: any) => {
         const coverUrl = item.album?.cover_xl || item.album?.cover_big || item.album?.cover_medium || item.album?.cover || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
         return {
           id: String(item.id),
@@ -579,9 +684,11 @@ export async function searchTracks(query: string): Promise<Track[]> {
           albumId: String(item.album?.id || ""),
           duration: item.duration || 180,
           thumbnail: coverUrl,
-          audioUrl: item.preview || ""
+          audioUrl: item.preview || "",
+          isExplicit: Boolean(item.explicit_lyrics || item.explicit_content_lyrics === 1)
         };
       });
+      return tagDualVersionTracks(tracks);
     }
   } catch (err) {
     console.warn("[searchTracks] Deezer primary search failed, trying YouTube Music fallback:", err);
@@ -644,7 +751,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
       }).filter((t: Track) => Boolean(t.id && t.title));
 
       if (parsedTracks.length > 0) {
-        return parsedTracks;
+        return tagDualVersionTracks(parsedTracks);
       }
     }
   } catch (err) {
@@ -657,7 +764,7 @@ export async function searchTracks(query: string): Promise<Track[]> {
     if (itunesRes.ok) {
       const itunesData = await itunesRes.json();
       if (Array.isArray(itunesData.results) && itunesData.results.length > 0) {
-        return itunesData.results.map((r: any) => ({
+        const itunesTracks: Track[] = itunesData.results.map((r: any) => ({
           id: `itunes-${r.trackId}`,
           title: r.trackName || "Unknown Title",
           artist: r.artistName || "Unknown Artist",
@@ -666,8 +773,10 @@ export async function searchTracks(query: string): Promise<Track[]> {
           albumId: String(r.collectionId || ""),
           duration: Math.round((r.trackTimeMillis || 180000) / 1000),
           thumbnail: r.artworkUrl100 ? r.artworkUrl100.replace("100x100bb", "600x600bb") : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80",
-          audioUrl: r.previewUrl || ""
+          audioUrl: r.previewUrl || "",
+          isExplicit: r.trackExplicitness === "explicit" || r.collectionExplicitness === "explicit"
         }));
+        return tagDualVersionTracks(itunesTracks);
       }
     }
   } catch (err) {
@@ -931,7 +1040,35 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
   if (/^\d+$/.test(albumId)) {
     try {
       const albumData = await fetchDeezerApi(`https://api.deezer.com/album/${albumId}`);
-      const items = albumData?.tracks?.data || [];
+      let items = albumData?.tracks?.data || [];
+      const totalExpected = albumData?.nb_tracks || items.length;
+
+      // If album has more tracks than the 25 returned in album detail, or has a next page, fetch via /album/:id/tracks
+      if (totalExpected > items.length || albumData?.tracks?.next) {
+        try {
+          const allTracksRes = await fetchDeezerApi(`https://api.deezer.com/album/${albumId}/tracks?limit=300`);
+          if (allTracksRes?.data && Array.isArray(allTracksRes.data) && allTracksRes.data.length > 0) {
+            items = allTracksRes.data;
+
+            // In the rare case an album has > 300 tracks and has a next page
+            let nextUrl = allTracksRes.next;
+            let pageCount = 0;
+            while (nextUrl && pageCount < 3) {
+              const nextPageRes = await fetchDeezerApi(nextUrl);
+              if (nextPageRes?.data && Array.isArray(nextPageRes.data) && nextPageRes.data.length > 0) {
+                items = [...items, ...nextPageRes.data];
+                nextUrl = nextPageRes.next;
+                pageCount++;
+              } else {
+                break;
+              }
+            }
+          }
+        } catch (tracksErr) {
+          console.warn("[getAlbumTracks] Deezer /tracks?limit=300 failed, using default items:", tracksErr);
+        }
+      }
+
       const coverUrl = albumData?.cover_xl || albumData?.cover_big || albumData?.cover_medium || albumData?.cover || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
       const albumTitle = albumData?.title || "";
       if (Array.isArray(items) && items.length > 0) {
@@ -945,7 +1082,8 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
           albumId: String(albumId),
           duration: item.duration || 180,
           thumbnail: coverUrl,
-          audioUrl: item.preview || ""
+          audioUrl: item.preview || "",
+          isExplicit: Boolean(item.explicit_lyrics || item.explicit_content_lyrics === 1)
         }));
       }
     } catch (e) {
@@ -1347,16 +1485,58 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
     .replace(/\(with.*?\)/i, "")
     .replace(/\(.*?\)/g, "")
     .trim();
-  const query = `${track.artist} ${cleanTitle}`;
+
+  // If user explicitly requests explicit or clean, adjust search query and selection
+  const isExplicitRequested = track.isExplicit === true;
+  const isExplicitStrict = track.isExplicit !== undefined;
+  
+  // Base query with optional clean or explicit modifier
+  const queryModifier = isExplicitStrict
+    ? (isExplicitRequested ? "explicit" : "clean")
+    : "";
+  const query = queryModifier ? `${track.artist} ${cleanTitle} ${queryModifier}` : `${track.artist} ${cleanTitle}`;
+  const fallbackQuery = `${track.artist} ${cleanTitle}`;
+
+  // Helper to pick best song candidate based on explicit preference
+  const pickBestCandidate = (candidates: any[]) => {
+    if (!candidates || candidates.length === 0) return null;
+    if (!isExplicitStrict) {
+      return candidates[0]?.id ? candidates[0] : null;
+    }
+    // Score candidates based on title / metadata
+    const scored = candidates.map(song => {
+      const titleLower = (song.title || song.name || "").toLowerCase();
+      let score = 0;
+      const hasExplicitLabel = titleLower.includes("explicit") || titleLower.includes("(explicit)") || Boolean(song.badges?.some((b: any) => b?.label?.toLowerCase()?.includes("explicit")));
+      const hasCleanLabel = titleLower.includes("clean") || titleLower.includes("censored") || titleLower.includes("radio edit") || titleLower.includes("(clean)");
+
+      if (isExplicitRequested) {
+        if (hasExplicitLabel) score += 10;
+        if (hasCleanLabel) score -= 10;
+      } else {
+        if (hasCleanLabel) score += 10;
+        if (hasExplicitLabel) score -= 10;
+      }
+      return { song, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.song?.id ? scored[0].song : candidates[0];
+  };
 
   // 1. Fast resolution via Innertube YouTube Music
   try {
     const yt = await getYoutubeClient();
-    const searchRes = await yt.music.search(query, { type: 'song' });
-    const firstSong = searchRes.songs?.contents?.[0];
-    if (firstSong && firstSong.id) {
-      console.log(`[getYouTubeVideoId] Resolved videoId via Innertube: ${firstSong.title} (${firstSong.id})`);
-      return firstSong.id;
+    let searchRes = await yt.music.search(query, { type: 'song' });
+    let contents = searchRes.songs?.contents || [];
+    if (!contents || contents.length === 0) {
+      searchRes = await yt.music.search(fallbackQuery, { type: 'song' });
+      contents = searchRes.songs?.contents || [];
+    }
+    const chosen = pickBestCandidate(contents);
+    if (chosen && chosen.id) {
+      console.log(`[getYouTubeVideoId] Resolved videoId via Innertube: ${chosen.title} (${chosen.id}) [explicitRequested: ${isExplicitRequested}]`);
+      return chosen.id;
     }
   } catch (err) {
     console.warn("[getYouTubeVideoId] Innertube resolution failed, trying Piped fallback:", err);
@@ -1385,12 +1565,13 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
       const searchData = await searchResponse.json();
       const items = searchData.items || searchData.relatedStreams || [];
       if (Array.isArray(items) && items.length > 0) {
-        const streamItem = items.find((item: any) => item.type === "stream" || item.url);
-        if (streamItem) {
-          const videoIdMatch = streamItem.url?.match(/[?&]v=([^&]+)/) || streamItem.url?.match(/v=([^&]+)/);
-          const videoId = videoIdMatch ? videoIdMatch[1] : streamItem.url?.replace("/watch?v=", "");
+        const streamItems = items.filter((item: any) => item.type === "stream" || item.url);
+        if (streamItems.length > 0) {
+          const chosen = pickBestCandidate(streamItems);
+          const videoIdMatch = chosen?.url?.match(/[?&]v=([^&]+)/) || chosen?.url?.match(/v=([^&]+)/);
+          const videoId = videoIdMatch ? videoIdMatch[1] : chosen?.url?.replace("/watch?v=", "");
           if (videoId) {
-            console.log(`Resolved videoId via Piped API ${baseUrl}: ${streamItem.title} (${videoId})`);
+            console.log(`Resolved videoId via Piped API ${baseUrl}: ${chosen.title} (${videoId})`);
             return videoId;
           }
         }
@@ -1435,6 +1616,63 @@ async function getHealthyCobaltHosts(): Promise<string[]> {
     "https://fox.kittycat.boo/",
     "https://api.cobalt.tools/"
   ];
+}
+
+
+export async function getMonochromeAudioStream(trackOrQuery: Track | string): Promise<string | null> {
+  const query = typeof trackOrQuery === 'string'
+    ? trackOrQuery
+    : `${trackOrQuery.artist} ${trackOrQuery.title}`.trim();
+
+  if (!query) return null;
+
+  const baseUrl = getApiBaseUrl();
+  try {
+    console.log(`[Monochrome] Resolving audio stream for "${query}" via ${baseUrl}...`);
+    const searchUrl = `${baseUrl}/search/?s=${encodeURIComponent(query)}`;
+    const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(5000) });
+    if (!searchRes.ok) throw new Error(`Monochrome search failed: ${searchRes.status}`);
+
+    const data = await searchRes.json();
+    const items = data.data?.items || data.items || [];
+    if (!items || items.length === 0) {
+      console.warn(`[Monochrome] No tracks found for "${query}"`);
+      return null;
+    }
+
+    const firstMatch = items[0];
+    const trackId = firstMatch.id;
+    if (!trackId) return null;
+
+    const trackRes = await fetch(`${baseUrl}/track/?id=${trackId}`, { signal: AbortSignal.timeout(6000) });
+    if (!trackRes.ok) throw new Error(`Monochrome track lookup failed: ${trackRes.status}`);
+
+    const trackData = await trackRes.json();
+    if (!trackData.data?.manifest) {
+      return null;
+    }
+
+    const xml = typeof atob === 'function'
+      ? atob(trackData.data.manifest)
+      : typeof (globalThis as any).Buffer !== 'undefined'
+      ? (globalThis as any).Buffer.from(trackData.data.manifest, 'base64').toString('utf8')
+      : "";
+
+    // Extract initialization and media URLs from DASH manifest
+    if (xml && xml.includes('initialization="') && xml.includes('media="')) {
+      const mediaTemplate = xml.split('media="')[1].split('"')[0].replace(/&amp;/g, '&');
+
+      // Fetch init chunk and first segment to form an instant high-quality audio stream/blob or return direct media link
+      const seg1Url = mediaTemplate.replace('$Number$', '1');
+      console.log(`[Monochrome] Successfully resolved Tidal stream segments for ${trackId}`);
+      return seg1Url;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn(`[Monochrome] Stream resolution error for "${query}":`, err);
+    return null;
+  }
 }
 
 export async function getYouTubeAudioStream(videoId: string): Promise<string> {

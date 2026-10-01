@@ -6,7 +6,7 @@ import {
   User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star, Download,
   CheckCircle2, RotateCw
 } from "lucide-react";
-import { AudioProvider, useAudio, useAudioProgress } from "./context/AudioContext";
+import { AudioProvider, useAudio, useAudioProgress, invalidateTrackResolution } from "./context/AudioContext";
 import { Capacitor } from "@capacitor/core";
 import { downloadService } from "./services/downloadService";
 import { App as CapApp } from "@capacitor/app";
@@ -48,6 +48,7 @@ const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
 import PlayerPanel from "./components/PlayerPanel";
 import TrackCard from "./components/TrackCard";
 import TrackContextMenu from "./components/TrackContextMenu";
+import PlaylistContextMenu from "./components/PlaylistContextMenu";
 import { ListenTogether } from "./components/ListenTogether";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { getHomeRecommendations, getSearchRecommendations, getTrendingRecommendations } from "./services/recommendationEngine";
@@ -255,10 +256,77 @@ const MainLayout: React.FC = () => {
     };
   }, []);
 
+    // --- Explicit Content State ---
+  const [explicitTrackIds, setExplicitTrackIds] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem("ibrastream_explicit_tracks");
+    try {
+      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const saveExplicitTrackIds = (updated: Set<string>) => {
+    setExplicitTrackIds(updated);
+    const arr = Array.from(updated);
+    StorageService.setItemSync("ibrastream_explicit_tracks", arr);
+  };
+
+  const handleToggleExplicit = (track: Track) => {
+    const updated = new Set(explicitTrackIds);
+    const willBeExplicit = !updated.has(track.id);
+    if (!willBeExplicit) {
+      updated.delete(track.id);
+      showToast(`"${track.title}" marcada como Clean (Versión Clean)`, "success");
+    } else {
+      updated.add(track.id);
+      showToast(`"${track.title}" marcada como Explicit 🔞 (Versión Explicit)`, "success");
+    }
+    saveExplicitTrackIds(updated);
+    
+    // Invalidate cached video/stream ID so next playback resolves the selected version
+    invalidateTrackResolution(track.id);
+
+    // If this track is currently playing, immediately reload with the newly requested version
+    if (currentTrack && (currentTrack.id === track.id || currentTrack.id === `yt-${track.id}`)) {
+      playTrack({
+        ...track,
+        isExplicit: willBeExplicit
+      });
+    }
+  };
+
+  const isTrackExplicit = (trackId: string): boolean => {
+    return explicitTrackIds.has(trackId);
+  };
+
+  // Filter explicit content setting
+  const [filterExplicit, setFilterExplicit] = useState<boolean>(() => {
+    return localStorage.getItem("ibrastream_filter_explicit") === "true";
+  });
+
+  const handleToggleFilterExplicit = () => {
+    const newVal = !filterExplicit;
+    setFilterExplicit(newVal);
+    localStorage.setItem("ibrastream_filter_explicit", String(newVal));
+    showToast(
+      newVal
+        ? "Contenido explícito ocultado"
+        : "Mostrando todo el contenido",
+      "success"
+    );
+  };
+
   const filterTracks = React.useCallback((tracks: Track[]) => {
-    if (!onlyDownloaded) return tracks;
-    return tracks.filter(t => downloadService.isTrackDownloaded(t.id));
-  }, [onlyDownloaded, downloadsUpdateTrigger]);
+    let result = tracks;
+    if (filterExplicit) {
+      result = result.filter(t => !explicitTrackIds.has(t.id));
+    }
+    if (onlyDownloaded) {
+      result = result.filter(t => downloadService.isTrackDownloaded(t.id));
+    }
+    return result;
+  }, [onlyDownloaded, downloadsUpdateTrigger, filterExplicit, explicitTrackIds]);
 
   const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem("ibrastream_active_tab") || "home");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem("ibrastream_sidebar_collapsed") === "true");
@@ -353,6 +421,58 @@ const MainLayout: React.FC = () => {
     currentPlaylistId?: string | null;
   } | null>(null);
 
+  const [playlistContextMenu, setPlaylistContextMenu] = useState<{
+    x: number;
+    y: number;
+    playlist: Playlist;
+  } | null>(null);
+
+  const [hiddenPlaylistIds, setHiddenPlaylistIds] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem("ibrastream_hidden_playlists");
+    try {
+      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const [pinnedPlaylistIds, setPinnedPlaylistIds] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem("ibrastream_pinned_playlists");
+    try {
+      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const savePinnedPlaylistIds = (updated: Set<string>) => {
+    setPinnedPlaylistIds(updated);
+    const arr = Array.from(updated);
+    localStorage.setItem("ibrastream_pinned_playlists", JSON.stringify(arr));
+    StorageService.setItemSync("ibrastream_pinned_playlists", arr);
+  };
+
+  const handleTogglePinPlaylist = (playlistId: string) => {
+    const updated = new Set(pinnedPlaylistIds);
+    if (updated.has(playlistId)) {
+      updated.delete(playlistId);
+      showToast("Playlist desanclada de la biblioteca", "info");
+    } else {
+      updated.add(playlistId);
+      showToast("Playlist fijada en la biblioteca 📌", "success");
+    }
+    savePinnedPlaylistIds(updated);
+  };
+
+  const [showHiddenPlaylists, setShowHiddenPlaylists] = useState<boolean>(false);
+
+  const saveHiddenPlaylistIds = (updated: Set<string>) => {
+    setHiddenPlaylistIds(updated);
+    const arr = Array.from(updated);
+    localStorage.setItem("ibrastream_hidden_playlists", JSON.stringify(arr));
+    StorageService.setItemSync("ibrastream_hidden_playlists", arr);
+  };
+
   // Persist activeTab in localStorage
   useEffect(() => {
     localStorage.setItem("ibrastream_active_tab", activeTab);
@@ -387,6 +507,22 @@ const MainLayout: React.FC = () => {
   const [communityResults, setCommunityResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
 
+  // Auto-sync explicit tracks detected from API search results
+  useEffect(() => {
+    if (!searchResults || searchResults.length === 0) return;
+    const newExplicit = new Set(explicitTrackIds);
+    let changed = false;
+    searchResults.forEach(track => {
+      if (track.isExplicit && !newExplicit.has(track.id)) {
+        newExplicit.add(track.id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      saveExplicitTrackIds(newExplicit);
+    }
+  }, [searchResults]);
+
   const [recentlyPlayed, setRecentlyPlayed] = useState<RecentItem[]>(() => {
     const saved = localStorage.getItem("ibrastream_recently_played");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
@@ -407,6 +543,7 @@ const MainLayout: React.FC = () => {
     const saved = localStorage.getItem("ibrastream_favorites");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
+
   const [showMobilePlayer, setShowMobilePlayer] = useState<boolean>(false);
 
   // Detail overlays state
@@ -530,6 +667,14 @@ const MainLayout: React.FC = () => {
         setFavorites(idbFavs);
       }
     }).catch(() => {});
+    StorageService.getItem<string[]>("ibrastream_explicit_tracks").then(idbExplicit => {
+      if (idbExplicit && Array.isArray(idbExplicit) && idbExplicit.length > 0) {
+        setExplicitTrackIds(prev => {
+          const merged = new Set([...prev, ...idbExplicit]);
+          return merged;
+        });
+      }
+    }).catch(() => {});
   }, []);
   const [showPlaylistCreateModal, setShowPlaylistCreateModal] = useState<boolean>(false);
   const [newPlaylistName, setNewPlaylistName] = useState<string>("");
@@ -538,11 +683,13 @@ const MainLayout: React.FC = () => {
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const isOwnPlaylist = selectedPlaylist ? playlists.some(p => p.id === selectedPlaylist.id) : false;
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
+  const [albumToAddToPlaylist, setAlbumToAddToPlaylist] = useState<{ album: Album; tracks: Track[] } | null>(null);
   const [playlistPopoverCoords, setPlaylistPopoverCoords] = useState<{ x: number; y: number } | null>(null);
   const [trackPendingNewPlaylist, setTrackPendingNewPlaylist] = useState<Track | null>(null);
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState<string>("");
   const [saveQueueMode, setSaveQueueMode] = useState<boolean>(false);
   const [downloadingPlaylistId, setDownloadingPlaylistId] = useState<string | null>(null);
+  const [downloadingAlbumId, setDownloadingAlbumId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
 
   // Multi-select state
@@ -731,6 +878,41 @@ const MainLayout: React.FC = () => {
   const [importTab, setImportTab] = useState<"spotify" | "m3u">("spotify");
   const [importFileError, setImportFileError] = useState<string | null>(null);
   const [subSearchQuery, setSubSearchQuery] = useState<string>("");
+  const playlistSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const playlistTracksSearchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Ctrl+F (or Cmd+F on Mac) shortcut for playlist search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        // If inside an open playlist with tracks, focus the search inside this playlist
+        if (activeTab === "playlists" && selectedPlaylist && selectedPlaylist.tracks.length > 0) {
+          e.preventDefault();
+          playlistTracksSearchInputRef.current?.focus();
+          playlistTracksSearchInputRef.current?.select();
+          return;
+        }
+
+        // If in playlists tab (all playlists overview), focus the playlist search
+        if (activeTab === "playlists" && !selectedPlaylist && playlists.length > 0) {
+          e.preventDefault();
+          playlistSearchInputRef.current?.focus();
+          playlistSearchInputRef.current?.select();
+          return;
+        }
+
+        // If in another tab or sidebar library search is preferred
+        if (activeTab !== "playlists") {
+          e.preventDefault();
+          window.dispatchEvent(new Event("ibrastream_open_library_search"));
+          return;
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTab, selectedPlaylist, playlists]);
   const [sortField, setSortField] = useState<"title" | "album" | "dateAdded" | "duration" | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
@@ -1270,20 +1452,25 @@ const MainLayout: React.FC = () => {
     setDownloadProgress({ downloaded: 0, total: totalToDownload });
     showToast(`Iniciando descarga de ${totalToDownload} canciones...`, "info");
 
-    const { getYouTubeAudioStream, getYouTubeVideoId } = await import("./services/musicApi");
+    const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("./services/musicApi");
     let downloadedCount = 0;
 
     for (const track of tracksToDownload) {
       try {
         await downloadService.downloadTrack(track, async () => {
+          try {
+            const monochromeStream = await getMonochromeAudioStream(track);
+            if (monochromeStream) return monochromeStream;
+          } catch (e) {
+            console.warn("[DownloadPlaylist] Monochrome fallback:", e);
+          }
           const videoId = await getYouTubeVideoId(track);
           return await getYouTubeAudioStream(videoId);
         });
         downloadedCount++;
         setDownloadProgress({ downloaded: downloadedCount, total: totalToDownload });
         showToast(`Descargadas: ${downloadedCount}/${totalToDownload} canciones`, "info");
-        // Sleep to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 1200));
       } catch (e) {
         console.warn(`Error descargando ${track.title}`, e);
         showToast(`Error al descargar: ${track.title}`, "error");
@@ -1296,7 +1483,126 @@ const MainLayout: React.FC = () => {
     showToast("Descarga de lista completada", "success");
   };
 
-  const handleAddTrackToPlaylist = (playlistId: string, track: Track) => {
+  const handleDownloadAlbum = async (album: Album, tracks: Track[]) => {
+    if (!album || !tracks.length) return;
+    if (downloadingAlbumId === album.id) return;
+
+    setDownloadingAlbumId(album.id);
+
+    const tracksToDownload = tracks.filter(
+      track => !downloadService.isTrackDownloaded(track.id)
+    );
+
+    const totalToDownload = tracksToDownload.length;
+    if (totalToDownload === 0) {
+      showToast("Todas las canciones del álbum ya están descargadas", "info");
+      setDownloadingAlbumId(null);
+      return;
+    }
+
+    setDownloadProgress({ downloaded: 0, total: totalToDownload });
+    showToast(`Iniciando descarga de álbum (${totalToDownload} canciones)...`, "info");
+
+    const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("./services/musicApi");
+    let downloadedCount = 0;
+
+    for (const track of tracksToDownload) {
+      try {
+        await downloadService.downloadTrack(track, async () => {
+          try {
+            const monochromeStream = await getMonochromeAudioStream(track);
+            if (monochromeStream) return monochromeStream;
+          } catch (e) {
+            console.warn("[DownloadAlbum] Monochrome fallback:", e);
+          }
+          const videoId = await getYouTubeVideoId(track);
+          return await getYouTubeAudioStream(videoId);
+        });
+        downloadedCount++;
+        setDownloadProgress({ downloaded: downloadedCount, total: totalToDownload });
+        showToast(`Descargadas del álbum: ${downloadedCount}/${totalToDownload}`, "info");
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      } catch (e) {
+        console.warn(`Error descargando ${track.title}`, e);
+        showToast(`Error al descargar: ${track.title}`, "error");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    setDownloadingAlbumId(null);
+    setDownloadProgress(null);
+    showToast(`Álbum "${album.title}" descargado con éxito`, "success");
+  };
+
+  const handleSaveAlbumAsPlaylist = async (album: Album, tracks: Track[]) => {
+    let tracksToSave = tracks;
+    if (!tracksToSave || tracksToSave.length === 0) {
+      try {
+        tracksToSave = await getAlbumTracks(album.id);
+        if (tracksToSave.length > 0) setAlbumTracks(tracksToSave);
+      } catch (e) {
+        console.warn("Failed to fetch album tracks:", e);
+      }
+    }
+    if (!tracksToSave || tracksToSave.length === 0) {
+      showToast("El álbum no tiene canciones para guardar", "info");
+      return;
+    }
+    const newPlaylist: Playlist = {
+      id: "pl-" + Date.now(),
+      name: album.title,
+      tracks: tracksToSave.map((t) => ({ ...t, dateAdded: new Date().toISOString() })),
+      coverUrl: album.thumbnail
+    };
+    const updated = [...playlists, newPlaylist];
+    savePlaylists(updated);
+    showToast(`Álbum guardado como playlist "${album.title}"`, "success");
+  };
+
+  const handleAddAlbumTracksToPlaylist = async (playlistId: string, album: Album, tracks: Track[]) => {
+    let tracksToAdd = tracks;
+    if (!tracksToAdd || tracksToAdd.length === 0) {
+      try {
+        tracksToAdd = await getAlbumTracks(album.id);
+        if (tracksToAdd.length > 0) setAlbumTracks(tracksToAdd);
+      } catch (e) {
+        console.warn("Failed to fetch album tracks:", e);
+      }
+    }
+    if (!tracksToAdd || tracksToAdd.length === 0) {
+      showToast("No hay canciones para añadir", "info");
+      return;
+    }
+    const target = playlists.find((p) => p.id === playlistId);
+    if (!target) return;
+
+    const existingIds = new Set(target.tracks.map((t) => t.id));
+    const newTracks = tracksToAdd
+      .filter((t) => !existingIds.has(t.id))
+      .map((t) => ({ ...t, dateAdded: new Date().toISOString() }));
+
+    if (newTracks.length === 0) {
+      showToast(`Todas las canciones del álbum ya están en "${target.name}"`, "info");
+      return;
+    }
+
+    const updated = playlists.map((p) => {
+      if (p.id === playlistId) {
+        return {
+          ...p,
+          tracks: [...p.tracks, ...newTracks],
+          coverUrl: p.coverUrl || album.thumbnail
+        };
+      }
+      return p;
+    });
+
+    savePlaylists(updated);
+    showToast(`Se añadieron ${newTracks.length} canciones de "${album.title}" a "${target.name}"`, "success");
+    setAlbumToAddToPlaylist(null);
+  };
+
+    const handleAddTrackToPlaylist = (playlistId: string, track: Track) => {
     const updated = playlists.map(p => {
       if (p.id === playlistId) {
         if (p.tracks.some(t => t.id === track.id)) {
@@ -1947,6 +2253,31 @@ const MainLayout: React.FC = () => {
     let fetchedTracks: Track[] = [];
     try {
       fetchedTracks = await getAlbumTracks(album.id);
+
+      // Smart Fallback: if album.id failed to return tracks (e.g. single track ID, obsolete token, or mismatch),
+      // search for the album by title and artist to obtain full tracks list
+      if ((!fetchedTracks || fetchedTracks.length === 0) && (album.title || album.artist)) {
+        try {
+          const searchQ = `${album.title} ${album.artist || ""}`.trim();
+          const foundAlbums = await searchAlbums(searchQ);
+          const matched = foundAlbums.find(a => 
+            a.id !== album.id && 
+            a.title.toLowerCase().includes(album.title.toLowerCase())
+          ) || (foundAlbums.length > 0 && foundAlbums[0].id !== album.id ? foundAlbums[0] : null);
+
+          if (matched) {
+            const fallbackTracks = await getAlbumTracks(matched.id);
+            if (fallbackTracks && fallbackTracks.length > 0) {
+              fetchedTracks = fallbackTracks;
+              // Update album thumbnail / id if better match was found
+              setSelectedAlbum(prev => prev ? { ...prev, id: matched.id, thumbnail: matched.thumbnail || prev.thumbnail } : matched);
+            }
+          }
+        } catch (searchErr) {
+          console.warn("[handleOpenAlbum] Fallback album search failed:", searchErr);
+        }
+      }
+
       setAlbumTracks(fetchedTracks);
     } catch (e) {
       console.error("Failed to load album tracks", e);
@@ -2110,6 +2441,109 @@ const MainLayout: React.FC = () => {
     });
   };
 
+  const handlePlaylistContextMenu = (e: React.MouseEvent, playlist: Playlist) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setPlaylistContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      playlist,
+    });
+  };
+
+  const recordPlaylistActivity = (playlistId: string) => {
+    try {
+      const saved = localStorage.getItem("ibrastream_playlist_activity");
+      const map = saved ? JSON.parse(saved) : {};
+      map[playlistId] = Date.now();
+      localStorage.setItem("ibrastream_playlist_activity", JSON.stringify(map));
+      window.dispatchEvent(new CustomEvent("ibrastream_playlist_activity_updated", { detail: { playlistId } }));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handlePlayPlaylist = (playlist: Playlist) => {
+    recordPlaylistActivity(playlist.id);
+    if (!playlist.tracks || playlist.tracks.length === 0) {
+      showToast("La playlist está vacía", "info");
+      return;
+    }
+    playTrack(playlist.tracks[0], playlist.tracks, playlist.id);
+    showToast(`Reproduciendo playlist "${playlist.name}"`, "success");
+  };
+
+  const handleAddPlaylistToQueue = (playlist: Playlist) => {
+    if (!playlist.tracks || playlist.tracks.length === 0) {
+      showToast("La playlist está vacía", "info");
+      return;
+    }
+    playlist.tracks.forEach((track) => addToQueue(track));
+    showToast(`Añadidas ${playlist.tracks.length} canciones a la cola`, "success");
+  };
+
+  const handleMergePlaylists = (sourcePlaylist: Playlist, targetPlaylistId: string) => {
+    if (!sourcePlaylist.tracks || sourcePlaylist.tracks.length === 0) {
+      showToast("No hay canciones para transferir", "info");
+      return;
+    }
+    const target = playlists.find((p) => p.id === targetPlaylistId);
+    if (!target) return;
+
+    const existingIds = new Set(target.tracks.map((t) => t.id));
+    const newTracks = sourcePlaylist.tracks.filter((t) => !existingIds.has(t.id));
+
+    if (newTracks.length === 0) {
+      showToast(`Todas las canciones ya están en "${target.name}"`, "info");
+      return;
+    }
+
+    const updated = playlists.map((p) => {
+      if (p.id === targetPlaylistId) {
+        return { ...p, tracks: [...p.tracks, ...newTracks] };
+      }
+      return p;
+    });
+
+    savePlaylists(updated);
+    showToast(`Se añadieron ${newTracks.length} canciones a "${target.name}"`, "success");
+  };
+
+  const handleToggleHidePlaylist = (playlistId: string) => {
+    const updated = new Set(hiddenPlaylistIds);
+    if (updated.has(playlistId)) {
+      updated.delete(playlistId);
+      showToast("Playlist visible de nuevo", "info");
+    } else {
+      updated.add(playlistId);
+      showToast("Playlist oculta", "info");
+    }
+    saveHiddenPlaylistIds(updated);
+  };
+
+  const handleTogglePlaylistExplicit = (playlist: Playlist, makeExplicit: boolean) => {
+    if (!playlist.tracks || playlist.tracks.length === 0) {
+      showToast("La playlist no tiene canciones", "info");
+      return;
+    }
+    const updatedExplicit = new Set(explicitTrackIds);
+    playlist.tracks.forEach((track) => {
+      if (makeExplicit) {
+        updatedExplicit.add(track.id);
+      } else {
+        updatedExplicit.delete(track.id);
+      }
+      invalidateTrackResolution(track.id);
+    });
+    saveExplicitTrackIds(updatedExplicit);
+    showToast(
+      makeExplicit
+        ? `Playlist "${playlist.name}" cambiada a Explicit 🔞`
+        : `Playlist "${playlist.name}" cambiada a Safe / Clean`,
+      "success"
+    );
+  };
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setActiveTab("search");
@@ -2157,9 +2591,11 @@ const MainLayout: React.FC = () => {
             setShowMobilePlayer(false);
             clearSelection();
           }}
-          playlists={playlists}
+          playlists={showHiddenPlaylists ? playlists : playlists.filter(p => !hiddenPlaylistIds.has(p.id))}
           followedArtists={followedArtists}
+          onPlaylistContextMenu={handlePlaylistContextMenu}
           onSelectPlaylist={(p) => {
+            recordPlaylistActivity(p.id);
             setSelectedArtist(null);
             setSelectedAlbum(null);
             setPreviousArtist(null);
@@ -2169,6 +2605,19 @@ const MainLayout: React.FC = () => {
           }}
           onSelectArtist={(a) => {
             handleOpenArtist(a);
+          }}
+          pinnedPlaylistIds={pinnedPlaylistIds}
+          onTogglePinPlaylist={handleTogglePinPlaylist}
+          onCreatePlaylist={() => {
+            if (!user) {
+              showToast("Please login to create playlists", "error");
+              window.dispatchEvent(new Event("ibrastream_force_login"));
+              return;
+            }
+            setNewPlaylistName("");
+            setSaveQueueMode(false);
+            setTrackPendingNewPlaylist(null);
+            setShowPlaylistCreateModal(true);
           }}
           userEmail={user?.email}
           collapsed={sidebarCollapsed}
@@ -2288,7 +2737,7 @@ const MainLayout: React.FC = () => {
         {/* Main Panel Content */}
         <main
           ref={mainContentRef}
-          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-0 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-64"} lg:mr-[380px] transition-all duration-300`}
+          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-0 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-72"} lg:mr-[380px] transition-all duration-300`}
         >
 
           {/* Desktop-only Top Header Bar (Sticky) */}
@@ -2773,6 +3222,7 @@ const MainLayout: React.FC = () => {
                                 tracksQueue={filterTracks(artistTracks)}
                                 onToggleFavorite={handleToggleFavorite}
                                 isFavorite={favorites.some((f) => f.id === track.id)}
+                                isExplicit={isTrackExplicit(track.id)}
                                 onOpenArtist={handleOpenArtist}
                                 onAddToPlaylist={handleOpenAddToPlaylist}
                                 onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -2875,6 +3325,50 @@ const MainLayout: React.FC = () => {
                       title="Play album"
                     >
                       <Play className="w-5 h-5 fill-current ml-0.5" />
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (selectedAlbum && albumTracks.length > 0) {
+                          await handleDownloadAlbum(selectedAlbum, albumTracks);
+                        }
+                      }}
+                      disabled={downloadingAlbumId === selectedAlbum.id}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
+                        downloadingAlbumId === selectedAlbum.id
+                          ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
+                          : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
+                      }`}
+                      title={downloadingAlbumId === selectedAlbum.id ? "Descargando álbum..." : "Descargar álbum"}
+                    >
+                      {downloadingAlbumId === selectedAlbum.id ? (
+                        <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Download className="w-5 h-5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!selectedAlbum) return;
+                        setAlbumToAddToPlaylist({ album: selectedAlbum, tracks: albumTracks });
+                      }}
+                      className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 text-xs font-semibold transition-all border border-white/10 active:scale-95"
+                      title="Añadir canciones del álbum a una playlist existente"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Añadir a playlist</span>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!selectedAlbum) return;
+                        handleSaveAlbumAsPlaylist(selectedAlbum, albumTracks);
+                      }}
+                      className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 text-xs font-semibold transition-all border border-white/10 active:scale-95"
+                      title="Crear una nueva playlist con este álbum"
+                    >
+                      <ListMusic className="w-4 h-4" />
+                      <span>Guardar como playlist</span>
                     </button>
                   </div>
                 </div>
@@ -2986,6 +3480,7 @@ const MainLayout: React.FC = () => {
                               tracksQueue={filterTracks(albumTracks)}
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={favorites.some((f) => f.id === track.id)}
+                              isExplicit={isTrackExplicit(track.id)}
                               onOpenArtist={handleOpenArtist}
                               onAddToPlaylist={handleOpenAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -3006,6 +3501,19 @@ const MainLayout: React.FC = () => {
                   <ListMusic className="w-6 h-6 text-brand-accent" /> Playlists
                 </h2>
                 <div className="flex items-center gap-3">
+                  {hiddenPlaylistIds.size > 0 && (
+                    <button
+                      onClick={() => setShowHiddenPlaylists(!showHiddenPlaylists)}
+                      className={`px-3 py-2 rounded-full border text-xs font-semibold transition-all active:scale-95 flex items-center gap-1.5 ${
+                        showHiddenPlaylists
+                          ? "bg-white/15 text-white border-white/30"
+                          : "border-white/10 hover:border-white/20 text-gray-400 hover:text-white"
+                      }`}
+                      title={showHiddenPlaylists ? "Ocultar playlists escondidas" : "Ver playlists ocultas"}
+                    >
+                      {showHiddenPlaylists ? "Ocultar archivadas" : `Ver ocultas (${hiddenPlaylistIds.size})`}
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       if (!user) {
@@ -3292,7 +3800,7 @@ const MainLayout: React.FC = () => {
                           >
                             <Shuffle className="w-5 h-5" />
                           </button>
-                          {(Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined)) && (
+                          {/* Download playlist button available across platforms */ true && (
                             <button
                               onClick={async (e) => {
                                 e.stopPropagation();
@@ -3554,6 +4062,7 @@ const MainLayout: React.FC = () => {
                                       tracksQueue={sortedTracks}
                                       onToggleFavorite={handleToggleFavorite}
                                       isFavorite={favorites.some((f) => f.id === track.id)}
+                                      isExplicit={isTrackExplicit(track.id)}
 
                                       onOpenArtist={handleOpenArtist}
                                       onAddToPlaylist={handleOpenAddToPlaylist}
@@ -3608,7 +4117,10 @@ const MainLayout: React.FC = () => {
                       <p className="text-xs text-gray-600 mt-1">Click the button above to start your curation</p>
                     </div>
                   ) : (() => {
-                    const filteredPlaylists = playlists.filter(p =>
+                    const visiblePlaylists = showHiddenPlaylists
+                      ? playlists
+                      : playlists.filter((p) => !hiddenPlaylistIds.has(p.id));
+                    const filteredPlaylists = visiblePlaylists.filter(p =>
                       p.name.toLowerCase().includes(subSearchQuery.toLowerCase())
                     );
                     if (filteredPlaylists.length === 0) {
@@ -3620,11 +4132,16 @@ const MainLayout: React.FC = () => {
                     }
                     return (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        {filteredPlaylists.map((playlist) => (
+                        {filteredPlaylists.map((playlist) => {
+                          const isHidden = hiddenPlaylistIds.has(playlist.id);
+                          return (
                           <div
                             key={playlist.id}
                             onClick={() => setSelectedPlaylist(playlist)}
-                            className="group relative flex flex-col items-center gap-3 p-4 rounded-2xl glass-card cursor-pointer select-none transition-all duration-300 hover:bg-white/5 border border-white/5"
+                            onContextMenu={(e) => handlePlaylistContextMenu(e, playlist)}
+                            className={`group relative flex flex-col items-center gap-3 p-4 rounded-2xl glass-card cursor-pointer select-none transition-all duration-300 hover:bg-white/5 border border-white/5 ${
+                              isHidden ? "opacity-60 border-dashed border-white/20" : ""
+                            }`}
                           >
                             <div className="relative w-full aspect-square rounded-xl bg-white/5 border border-white/5 flex items-center justify-center shadow-lg shadow-black/40 overflow-hidden">
                               {playlist.coverUrl || (playlist.tracks && playlist.tracks.length > 0 && playlist.tracks[0].thumbnail) ? (
@@ -3639,8 +4156,9 @@ const MainLayout: React.FC = () => {
                               </h3>
                               <p className="text-[10px] text-gray-500 mt-1">{playlist.tracks.length} Songs</p>
                             </div>
-                          </div>
-                        ))}
+                          </div>
+                          );
+                        })}
                       </div>
                     );
                   })()}
@@ -3818,7 +4336,7 @@ const MainLayout: React.FC = () => {
                         <Heart className="w-3.5 h-3.5 text-red-500 animate-pulse" /> Trending Now
                       </h3>
                       <div className="flex flex-col gap-2">
-                        {trendingTracks.slice(0, 5).map((track, idx) => (
+                        {filterTracks(trendingTracks).slice(0, 5).map((track, idx) => (
                           <TrackCard
                             key={`explore-trending-${track.id}-${idx}`}
                             track={track}
@@ -3826,6 +4344,7 @@ const MainLayout: React.FC = () => {
                             tracksQueue={trendingTracks}
                             onToggleFavorite={handleToggleFavorite}
                             isFavorite={favorites.some((f) => f.id === track.id)}
+                            isExplicit={isTrackExplicit(track.id)}
 
                             onOpenArtist={handleOpenArtist}
                             onAddToPlaylist={handleOpenAddToPlaylist}
@@ -3998,6 +4517,7 @@ const MainLayout: React.FC = () => {
                                     tracksQueue={filterTracks(searchResults)}
                                     onToggleFavorite={handleToggleFavorite}
                                     isFavorite={favorites.some((f) => f.id === track.id)}
+                                    isExplicit={isTrackExplicit(track.id)}
                                     onOpenArtist={handleOpenArtist}
                                     onAddToPlaylist={handleOpenAddToPlaylist}
                                     onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4049,6 +4569,7 @@ const MainLayout: React.FC = () => {
                                         tracksQueue={searchRecommendations}
                                         onToggleFavorite={handleToggleFavorite}
                                         isFavorite={favorites.some((f) => f.id === track.id)}
+                                        isExplicit={isTrackExplicit(track.id)}
                                         onOpenArtist={handleOpenArtist}
                                         onAddToPlaylist={handleOpenAddToPlaylist}
                                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -4376,6 +4897,7 @@ const MainLayout: React.FC = () => {
                               tracksQueue={filtered}
                               onToggleFavorite={handleToggleFavorite}
                               isFavorite={true}
+                               isExplicit={isTrackExplicit(track.id)}
                               onOpenArtist={handleOpenArtist}
                               onAddToPlaylist={handleOpenAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track, "favorites")}
@@ -5008,7 +5530,7 @@ const MainLayout: React.FC = () => {
               )}
             </section>
           ) : activeTab === "settings" ? (
-            <SettingsPanel themeSettings={themeSettings} setThemeSettings={setThemeSettings} />
+            <SettingsPanel themeSettings={themeSettings} setThemeSettings={setThemeSettings} filterExplicit={filterExplicit} onToggleFilterExplicit={handleToggleFilterExplicit} />
           ) : (
             /* MAIN HOME VIEW */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
@@ -5109,7 +5631,7 @@ const MainLayout: React.FC = () => {
                     ))}
 
                     {/* Featured Songs */}
-                    {featuredSongs.map((track, idx) => (
+                    {filterTracks(featuredSongs).map((track, idx) => (
                       <TrackCard
                         key={`feat-song-${track.id}-${idx}`}
                         track={track}
@@ -5117,6 +5639,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={featuredSongs}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track.id)}
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -5144,7 +5667,7 @@ const MainLayout: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                     {/* 8 quick-access cards using square variant */}
-                    {homeRecommendations.slice(0, 8).map((track, idx) => (
+                    {filterTracks(homeRecommendations).slice(0, 8).map((track, idx) => (
                       <TrackCard
                         key={`quick-${track.id}-${idx}`}
                         track={track}
@@ -5152,6 +5675,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={homeRecommendations}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track.id)}
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -5168,7 +5692,7 @@ const MainLayout: React.FC = () => {
                     <Sparkles className="w-4 h-4 text-brand-accent" /> Discover Weekly
                   </h2>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-                    {homeRecommendations.slice(6, 12).map((track, idx) => (
+                    {filterTracks(homeRecommendations).slice(6, 12).map((track, idx) => (
                       <TrackCard
                         key={`discover-${track.id}-${idx}`}
                         track={track}
@@ -5176,6 +5700,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={homeRecommendations}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track.id)}
 
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
@@ -5249,7 +5774,7 @@ const MainLayout: React.FC = () => {
                     <Heart className="w-4 h-4 text-red-500 animate-pulse" /> Trending Now
                   </h2>
                   <div className="flex flex-col gap-3">
-                    {trendingTracks.slice(0, 6).map((track, idx) => (
+                    {filterTracks(trendingTracks).slice(0, 6).map((track, idx) => (
                       <TrackCard
                         key={`trending-${track.id}-${idx}`}
                         track={track}
@@ -5257,6 +5782,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={trendingTracks}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track.id)}
 
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
@@ -5274,7 +5800,7 @@ const MainLayout: React.FC = () => {
                     <Sparkles className="w-4 h-4 text-brand-accent animate-pulse" /> Curated for You
                   </h2>
                   <div className="flex flex-col gap-3">
-                    {homeRecommendations.slice(0, 6).map((track, idx) => (
+                    {filterTracks(homeRecommendations).slice(0, 6).map((track, idx) => (
                       <TrackCard
                         key={`${track.id}-${idx}`}
                         track={track}
@@ -5282,6 +5808,7 @@ const MainLayout: React.FC = () => {
                         tracksQueue={homeRecommendations}
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track.id)}
 
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
@@ -5517,6 +6044,7 @@ const MainLayout: React.FC = () => {
             <PlayerPanel
               onToggleFavorite={handleToggleFavorite}
               isFavorite={currentTrack ? favorites.some((f) => f.id === currentTrack.id) : false}
+              isExplicit={currentTrack ? isTrackExplicit(currentTrack.id) : false}
 
               onOpenArtist={handleOpenArtist}
             />
@@ -5530,6 +6058,7 @@ const MainLayout: React.FC = () => {
               onToggleFavorite={handleToggleFavorite}
               isFavorite={favorites.some((f) => f.id === currentTrack.id)}
               onClose={() => setShowMobilePlayer(false)}
+              isExplicit={isTrackExplicit(currentTrack.id)}
 
               onOpenArtist={handleOpenArtist}
             />
@@ -6134,6 +6663,105 @@ const MainLayout: React.FC = () => {
           </>
         )}
 
+        {/* Add Album to Playlist Selector Modal */}
+        {albumToAddToPlaylist && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-[fadeIn_0.2s_ease]">
+            <div className="bg-[#181818] border border-white/10 rounded-3xl p-5 w-full max-w-sm flex flex-col gap-4 shadow-2xl relative">
+              <button
+                onClick={() => {
+                  setAlbumToAddToPlaylist(null);
+                  setPlaylistSearchQuery("");
+                }}
+                className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              
+              <div>
+                <h3 className="text-sm font-bold text-white pr-6 text-left">Añadir álbum a playlist</h3>
+                <p className="text-[11px] text-gray-400 text-left mt-0.5 truncate">
+                  {albumToAddToPlaylist.album.title} • {(albumToAddToPlaylist.tracks.length > 0 ? albumToAddToPlaylist.tracks.length : albumTracks.length > 0 ? albumTracks.length : (albumToAddToPlaylist.album.numberOfTracks || 0))} canciones
+                </p>
+              </div>
+
+              {/* Search playlist */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+                <input
+                  type="text"
+                  placeholder="Buscar playlist..."
+                  value={playlistSearchQuery}
+                  onChange={(e) => setPlaylistSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 rounded-xl bg-white/5 border border-white/5 focus:border-brand-accent/50 text-white text-xs placeholder:text-gray-500 focus:outline-none transition-all"
+                />
+              </div>
+
+              {/* Save directly as new playlist shortcut */}
+              <button
+                onClick={() => {
+                  handleSaveAlbumAsPlaylist(albumToAddToPlaylist.album, albumToAddToPlaylist.tracks);
+                  setAlbumToAddToPlaylist(null);
+                  setPlaylistSearchQuery("");
+                }}
+                className="flex items-center gap-2 px-1 text-xs font-bold text-brand-accent hover:underline transition-all text-left"
+              >
+                <Plus className="w-4 h-4" />
+                Crear nueva playlist con este álbum
+              </button>
+
+              {/* List of playlists */}
+              <div className="flex flex-col gap-2 max-h-[35vh] overflow-y-auto pr-1">
+                {playlists.length === 0 ? (
+                  <p className="text-xs text-gray-500 py-4 text-center">No hay playlists creadas aún.</p>
+                ) : (() => {
+                  const filtered = playlists.filter(p => p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()));
+
+                  if (filtered.length === 0) {
+                    return <p className="text-xs text-gray-500 py-4 text-center">No se encontraron playlists.</p>;
+                  }
+
+                  return filtered.map(playlist => (
+                    <button
+                      key={playlist.id}
+                      onClick={() => handleAddAlbumTracksToPlaylist(playlist.id, albumToAddToPlaylist.album, albumToAddToPlaylist.tracks)}
+                      className="w-full text-left p-2 rounded-xl hover:bg-white/5 transition-all text-xs font-semibold text-white flex items-center justify-between group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                          {playlist.coverUrl || playlist.tracks?.[0]?.thumbnail ? (
+                            <img src={playlist.coverUrl || playlist.tracks?.[0]?.thumbnail} className="w-full h-full object-cover" />
+                          ) : (
+                            <ListMusic className="w-4 h-4 text-gray-500" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-white text-xs font-bold">{playlist.name}</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">{playlist.tracks.length} canciones</p>
+                        </div>
+                      </div>
+                      <Plus className="w-4 h-4 text-gray-400 group-hover:text-brand-accent transition-colors shrink-0 ml-2" />
+                    </button>
+                  ));
+                })()}
+              </div>
+
+              {/* Bottom Cancel button */}
+              <div className="flex justify-end border-t border-white/5 pt-3">
+                <button
+                  onClick={() => {
+                    setAlbumToAddToPlaylist(null);
+                    setPlaylistSearchQuery("");
+                  }}
+                  className="px-4 py-1.5 rounded-full hover:bg-white/5 text-xs font-bold text-gray-400 hover:text-white transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {/* Spotify Playlist Import Modal */}
         {showSpotifyImportModal && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-[fadeIn_0.2s_ease]">
@@ -6576,16 +7204,54 @@ const MainLayout: React.FC = () => {
         onAddToPlaylist={handleOpenAddToPlaylist}
       />
 
+      {playlistContextMenu && (
+        <PlaylistContextMenu
+          x={playlistContextMenu.x}
+          y={playlistContextMenu.y}
+          playlist={playlistContextMenu.playlist}
+          playlists={playlists}
+          isOwnPlaylist={playlists.some((p) => p.id === playlistContextMenu.playlist.id)}
+          isHidden={hiddenPlaylistIds.has(playlistContextMenu.playlist.id)}
+          isAllExplicit={
+            playlistContextMenu.playlist.tracks &&
+            playlistContextMenu.playlist.tracks.length > 0 &&
+            playlistContextMenu.playlist.tracks.every((t) => isTrackExplicit(t.id))
+          }
+          onClose={() => setPlaylistContextMenu(null)}
+          onPlay={() => handlePlayPlaylist(playlistContextMenu.playlist)}
+          onDownload={() => handleDownloadPlaylist(playlistContextMenu.playlist)}
+          isDownloading={downloadingPlaylistId === playlistContextMenu.playlist.id}
+          isPinned={pinnedPlaylistIds.has(playlistContextMenu.playlist.id)}
+          onTogglePin={() => handleTogglePinPlaylist(playlistContextMenu.playlist.id)}
+          onAddToQueue={() => handleAddPlaylistToQueue(playlistContextMenu.playlist)}
+          onAddPlaylistToPlaylist={(targetId) => handleMergePlaylists(playlistContextMenu.playlist, targetId)}
+          onToggleHide={() => handleToggleHidePlaylist(playlistContextMenu.playlist.id)}
+          onToggleExplicit={(makeExplicit) => handleTogglePlaylistExplicit(playlistContextMenu.playlist, makeExplicit)}
+          onDelete={
+            playlists.some((p) => p.id === playlistContextMenu.playlist.id)
+              ? () => handleDeletePlaylist(playlistContextMenu.playlist.id)
+              : undefined
+          }
+          onShare={() => {
+            const shareUrl = `${window.location.origin}/?playlist=${playlistContextMenu.playlist.id}`;
+            navigator.clipboard.writeText(shareUrl);
+            showToast("Enlace de la playlist copiado al portapapeles", "success");
+          }}
+        />
+      )}
+
       {contextMenu && (
         <TrackContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           track={contextMenu.track}
           isFavorite={favorites.some((f) => f.id === contextMenu.track.id)}
+          isExplicit={isTrackExplicit(contextMenu.track.id)}
           playlists={playlists}
           currentPlaylistId={contextMenu.currentPlaylistId}
           onClose={() => setContextMenu(null)}
           onToggleFavorite={() => handleToggleFavorite(contextMenu.track)}
+          onToggleExplicit={() => handleToggleExplicit(contextMenu.track)}
           onAddToQueue={() => addToQueue(contextMenu.track)}
           onPlayNext={() => playNext(contextMenu.track)}
           onGoToArtist={() => {
@@ -6598,14 +7264,12 @@ const MainLayout: React.FC = () => {
             }
           }}
           onGoToAlbum={() => {
-            if (contextMenu.track.albumId) {
-              handleOpenAlbum({
-                id: contextMenu.track.albumId,
-                title: contextMenu.track.albumName || "Album",
-                artist: contextMenu.track.artist,
-                thumbnail: contextMenu.track.thumbnail
-              });
-            }
+            handleOpenAlbum({
+              id: contextMenu.track.albumId || "",
+              title: contextMenu.track.albumName || contextMenu.track.title || "Album",
+              artist: contextMenu.track.artist,
+              thumbnail: contextMenu.track.thumbnail
+            });
           }}
           onShare={() => {
             const shareUrl = `${window.location.origin}/?track=${contextMenu.track.id}`;

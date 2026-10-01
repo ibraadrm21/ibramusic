@@ -17,6 +17,7 @@ interface PlayerPanelProps {
   onClose?: () => void; // for mobile overlay close
   onOpenAlbum?: (album: any) => void;
   onOpenArtist?: (artist: any) => void;
+  isExplicit?: boolean;
 }
 
 interface LyricLine {
@@ -51,7 +52,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   isFavorite = false,
   onClose,
   onOpenAlbum,
-  onOpenArtist
+  onOpenArtist,
+  isExplicit = false
 }) => {
   const {
     currentTrack,
@@ -94,6 +96,27 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   const [monthlyListeners, setMonthlyListeners] = useState<number | undefined>(undefined);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [lyricsOffset, setLyricsOffset] = useState<number>(0);
+  const [hasDualVersions, setHasDualVersions] = useState<boolean>(currentTrack?.hasDualVersions === true);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!currentTrack) {
+      setHasDualVersions(false);
+      return;
+    }
+    if (currentTrack.hasDualVersions !== undefined) {
+      setHasDualVersions(currentTrack.hasDualVersions);
+      return;
+    }
+    import("../services/musicApi").then(({ checkTrackDualVersions }) => {
+      checkTrackDualVersions(currentTrack).then((dual) => {
+        if (isMounted) setHasDualVersions(dual);
+      });
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [currentTrack?.id, currentTrack?.artist, currentTrack?.title, currentTrack?.hasDualVersions]);
 
   const updateOffset = (newOffset: number) => {
     setLyricsOffset(newOffset);
@@ -310,8 +333,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       {/* Main Content Area: Album Art or Lyrics */}
       {view === "info" ? (
         <div className="flex-1 shrink flex flex-col items-center justify-center my-2 relative w-full overflow-hidden">
-          <div className="relative group w-48 sm:w-56 md:w-60 aspect-square rounded-[24px] overflow-hidden shadow-2xl shadow-black/80 p-0.5 bg-white/5 shrink z-10">
-            <div className="w-full h-full rounded-[28px] overflow-hidden relative">
+          <div className="relative group w-64 sm:w-72 md:w-80 max-w-full aspect-square rounded-none overflow-hidden shrink z-10">
+            <div className="w-full h-full rounded-none overflow-hidden relative">
               <img
                 src={currentTrack.thumbnail || (currentTrack.id?.startsWith("yt-") ? `https://i.ytimg.com/vi/${currentTrack.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
                 alt={currentTrack.title}
@@ -327,13 +350,11 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                   isPlaying ? "scale-105" : "scale-100"
                 }`}
               />
-              {/* Ambient Shadow glow */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
               
               {/* Loading Overlay */}
               {isLoading && (
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center transition-all duration-300">
-              <div className="w-8 h-8 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-8 h-8 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
                 </div>
               )}
             </div>
@@ -425,17 +446,27 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       {/* Metadata & Actions */}
       <div className="w-full flex items-center justify-between mt-3 mb-2 shrink-0 overflow-hidden">
         <div className="min-w-0 flex-1 overflow-hidden">
-          <h2 
-            onClick={() => {
-              if (onOpenAlbum && currentTrack.albumId) {
-                onOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-                if (onClose) onClose();
-              }
-            }}
-            className="text-2xl font-bold text-white truncate tracking-wide cursor-pointer hover:text-brand-accent hover:underline block max-w-full"
-          >
-            {currentTrack.title}
-          </h2>
+          <div className="flex items-center gap-2 min-w-0">
+            {(isExplicit || currentTrack.isExplicit) && hasDualVersions && (
+              <span
+                className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-white/20 text-[9px] font-bold text-gray-300 shrink-0 select-none"
+                title="Explicit"
+              >
+                E
+              </span>
+            )}
+            <h2 
+              onClick={() => {
+                if (onOpenAlbum && currentTrack.albumId) {
+                  onOpenAlbum({ id: currentTrack.albumId, title: currentTrack.albumName || "Album", artist: currentTrack.artist, thumbnail: currentTrack.thumbnail });
+                  if (onClose) onClose();
+                }
+              }}
+              className="text-2xl font-bold text-white truncate tracking-wide cursor-pointer hover:text-brand-accent hover:underline block max-w-full"
+            >
+              {currentTrack.title}
+            </h2>
+          </div>
           <div className="text-sm text-gray-400 mt-1 flex flex-wrap gap-x-1 select-none">
             {currentTrack.artists && currentTrack.artists.length > 0 ? (
               currentTrack.artists.map((art, i) => (

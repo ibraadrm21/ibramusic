@@ -103,6 +103,11 @@ async function validateStreamUrl(url: string, ms = 2500, signal?: AbortSignal): 
 // Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
 const resolutionCache = new Map<string, { videoId: string; streamUrl?: string; timestamp: number }>();
 
+const getResolutionKey = (track: Track): string => {
+  const explicitFlag = track.isExplicit === true ? "explicit" : track.isExplicit === false ? "clean" : "default";
+  return `${track.id}:${explicitFlag}`;
+};
+
 // Keep cache memory footprint strictly capped at 100 items
 const setResolutionCache = (key: string, value: { videoId: string; streamUrl?: string; timestamp: number }) => {
   if (resolutionCache.size > 100) {
@@ -110,6 +115,14 @@ const setResolutionCache = (key: string, value: { videoId: string; streamUrl?: s
     if (oldestKey) resolutionCache.delete(oldestKey);
   }
   resolutionCache.set(key, value);
+};
+
+export const invalidateTrackResolution = (trackId: string) => {
+  for (const key of Array.from(resolutionCache.keys())) {
+    if (key === trackId || key.startsWith(`${trackId}:`)) {
+      resolutionCache.delete(key);
+    }
+  }
 };
 
 interface AudioContextType {
@@ -701,6 +714,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const togglePlayRef = useRef<() => void>(() => {});
   const syncMediaSessionRef = useRef<() => void>(() => {});
   const startSeamlessFadeInRef = useRef<() => void>(() => {});
+  const finishCrossfadeNowRef = useRef<(() => void) | null>(null);
   const playbackExpectedRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -783,11 +797,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               }
             } else if (state === 0) {
               // Ended
-              if (isThisActiveDeck && !isTransitioningRef.current) {
-                setIsPlaying(false);
-                stopPollingProgress();
-                silentAudioRef.current?.pause();
-                handleTrackEndedRef.current();
+              if (isThisActiveDeck) {
+                if (isTransitioningRef.current) {
+                  // If outgoing track reached the end while crossfade was running (e.g. background tab throttling),
+                  // force-finish crossfade now to avoid stalling playback
+                  if (finishCrossfadeNowRef.current) {
+                    finishCrossfadeNowRef.current();
+                  }
+                } else {
+                  setIsPlaying(false);
+                  stopPollingProgress();
+                  silentAudioRef.current?.pause();
+                  handleTrackEndedRef.current();
+                }
               }
             } else if (state === 3) {
               if (isThisActiveDeck) {
@@ -1074,14 +1096,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         incomingPlayer.playVideo?.();
 
-        // Wait until incoming is ACTUALLY rendering audio frames (state === 1) so outgoing never stops prematurely
-        let waitCount = 0;
+        // In background tabs (document.hidden), timers are heavily throttled and the iframe may delay reporting state 1.
+        // If hidden, shorten fallback to 600ms so crossfade starts without delay.
+        const maxWaitMs = typeof document !== "undefined" && document.hidden ? 600 : 2500;
+        const pollStart = Date.now();
         await new Promise<void>((resolve) => {
           const waitPoll = setInterval(() => {
-            waitCount++;
             try {
               const state = incomingPlayer.getPlayerState?.();
-              if (state === 1 || waitCount > 25) { // 2.5s fallback
+              if (state === 1 || (Date.now() - pollStart) >= maxWaitMs) {
                 clearInterval(waitPoll);
                 resolve();
               }
@@ -1089,7 +1112,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               clearInterval(waitPoll);
               resolve();
             }
-          }, 100);
+          }, 80);
         });
       }
 
@@ -1102,6 +1125,64 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (crossfadeIntervalRef.current) {
         clearInterval(crossfadeIntervalRef.current);
       }
+
+      // Closure to cleanly and immediately finish crossfade handoff (used on completion or fallback)
+      let finished = false;
+      const completeCrossfade = () => {
+        if (finished) return;
+        finished = true;
+        finishCrossfadeNowRef.current = null;
+
+        if (crossfadeIntervalRef.current) {
+          clearInterval(crossfadeIntervalRef.current);
+          crossfadeIntervalRef.current = null;
+        }
+
+        // Stop and silence outgoing player immediately
+        try {
+          outgoingPlayer?.pauseVideo?.();
+          outgoingPlayer?.setVolume?.(0);
+        } catch {}
+
+        // Switch active deck to incoming player and set exactly to user's slider volume
+        activeDeckRef.current = incomingDeck;
+        try {
+          incomingPlayer.playVideo?.();
+        } catch {}
+        if (typeof incomingPlayer.setVolume === "function") {
+          incomingPlayer.setVolume(isMutedRef.current ? 0 : Math.round(volumeRef.current * 100));
+        }
+
+        // Advance queue state seamlessly
+        if (currentTrackRef.current) {
+          setHistory(prev => [...prev.slice(-49), currentTrackRef.current!]);
+        }
+
+        if (candidate.source === 'user_queue') {
+          const nextUQ = userQueueRef.current.slice(1);
+          userQueueRef.current = nextUQ;
+          setUserQueue(nextUQ);
+          currentTrackSourceRef.current = 'user_queue';
+          setCurrentTrackSource('user_queue');
+        } else {
+          const targetIdx = candidate.nextIndex !== undefined ? candidate.nextIndex : 0;
+          playlistIndexRef.current = targetIdx;
+          setPlaylistIndex(targetIdx);
+          currentTrackSourceRef.current = 'playlist';
+          setCurrentTrackSource('playlist');
+        }
+
+        currentTrackRef.current = nextTrackItem;
+        setCurrentTrack(nextTrackItem);
+        setIsPlaying(true);
+        setIsLoading(false);
+        // Keep isTransitioningRef true briefly to ensure any trailing onStateChange(0) from outgoing deck doesn't trigger nextTrack
+        setTimeout(() => {
+          isTransitioningRef.current = false;
+        }, 800);
+      };
+
+      finishCrossfadeNowRef.current = completeCrossfade;
 
       // Ramp outgoing down while ramping incoming up concurrently
       crossfadeIntervalRef.current = setInterval(() => {
@@ -1151,53 +1232,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } catch {}
 
         if (progress >= 1 || outgoingEnded) {
-          clearInterval(crossfadeIntervalRef.current);
-          crossfadeIntervalRef.current = null;
-
-          // Stop and silence outgoing player immediately
-          try {
-            outgoingPlayer?.pauseVideo?.();
-            outgoingPlayer?.setVolume?.(0);
-          } catch {}
-
-          // Switch active deck to incoming player and set exactly to user's slider volume
-          activeDeckRef.current = incomingDeck;
-          if (typeof incomingPlayer.setVolume === "function") {
-            incomingPlayer.setVolume(isMutedRef.current ? 0 : Math.round(volumeRef.current * 100));
-          }
-
-          // Advance queue state seamlessly
-          if (currentTrackRef.current) {
-            setHistory(prev => [...prev.slice(-49), currentTrackRef.current!]);
-          }
-
-          if (candidate.source === 'user_queue') {
-            const nextUQ = userQueueRef.current.slice(1);
-            userQueueRef.current = nextUQ;
-            setUserQueue(nextUQ);
-            currentTrackSourceRef.current = 'user_queue';
-            setCurrentTrackSource('user_queue');
-          } else {
-            const targetIdx = candidate.nextIndex !== undefined ? candidate.nextIndex : 0;
-            playlistIndexRef.current = targetIdx;
-            setPlaylistIndex(targetIdx);
-            currentTrackSourceRef.current = 'playlist';
-            setCurrentTrackSource('playlist');
-          }
-
-          currentTrackRef.current = nextTrackItem;
-          setCurrentTrack(nextTrackItem);
-          setIsPlaying(true);
-          setIsLoading(false);
-          // Keep isTransitioningRef true briefly to ensure any trailing onStateChange(0) from outgoing deck doesn't trigger nextTrack
-          setTimeout(() => {
-            isTransitioningRef.current = false;
-          }, 800);
+          completeCrossfade();
         }
       }, 50);
 
     } catch (e) {
       console.warn("Simultaneous crossfade error, falling back to standard advance:", e);
+      finishCrossfadeNowRef.current = null;
       if (crossfadeIntervalRef.current) {
         clearInterval(crossfadeIntervalRef.current);
         crossfadeIntervalRef.current = null;
@@ -1241,6 +1282,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
 
           if (candidate && remaining <= fadeSecs && remaining > 0.4) {
+            performSimultaneousCrossfade(candidate);
+          } else if (candidate && remaining <= 0.4) {
+            // Safety net: in background tabs, if progress interval lagged and remaining <= 0.4s
             performSimultaneousCrossfade(candidate);
           } else if (!candidate && remaining <= 0.4) {
             isTransitioningRef.current = true;
@@ -1552,9 +1596,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       let videoId = "";
       let streamUrl = "";
       
-      const cached = resolutionCache.get(track.id);
+      const cacheKey = getResolutionKey(track);
+      const cached = resolutionCache.get(cacheKey) || resolutionCache.get(track.id);
       if (cached && cached.videoId) {
-        console.log(`[Cache Hit] Playing pre-resolved track: ${track.title}`);
+        console.log(`[Cache Hit] Playing pre-resolved track: ${track.title} [key: ${cacheKey}]`);
         videoId = cached.videoId;
         if (isAndroid && cached.streamUrl) {
           streamUrl = cached.streamUrl;
@@ -1562,12 +1607,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         videoId = await getYouTubeVideoId(track, abortController.signal);
         if (abortController.signal.aborted) return;
+        setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
       }
 
       if (isAndroid && !streamUrl) {
         streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
         if (abortController.signal.aborted) return;
-        resolutionCache.set(track.id, { videoId, streamUrl, timestamp: Date.now() });
+        setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
       }
 
       // Asynchronously fetch YouTube views count
@@ -1652,7 +1698,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
     if (!track) return;
     
-    const cached = resolutionCache.get(track.id);
+    const cacheKey = getResolutionKey(track);
+    const cached = resolutionCache.get(cacheKey) || resolutionCache.get(track.id);
     if (cached && cached.videoId && cached.streamUrl) {
       if (isAndroid) {
         try {
@@ -1695,7 +1742,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       if (signal?.aborted) return;
       
-      setResolutionCache(track.id, {
+      setResolutionCache(cacheKey, {
         videoId,
         streamUrl,
         timestamp: Date.now()

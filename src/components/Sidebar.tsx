@@ -1,5 +1,20 @@
 import React from "react";
-import { Home, Search, Heart, ListMusic, Sparkles, Settings, Gift, Award, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Home,
+  Search,
+  Heart,
+  ListMusic,
+  Sparkles,
+  Settings,
+  Gift,
+  Award,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Pin,
+  X,
+  ArrowDownUp
+} from "lucide-react";
 import { motion } from "framer-motion";
 import { animate } from "animejs";
 
@@ -54,6 +69,10 @@ interface SidebarProps {
   followedArtists: any[];
   onSelectPlaylist: (playlist: any) => void;
   onSelectArtist: (artist: any) => void;
+  onPlaylistContextMenu?: (e: React.MouseEvent, playlist: any) => void;
+  onCreatePlaylist?: () => void;
+  pinnedPlaylistIds?: Set<string>;
+  onTogglePinPlaylist?: (playlistId: string) => void;
   userEmail?: string | null;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -66,6 +85,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   followedArtists,
   onSelectPlaylist,
   onSelectArtist,
+  onPlaylistContextMenu,
+  onCreatePlaylist,
+  pinnedPlaylistIds = new Set(),
   userEmail,
   collapsed = false,
   onToggleCollapse,
@@ -83,11 +105,86 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
   ];
 
+  // Filter & Search states for library
+  const [libraryFilter, setLibraryFilter] = React.useState<"all" | "playlists" | "artists">("all");
+  const [librarySearchQuery, setLibrarySearchQuery] = React.useState<string>("");
+  const [isSearchOpen, setIsSearchOpen] = React.useState<boolean>(false);
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // Global listener to focus/open library search if requested
+  React.useEffect(() => {
+    const handleOpenLibrarySearch = () => {
+      setIsSearchOpen(true);
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }, 50);
+    };
+    window.addEventListener("ibrastream_open_library_search", handleOpenLibrarySearch);
+    return () => {
+      window.removeEventListener("ibrastream_open_library_search", handleOpenLibrarySearch);
+    };
+  }, []);
+
   // Load library order from localStorage
   const [libraryOrder, setLibraryOrder] = React.useState<{ id: string, type: 'playlist' | 'artist' }[]>(() => {
     const saved = localStorage.getItem("ibrastream_library_order");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
+
+  // Sort state for library: 'recent' (default), 'alphabetical', or 'custom'
+  const [librarySort, setLibrarySort] = React.useState<"recent" | "alphabetical" | "custom">(() => {
+    const saved = localStorage.getItem("ibrastream_library_sort");
+    return (saved as "recent" | "alphabetical" | "custom") || "recent";
+  });
+  const [isSortMenuOpen, setIsSortMenuOpen] = React.useState<boolean>(false);
+  const sortMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Close sort menu on click outside
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
+        setIsSortMenuOpen(false);
+      }
+    };
+    if (isSortMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isSortMenuOpen]);
+
+  // Playlist activity tracking timestamps
+  const [playlistActivity, setPlaylistActivity] = React.useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem("ibrastream_playlist_activity");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  React.useEffect(() => {
+    const handleActivityUpdate = () => {
+      try {
+        const saved = localStorage.getItem("ibrastream_playlist_activity");
+        if (saved) setPlaylistActivity(JSON.parse(saved));
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener("ibrastream_playlist_activity_updated", handleActivityUpdate);
+    return () => {
+      window.removeEventListener("ibrastream_playlist_activity_updated", handleActivityUpdate);
+    };
+  }, []);
+
+  const handleSelectSort = (sort: "recent" | "alphabetical" | "custom") => {
+    setLibrarySort(sort);
+    localStorage.setItem("ibrastream_library_sort", sort);
+    setIsSortMenuOpen(false);
+  };
 
   // Combine playlists and artists into a single array
   const combinedLibrary = React.useMemo(() => {
@@ -96,33 +193,73 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ...followedArtists.map(a => ({ ...a, type: 'artist' as const }))
     ];
 
-    // Sort items according to libraryOrder
-    if (libraryOrder.length > 0) {
-      items.sort((a, b) => {
+    // Sort items: Pinned playlists ALWAYS stay at the very top!
+    items.sort((a, b) => {
+      const aPinned = a.type === 'playlist' && pinnedPlaylistIds.has(a.id);
+      const bPinned = b.type === 'playlist' && pinnedPlaylistIds.has(b.id);
+
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      // When both are pinned or both are unpinned, sort by selected librarySort mode
+      if (librarySort === "alphabetical") {
+        return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+      }
+
+      if (librarySort === "recent") {
+        // Most recently played or opened item goes first
+        const timeA = a.type === 'playlist' ? (playlistActivity[a.id] || 0) : 0;
+        const timeB = b.type === 'playlist' ? (playlistActivity[b.id] || 0) : 0;
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
+      }
+
+      // Default / Custom: fall back to libraryOrder from drag & drop
+      if (libraryOrder.length > 0) {
         const idxA = libraryOrder.findIndex(item => item.id === a.id && item.type === a.type);
         const idxB = libraryOrder.findIndex(item => item.id === b.id && item.type === b.type);
         
-        // If both are in the order, sort by order
         if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-        // If only one is in the order, put it first
         if (idxA !== -1) return -1;
         if (idxB !== -1) return 1;
-        // Otherwise keep original order
-        return 0;
-      });
-    }
+      }
+      return 0;
+    });
+
     return items;
-  }, [playlists, followedArtists, libraryOrder]);
+  }, [playlists, followedArtists, libraryOrder, pinnedPlaylistIds, librarySort, playlistActivity]);
+
+  // Filtered library based on search query & pill chips
+  const filteredLibrary = React.useMemo(() => {
+    return combinedLibrary.filter(item => {
+      if (libraryFilter === "playlists" && item.type !== "playlist") return false;
+      if (libraryFilter === "artists" && item.type !== "artist") return false;
+      if (librarySearchQuery.trim()) {
+        const q = librarySearchQuery.toLowerCase();
+        return item.name?.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [combinedLibrary, libraryFilter, librarySearchQuery]);
+
+
 
   // Drag and drop states
   const [draggedIdx, setDraggedIdx] = React.useState<number | null>(null);
 
   const handleDragStart = (index: number) => {
+    // Only allow dragging in "all" filter with empty search so index matches combinedLibrary
+    if (libraryFilter !== "all" || librarySearchQuery.trim()) return;
+    if (librarySort !== "custom") {
+      handleSelectSort("custom");
+    }
     setDraggedIdx(index);
   };
 
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
+    if (libraryFilter !== "all" || librarySearchQuery.trim()) return;
     if (draggedIdx === null || draggedIdx === index) return;
     
     // Reorder combinedLibrary
@@ -134,7 +271,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setDraggedIdx(index);
 
     // Save the new order as a list of { id, type }
-    const newOrder = updated.map(item => ({ id: item.id, type: item.type }));
+    const newOrder = updated.map(it => ({ id: it.id, type: it.type }));
     setLibraryOrder(newOrder);
     localStorage.setItem("ibrastream_library_order", JSON.stringify(newOrder));
   };
@@ -146,7 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className={`hidden md:flex flex-col ${collapsed ? "w-20" : "w-64"} h-[calc(100vh-96px)] fixed left-0 top-0 glass-panel border-r border-gray-800 ${collapsed ? "p-3" : "p-5"} z-10 select-none justify-between transition-all duration-300`}>
+      <aside className={`hidden md:flex flex-col ${collapsed ? "w-20" : "w-72"} h-[calc(100vh-96px)] fixed left-0 top-0 glass-panel border-r border-gray-800 ${collapsed ? "p-3" : "p-4"} z-10 select-none justify-between transition-all duration-300`}>
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {/* Logo */}
           <div className={`flex items-center ${collapsed ? "flex-col gap-3 justify-center" : "justify-between"} shrink-0`}>
@@ -245,35 +382,198 @@ export const Sidebar: React.FC<SidebarProps> = ({
             })}
           </nav>
 
-          {/* Your Library List (Spotify Left Sidebar style) */}
-          <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto pr-1 select-none">
-            {!collapsed && (
-              <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider mb-1 pl-3">
-                Your Library
-              </span>
+          {/* Your Library Section */}
+          <div className="flex flex-col gap-2 flex-1 min-h-0 select-none">
+            {/* Header: Title + Fast Search + Create Playlist Button */}
+            {!collapsed ? (
+              <div className="flex flex-col gap-2 px-1">
+                <div className="flex items-center justify-between pl-2 pr-1">
+                  <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider">
+                    Your Library
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => {
+                        setIsSearchOpen(prev => !prev);
+                        if (isSearchOpen) setLibrarySearchQuery("");
+                      }}
+                      className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
+                        isSearchOpen || librarySearchQuery ? "text-brand-accent bg-white/5" : "text-gray-400 hover:text-white"
+                      }`}
+                      title="Search library"
+                    >
+                      <Search className="w-3.5 h-3.5" />
+                    </button>
+                    {onCreatePlaylist && (
+                      <button
+                        onClick={onCreatePlaylist}
+                        className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
+                        title="Create Playlist"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Inline Search Bar */}
+                {isSearchOpen && (
+                  <div className="relative px-1 animate-[fadeIn_0.15s_ease-out]">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
+                    <input
+                      type="text"
+                      ref={searchInputRef}
+                      placeholder="Search in library..."
+                      value={librarySearchQuery}
+                      onChange={(e) => setLibrarySearchQuery(e.target.value)}
+                      autoFocus
+                      className="w-full pl-7 pr-6 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-[11px] placeholder:text-gray-500 focus:outline-none focus:border-brand-accent/50 transition-all"
+                    />
+                    {librarySearchQuery && (
+                      <button
+                        onClick={() => setLibrarySearchQuery("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white p-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Filter Pills + Sort Dropdown */}
+                <div className="flex items-center justify-between gap-1.5 px-0.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <button
+                      onClick={() => setLibraryFilter("all")}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all shrink-0 ${
+                        libraryFilter === "all"
+                          ? "bg-white text-black"
+                          : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => setLibraryFilter("playlists")}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all shrink-0 ${
+                        libraryFilter === "playlists"
+                          ? "bg-white text-black"
+                          : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      Playlists
+                    </button>
+                    <button
+                      onClick={() => setLibraryFilter("artists")}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all shrink-0 ${
+                        libraryFilter === "artists"
+                          ? "bg-white text-black"
+                          : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      Artists
+                    </button>
+                  </div>
+
+                  {/* Sort Trigger Button & Menu */}
+                  <div className="relative shrink-0" ref={sortMenuRef}>
+                    <button
+                      onClick={() => setIsSortMenuOpen(prev => !prev)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                        isSortMenuOpen ? "text-white bg-white/10" : "text-gray-400 hover:text-white hover:bg-white/5"
+                      }`}
+                      title="Sort library"
+                    >
+                      <ArrowDownUp className="w-3 h-3 shrink-0" />
+                      <span className="capitalize whitespace-nowrap">{librarySort === "recent" ? "Recents" : librarySort === "alphabetical" ? "A-Z" : "Custom"}</span>
+                    </button>
+
+                    {isSortMenuOpen && (
+                      <div className="absolute right-0 top-full mt-1.5 w-32 bg-[#181818] border border-white/10 rounded-xl shadow-2xl py-1 z-50 backdrop-blur-xl animate-[fadeIn_0.1s_ease-out]">
+                        <div className="px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wider text-gray-500">
+                          Sort by
+                        </div>
+                        <button
+                          onClick={() => handleSelectSort("recent")}
+                          className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between hover:bg-white/10 transition-colors ${
+                            librarySort === "recent" ? "text-brand-accent font-semibold" : "text-gray-300"
+                          }`}
+                        >
+                          <span>Recents</span>
+                          {librarySort === "recent" && <span className="text-[10px]">✓</span>}
+                        </button>
+                        <button
+                          onClick={() => handleSelectSort("alphabetical")}
+                          className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between hover:bg-white/10 transition-colors ${
+                            librarySort === "alphabetical" ? "text-brand-accent font-semibold" : "text-gray-300"
+                          }`}
+                        >
+                          <span>Alphabetical</span>
+                          {librarySort === "alphabetical" && <span className="text-[10px]">✓</span>}
+                        </button>
+                        <button
+                          onClick={() => handleSelectSort("custom")}
+                          className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between hover:bg-white/10 transition-colors ${
+                            librarySort === "custom" ? "text-brand-accent font-semibold" : "text-gray-300"
+                          }`}
+                        >
+                          <span>Custom (Drag)</span>
+                          {librarySort === "custom" && <span className="text-[10px]">✓</span>}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              onCreatePlaylist && (
+                <div className="flex justify-center mb-1">
+                  <button
+                    onClick={onCreatePlaylist}
+                    className="p-2 rounded-xl bg-white/5 border border-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition-all"
+                    title="Create Playlist"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+              )
             )}
-            <div className={`flex flex-col gap-1.5 ${collapsed ? "" : "pl-1.5"}`}>
-              {combinedLibrary.map((item, idx) => {
+
+            {/* Library Items Scroll Container */}
+            <div className={`flex flex-col gap-1.5 flex-1 min-h-0 overflow-y-auto pr-1 ${collapsed ? "" : "pl-1.5"}`}>
+              {filteredLibrary.map((item, idx) => {
                 const isPlaylist = item.type === 'playlist';
+                const isPinned = isPlaylist && pinnedPlaylistIds.has(item.id);
+
                 return (
                   <div
                     key={`${item.type}-${item.id}`}
                     onClick={() => isPlaylist ? onSelectPlaylist(item) : onSelectArtist(item)}
-                    draggable={true}
+                    onContextMenu={(e) => {
+                      if (isPlaylist && onPlaylistContextMenu) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onPlaylistContextMenu(e, item);
+                      }
+                    }}
+                    draggable={libraryFilter === "all" && !librarySearchQuery.trim()}
                     onDragStart={() => handleDragStart(idx)}
                     onDragOver={(e) => handleDragOver(e, idx)}
                     onDragEnd={handleDragEnd}
-                    className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group ${
+                    className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} p-2 rounded-xl hover:bg-white/5 cursor-pointer transition-all group relative ${
                       draggedIdx === idx ? 'opacity-40 bg-white/10 scale-95' : ''
                     }`}
-                    title={collapsed ? item.name : undefined}
+                    title={collapsed ? (isPinned ? `📌 ${item.name}` : item.name) : undefined}
                   >
                     {isPlaylist ? (
-                      <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden">
+                      <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden relative">
                         {item.coverUrl || (item.tracks && item.tracks.length > 0 && item.tracks[0].thumbnail) ? (
                           <img src={item.coverUrl || item.tracks[0].thumbnail} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         ) : (
                           <ListMusic className="w-4.5 h-4.5 text-brand-accent group-hover:scale-105 transition-transform" />
+                        )}
+                        {isPinned && collapsed && (
+                          <div className="absolute top-0 right-0 w-2 h-2 bg-brand-accent rounded-full ring-2 ring-black" />
                         )}
                       </div>
                     ) : (
@@ -285,10 +585,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     )}
 
                     {!collapsed && (
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">{item.name}</p>
-                        <p className="text-[10px] text-gray-400 truncate">
-                          {isPlaylist ? `Playlist • ${item.tracks ? item.tracks.length : 0} Songs` : "Artist"}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-semibold text-white truncate group-hover:text-brand-accent transition-colors">
+                            {item.name}
+                          </p>
+                          {isPinned && (
+                            <Pin className="w-3 h-3 text-brand-accent shrink-0 fill-brand-accent" />
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-400 truncate flex items-center gap-1">
+                          {isPinned && <span className="text-brand-accent font-medium">Pinned •</span>}
+                          <span>{isPlaylist ? `Playlist • ${item.tracks ? item.tracks.length : 0} Songs` : "Artist"}</span>
                         </p>
                       </div>
                     )}
@@ -296,8 +604,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 );
               })}
 
-              {combinedLibrary.length === 0 && (
-                <span className="text-[10px] text-gray-600 pl-3 italic">Empty Library</span>
+              {filteredLibrary.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-6 text-center px-2">
+                  <span className="text-[11px] text-gray-500 font-medium">
+                    {librarySearchQuery.trim()
+                      ? `No results for "${librarySearchQuery}"`
+                      : libraryFilter !== "all"
+                      ? `No ${libraryFilter} found`
+                      : "Empty Library"}
+                  </span>
+                </div>
               )}
             </div>
           </div>
@@ -374,4 +690,5 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </>
   );
 };
+
 export default Sidebar;
