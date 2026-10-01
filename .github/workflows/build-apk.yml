@@ -1,6 +1,7 @@
 name: Build & Release APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -44,6 +45,13 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Sync Capacitor
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
       - name: Sync versionName in build.gradle
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
@@ -53,9 +61,6 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
           echo "Set versionCode=$VERSION_CODE, versionName=$VERSION"
-
-      - name: Sync Capacitor
-        run: npx cap sync
 
       - name: Build Android Debug APK
         run: |
