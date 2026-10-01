@@ -38,9 +38,6 @@ release/
 web-build/
 logcat_*.txt
 
-# Exclude Android folder
-android/
-
 # JDK / OpenJDK build artifacts
 jdk-21.0.2/
 openjdk.zip

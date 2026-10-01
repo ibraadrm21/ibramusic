@@ -46,11 +46,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Sync Capacitor
-        run: |
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
-          npx cap sync android
+        run: npx cap sync android
 
       - name: Sync versionName in build.gradle
         run: |
