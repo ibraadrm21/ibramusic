@@ -1610,12 +1610,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
       }
 
-      if (isAndroid && !streamUrl) {
-        streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-        if (abortController.signal.aborted) return;
-        setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
-      }
-
       // Asynchronously fetch YouTube views count
       import("../services/musicApi").then(async ({ getYoutubeClient }) => {
         try {
@@ -1638,7 +1632,35 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       });
 
-      // Load video via YouTube IFrame API (works reliably on both Web & Mobile WebView)
+      if (isAndroid) {
+        if (!streamUrl) {
+          try {
+            streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
+            if (abortController.signal.aborted) return;
+            setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
+          } catch (e) {
+            console.warn("Client-side stream resolution failed, falling back to PlaybackService native resolution:", e);
+            streamUrl = `https://ibrastream.resolve/yt-${videoId}/audio.mp3?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
+          }
+        }
+
+        console.log(`[Android Native] Playing via Media3/ExoPlayer: ${track.title}, streamUrl=${streamUrl}`);
+        await Media3Session.updateMetadata({
+          title: track.title,
+          artist: track.artist,
+          artwork: track.thumbnail,
+          duration: track.duration,
+          streamUrl,
+          mediaId: track.id
+        });
+        await Media3Session.setPlaybackState({ isPlaying: true });
+        setIsLoading(false);
+        setIsPlaying(true);
+        return;
+      }
+
+      // Web / Desktop / Non-Android: Load video via YouTube IFrame API
+
       let activePlayer = getActivePlayer();
       if (!activePlayer || typeof activePlayer.loadVideoById !== "function") {
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1648,18 +1670,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
       activePlayer.loadVideoById(videoId);
-
-      if (isAndroid) {
-        Media3Session.updateMetadata({
-          title: track.title,
-          artist: track.artist,
-          artwork: track.thumbnail,
-          duration: track.duration,
-          streamUrl: "",
-          mediaId: track.id
-        }).catch(() => {});
-        Media3Session.setPlaybackState({ isPlaying: true }).catch(() => {});
-      }
     } catch (err: any) {
       if (err.name === "AbortError") {
         console.log(`Playback aborted for track: ${track.title}`);
@@ -2424,8 +2434,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         console.error("Native playback error:", data.error);
         setIsLoading(false);
         setIsPlaying(false);
-        showToast("Playback error. Skipping...", "error");
-        setTimeout(() => nextTrackRef.current(), 2000);
+        showToast("Playback error: unable to play track", "error");
       });
       Media3Session.addListener("onPlaybackEnded", () => {
         handleTrackEndedRef.current();

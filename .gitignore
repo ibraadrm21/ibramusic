@@ -41,3 +41,19 @@ logcat_*.txt
 # JDK / OpenJDK build artifacts
 jdk-21.0.2/
 openjdk.zip
+jdk21.zip
+jdk*/
+
+# Android SDK, tools, and build outputs
+android-sdk-tools/
+cmdline-tools.zip
+*.apk
+*.aab
+.gradle/
+build/
+android/.gradle/
+android/app/build/
+android/captures/
+android/.externalNativeBuild/
+android/local.properties
+
