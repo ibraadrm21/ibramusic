@@ -1,3 +1,53 @@
 {
-  "outputDirectory": "web-build"
+  "outputDirectory": "web-build",
+  "rewrites": [
+    {
+      "source": "/api-deezer/:path*",
+      "destination": "https://api.deezer.com/:path*"
+    },
+    {
+      "source": "/youtube-com/:path*",
+      "destination": "https://www.youtube.com/:path*"
+    },
+    {
+      "source": "/youtubei-googleapis/:path*",
+      "destination": "https://youtubei.googleapis.com/:path*"
+    },
+    {
+      "source": "/api-piped-kavin/:path*",
+      "destination": "https://pipedapi.kavin.rocks/:path*"
+    },
+    {
+      "source": "/api-piped-yt/:path*",
+      "destination": "https://api.piped.yt/:path*"
+    },
+    {
+      "source": "/api-piped-moe/:path*",
+      "destination": "https://pipedapi.moe.xyz/:path*"
+    },
+    {
+      "source": "/api-piped-lvk/:path*",
+      "destination": "https://pipedapi.lvk.li/:path*"
+    },
+    {
+      "source": "/api-piped-private-coffee/:path*",
+      "destination": "https://api.piped.private.coffee/:path*"
+    },
+    {
+      "source": "/api-invidious-tux/:path*",
+      "destination": "https://inv.tux.pizza/:path*"
+    },
+    {
+      "source": "/api-invidious-jing/:path*",
+      "destination": "https://invidious.jing.rocks/:path*"
+    },
+    {
+      "source": "/api-invidious-pixora/:path*",
+      "destination": "https://inv.thepixora.com/:path*"
+    },
+    {
+      "source": "/api-invidious-privacydev/:path*",
+      "destination": "https://invidious.privacydev.net/:path*"
+    }
+  ]
 }

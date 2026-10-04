@@ -72,7 +72,7 @@ export const switchToNextInstance = () => {
 
 export const resolveUrl = (url: string): string => {
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-  if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
+  if (!isNative && typeof window !== 'undefined') {
     if (url.startsWith("https://api.deezer.com")) {
       return url.replace("https://api.deezer.com", "/api-deezer");
     }
@@ -144,8 +144,19 @@ let youtubeWebClientPromise: Promise<Innertube> | null = null;
 export const sharedCustomFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   let url = typeof input === 'string' ? input : (input instanceof Request ? input.url : (input && (input as any).href) ? (input as any).href : String(input));
   
-  // 1. Resolve relative URLs (e.g. /youtubei/v1/player) or localhost-resolved URLs back to absolute youtube.com/googleapis URLs
-  if (url.startsWith("http://localhost") || url.startsWith("https://localhost") || url.startsWith("http://127.0.0.1") || url.startsWith("https://127.0.0.1")) {
+  // 1. Resolve relative URLs (e.g. /youtubei/v1/player) or origin-resolved URLs back to absolute youtube.com/googleapis URLs
+  if (typeof window !== 'undefined' && url.startsWith(window.location.origin)) {
+    const path = url.slice(window.location.origin.length);
+    if (path.startsWith("/youtubei/v1/")) {
+      url = `https://youtubei.googleapis.com${path}`;
+    } else if (path.startsWith("/youtube-com")) {
+      url = path.replace("/youtube-com", "https://www.youtube.com");
+    } else if (path.startsWith("/youtubei-googleapis")) {
+      url = path.replace("/youtubei-googleapis", "https://youtubei.googleapis.com");
+    } else {
+      url = `https://www.youtube.com${path}`;
+    }
+  } else if (url.startsWith("http://localhost") || url.startsWith("https://localhost") || url.startsWith("http://127.0.0.1") || url.startsWith("https://127.0.0.1")) {
     if (url.includes("/youtubei/v1/")) {
       url = url.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, "https://youtubei.googleapis.com");
     } else {
@@ -160,7 +171,7 @@ export const sharedCustomFetch = async (input: RequestInfo | URL, init?: Request
   }
 
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-  if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
+  if (!isNative && typeof window !== 'undefined') {
     if (url.startsWith("https://www.youtube.com")) {
       url = url.replace("https://www.youtube.com", "/youtube-com");
     } else if (url.startsWith("https://youtubei.googleapis.com")) {
