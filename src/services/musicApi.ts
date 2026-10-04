@@ -76,32 +76,35 @@ export const resolveUrl = (url: string): string => {
     if (url.startsWith("https://api.deezer.com")) {
       return url.replace("https://api.deezer.com", "/api-deezer");
     }
-    if (url.startsWith("https://pipedapi.kavin.rocks")) {
-      return url.replace("https://pipedapi.kavin.rocks", "/api-piped-kavin");
-    }
-    if (url.startsWith("https://api.piped.yt")) {
-      return url.replace("https://api.piped.yt", "/api-piped-yt");
-    }
-    if (url.startsWith("https://pipedapi.moe.xyz")) {
-      return url.replace("https://pipedapi.moe.xyz", "/api-piped-moe");
-    }
-    if (url.startsWith("https://pipedapi.lvk.li")) {
-      return url.replace("https://pipedapi.lvk.li", "/api-piped-lvk");
-    }
-    if (url.startsWith("https://api.piped.private.coffee")) {
-      return url.replace("https://api.piped.private.coffee", "/api-piped-private-coffee");
-    }
-    if (url.startsWith("https://inv.tux.pizza")) {
-      return url.replace("https://inv.tux.pizza", "/api-invidious-tux");
-    }
-    if (url.startsWith("https://invidious.jing.rocks")) {
-      return url.replace("https://invidious.jing.rocks", "/api-invidious-jing");
-    }
-    if (url.startsWith("https://inv.thepixora.com")) {
-      return url.replace("https://inv.thepixora.com", "/api-invidious-pixora");
-    }
-    if (url.startsWith("https://invidious.privacydev.net")) {
-      return url.replace("https://invidious.privacydev.net", "/api-invidious-privacydev");
+    // Only local dev Vite proxies these endpoints
+    if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
+      if (url.startsWith("https://pipedapi.kavin.rocks")) {
+        return url.replace("https://pipedapi.kavin.rocks", "/api-piped-kavin");
+      }
+      if (url.startsWith("https://api.piped.yt")) {
+        return url.replace("https://api.piped.yt", "/api-piped-yt");
+      }
+      if (url.startsWith("https://pipedapi.moe.xyz")) {
+        return url.replace("https://pipedapi.moe.xyz", "/api-piped-moe");
+      }
+      if (url.startsWith("https://pipedapi.lvk.li")) {
+        return url.replace("https://pipedapi.lvk.li", "/api-piped-lvk");
+      }
+      if (url.startsWith("https://api.piped.private.coffee")) {
+        return url.replace("https://api.piped.private.coffee", "/api-piped-private-coffee");
+      }
+      if (url.startsWith("https://inv.tux.pizza")) {
+        return url.replace("https://inv.tux.pizza", "/api-invidious-tux");
+      }
+      if (url.startsWith("https://invidious.jing.rocks")) {
+        return url.replace("https://invidious.jing.rocks", "/api-invidious-jing");
+      }
+      if (url.startsWith("https://inv.thepixora.com")) {
+        return url.replace("https://inv.thepixora.com", "/api-invidious-pixora");
+      }
+      if (url.startsWith("https://invidious.privacydev.net")) {
+        return url.replace("https://invidious.privacydev.net", "/api-invidious-privacydev");
+      }
     }
   }
   return url;
@@ -171,7 +174,7 @@ export const sharedCustomFetch = async (input: RequestInfo | URL, init?: Request
   }
 
   const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
-  if (!isNative && typeof window !== 'undefined') {
+  if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
     if (url.startsWith("https://www.youtube.com")) {
       url = url.replace("https://www.youtube.com", "/youtube-com");
     } else if (url.startsWith("https://youtubei.googleapis.com")) {
@@ -1590,6 +1593,35 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw e;
       console.warn(`Piped search fallback ${baseUrl} failed:`, e);
+    }
+  }
+
+  // 3. Fallback to public Invidious instances
+  const INVIDIOUS_HOSTS = [
+    "https://inv.tux.pizza",
+    "https://invidious.jing.rocks",
+    "https://inv.thepixora.com",
+    "https://invidious.privacydev.net"
+  ];
+
+  for (const invHost of INVIDIOUS_HOSTS) {
+    try {
+      console.log(`Searching video ID for "${query}" via Invidious: ${invHost}...`);
+      const invUrl = `${invHost}/api/v1/search?q=${encodeURIComponent(query)}&type=video`;
+      const invRes = await fetchWithTimeout(invUrl, { signal }, 5000);
+      if (!invRes.ok) continue;
+      const invData = await invRes.json();
+      if (Array.isArray(invData) && invData.length > 0) {
+        const first = invData.find((v: any) => v.videoId || v.id);
+        const vid = first?.videoId || first?.id;
+        if (vid) {
+          console.log(`Resolved videoId via Invidious ${invHost}: ${first.title} (${vid})`);
+          return vid;
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      console.warn(`Invidious search fallback ${invHost} failed:`, e);
     }
   }
 
