@@ -1,7 +1,3 @@
-import { App } from '@capacitor/app';
-import { Browser } from '@capacitor/browser';
-import { Capacitor } from '@capacitor/core';
-
 export interface UpdateInfo {
   hasUpdate: boolean;
   currentVersion: string;
@@ -26,6 +22,8 @@ export const setUpdaterCredentials = (pat: string, owner: string, repo: string) 
   localStorage.setItem('github_updater_repo', repo.trim());
 };
 
+export const CURRENT_APP_VERSION = '1.1.8';
+
 function isNewerVersion(current: string, latest: string): boolean {
   const parse = (v: string) => v.replace(/[^0-9.]/g, '').split('.').map(Number);
   const currentParts = parse(current);
@@ -42,24 +40,35 @@ function isNewerVersion(current: string, latest: string): boolean {
 }
 
 /**
- * Checks for updates on GitHub releases.
+ * Returns true if running as a native Android or iOS app (Capacitor/Cordova/Electron wrapper),
+ * NOT in a standard desktop or mobile web browser.
  */
-export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateInfo | null> {
+export function isNativeApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  // Capacitor native check
+  const win = window as any;
+  if (win.Capacitor?.isNativePlatform?.()) return true;
+  if (win.Capacitor?.getPlatform && win.Capacitor.getPlatform() !== 'web') return true;
+  // Android wrapper or standalone app
+  if (win.AndroidBridge || win.isNativeApp) return true;
+  return false;
+}
+
+/**
+ * Checks for updates on GitHub releases (only for native apps).
+ */
+export async function checkForUpdates(_isAuto: boolean = false): Promise<UpdateInfo | null> {
+  // Never show APK/App update prompts when running as a web page in a browser
+  if (!isNativeApp()) {
+    return null;
+  }
+
   try {
-    let currentVersion = '1.0.0';
-
-    if (Capacitor.isNativePlatform()) {
-      const info = await App.getInfo();
-      currentVersion = info.version;
-    } else {
-      currentVersion = localStorage.getItem('ibrastream_mock_version') || '1.0.0';
-    }
-
+    const currentVersion = localStorage.getItem('ibrastream_mock_version') || CURRENT_APP_VERSION;
     const { pat, owner, repo } = getUpdaterCredentials();
     const url = `https://api.github.com/repos/${owner}/${repo}/releases/latest?t=${Date.now()}`;
     
     let data: any = null;
-    const isNative = Capacitor.isNativePlatform();
 
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github+json',
@@ -69,25 +78,11 @@ export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateIn
       headers['Authorization'] = `Bearer ${pat}`;
     }
 
-    if (isNative) {
-      const { CapacitorHttp } = await import('@capacitor/core');
-      const response = await CapacitorHttp.request({
-        url,
-        method: 'GET',
-        headers
-      });
-      if (response.status === 200) {
-        data = response.data;
-      } else {
-        throw new Error(`GitHub API returned status: ${response.status}`);
-      }
+    const response = await fetch(url, { headers });
+    if (response.ok) {
+      data = await response.json();
     } else {
-      const response = await fetch(url, { headers });
-      if (response.ok) {
-        data = await response.json();
-      } else {
-        throw new Error(`GitHub API returned status: ${response.status}`);
-      }
+      throw new Error(`GitHub API returned status: ${response.status}`);
     }
 
     const latestVersion = data.tag_name ? data.tag_name.replace(/^v/, '') : '';
@@ -97,35 +92,14 @@ export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateIn
 
     const hasUpdate = isNewerVersion(currentVersion, latestVersion);
 
-    // Find the APK file link if present in the assets
-    let apkUrl = '';
-    if (data.assets && Array.isArray(data.assets)) {
-      const apkAsset = data.assets.find((asset: any) => asset.name && asset.name.endsWith('.apk'));
-      if (apkAsset) {
-        // If private, use the API asset endpoint instead of browser_download_url
-        if (pat) {
-          apkUrl = `https://api.github.com/repos/${owner}/${repo}/releases/assets/${apkAsset.id}`;
-        } else {
-          apkUrl = apkAsset.browser_download_url;
-        }
-      }
-    }
-
     const updateInfo: UpdateInfo = {
       hasUpdate,
       currentVersion,
       latestVersion,
       releaseUrl: data.html_url,
       releaseNotes: data.body,
-      apkUrl: apkUrl || data.html_url,
       token: pat
     };
-
-    // If auto-update is enabled and we are on Android, log availability
-    const lastAttempt = localStorage.getItem('ibrastream_last_update_attempt');
-    if (isAuto && hasUpdate && apkUrl && Capacitor.getPlatform() === 'android' && lastAttempt !== latestVersion) {
-      console.log("Auto-update available: New version " + latestVersion);
-    }
 
     return updateInfo;
   } catch (error) {
@@ -138,24 +112,13 @@ export async function checkForUpdates(isAuto: boolean = false): Promise<UpdateIn
  * Starts a background interval to check for updates periodically.
  */
 export function startAutoUpdatePolling(intervalMinutes: number = 30) {
-  // Initial check
   setTimeout(() => checkForUpdates(true), 5000);
 
-  // Periodic check
   setInterval(() => {
     checkForUpdates(true);
   }, intervalMinutes * 60 * 1000);
 }
 
 export async function redirectToUpdate(url: string, _token?: string): Promise<void> {
-  try {
-    if (Capacitor.isNativePlatform()) {
-      await Browser.open({ url });
-    } else {
-      window.open(url, '_blank');
-    }
-  } catch (error) {
-    console.error('Failed to open update URL:', error);
-    window.open(url, '_blank');
-  }
+  window.open(url, '_blank');
 }

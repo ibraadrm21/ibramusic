@@ -149,7 +149,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         <div className="min-w-0 flex-1">
           <p className="font-bold text-white truncate">{playlist.name}</p>
           <p className="text-[10px] text-gray-400 truncate mt-0.5">
-            Playlist • {playlist.tracks ? playlist.tracks.length : 0} {playlist.tracks?.length === 1 ? "canción" : "canciones"}
+            Playlist • {playlist.tracks ? playlist.tracks.length : 0} {playlist.tracks?.length === 1 ? "song" : "songs"}
           </p>
         </div>
       </div>
@@ -163,7 +163,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <Play className="w-4 h-4 text-gray-400 shrink-0" />
-        <span>Reproducir playlist</span>
+        <span>Play playlist</span>
       </button>
 
       {/* Download playlist */}
@@ -181,11 +181,11 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
           ) : (
             <Download className="w-4 h-4 text-gray-400 shrink-0" />
           )}
-          <span>{isDownloading ? "Descargando lista..." : "Descargar playlist"}</span>
+          <span>{isDownloading ? "Downloading playlist..." : "Download playlist"}</span>
         </button>
       )}
 
-      {/* Add to another playlist (Añadir a otra playlist) */}
+      {/* Add to another playlist */}
       <div
         className="relative"
         onMouseEnter={handleMouseEnterSubmenu}
@@ -202,7 +202,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Plus className="w-4 h-4 text-gray-400" />
-            Añadir a otra playlist
+            Add to another playlist
           </span>
           <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
         </button>
@@ -215,7 +215,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
             onMouseLeave={handleMouseLeaveSubmenu}
           >
             {otherPlaylists.length === 0 ? (
-              <div className="px-4 py-2 text-gray-500 italic text-center">No hay otras playlists</div>
+              <div className="px-4 py-2 text-gray-500 italic text-center">No other playlists</div>
             ) : (
               otherPlaylists.map((targetPlaylist) => (
                 <button
@@ -245,7 +245,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 text-red-400 hover:text-red-300 transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <Trash2 className="w-4 h-4" />
-          <span>Eliminar playlist</span>
+          <span>Delete playlist</span>
         </button>
       )}
 
@@ -261,12 +261,12 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
           {isPinned ? (
             <>
               <PinOff className="w-4 h-4 text-brand-accent shrink-0" />
-              <span>Desanclar de la biblioteca</span>
+              <span>Unpin from library</span>
             </>
           ) : (
             <>
               <Pin className="w-4 h-4 text-gray-400 shrink-0" />
-              <span>Fijar en la biblioteca</span>
+              <span>Pin to library</span>
             </>
           )}
         </button>
@@ -279,21 +279,21 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
           onClose();
         }}
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
-        title={isAllExplicit ? "Reproducir versión Clean (sin censura desactivada)" : "Reproducir versión Explicit (con lenguaje explícito)"}
+        title={isAllExplicit ? "Play Clean version" : "Play Explicit version"}
       >
         {isAllExplicit ? (
           <>
             <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-green-500/20 text-[9px] font-bold text-green-400 shrink-0">
               C
             </span>
-            <span>Cambiar a versión Clean</span>
+            <span>Switch to Clean version</span>
           </>
         ) : (
           <>
             <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-red-500/20 text-[9px] font-bold text-red-400 shrink-0">
               E
             </span>
-            <span>Cambiar a versión Explicit</span>
+            <span>Switch to Explicit version</span>
           </>
         )}
       </button>
@@ -307,7 +307,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <ListPlus className="w-4 h-4 text-gray-400" />
-        <span>Añadir a la cola</span>
+        <span>Add to queue</span>
       </button>
 
       {/* Hide / Unhide playlist */}
@@ -321,12 +321,12 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         {isHidden ? (
           <>
             <Eye className="w-4 h-4 text-gray-400" />
-            <span>Mostrar playlist</span>
+            <span>Show playlist</span>
           </>
         ) : (
           <>
             <EyeOff className="w-4 h-4 text-gray-400" />
-            <span>Ocultar playlist</span>
+            <span>Hide playlist</span>
           </>
         )}
       </button>
@@ -340,7 +340,7 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-t border-white/5 mt-1 pt-2.5"
       >
         <Copy className="w-4 h-4 text-gray-400" />
-        <span>Compartir</span>
+        <span>Share</span>
       </button>
     </div>
   );

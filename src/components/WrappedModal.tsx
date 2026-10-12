@@ -210,7 +210,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
 
   const handleShare = () => {
     if (!stats) return;
-    const text = `🎵 Mi Spotify Wrapped en ibramusic!\n⏱️ ¡Escuché ${stats.totalMinutes} minutos de música!\n🏆 Mi canción top: "${stats.topTracks[0]?.track.title}" de ${stats.topTracks[0]?.track.artist}\n👑 Mi artista top: ${stats.topArtists[0]?.name}\n✨ Personalidad musical: ${stats.personality.name}\n¡Descubre tu viaje musical en ibramusic!`;
+    const text = `🎵 My Spotify Wrapped on ibramusic!\n⏱️ Listened to ${stats.totalMinutes} minutes of music!\n🏆 My top song: "${stats.topTracks[0]?.track.title}" by ${stats.topTracks[0]?.track.artist}\n👑 My top artist: ${stats.topArtists[0]?.name}\n✨ Music personality: ${stats.personality.name}\nDiscover your musical journey on ibramusic!`;
     
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);

@@ -7,14 +7,11 @@ import {
   CheckCircle2, RotateCw
 } from "lucide-react";
 import { AudioProvider, useAudio, useAudioProgress, invalidateTrackResolution } from "./context/AudioContext";
-import { Capacitor } from "@capacitor/core";
 import { downloadService } from "./services/downloadService";
-import { App as CapApp } from "@capacitor/app";
 import Sidebar from "./components/Sidebar";
 import WrappedModal from "./components/WrappedModal";
 import StatsPanel from "./components/StatsPanel";
 
-const isAndroid = Capacitor.getPlatform() === "android";
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg
@@ -189,12 +186,6 @@ const mapColorBetweenThemes = (color: string, fromTheme: "dark" | "bright" | "no
 };
 
 const MainLayout: React.FC = () => {
-  useEffect(() => {
-    const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
-    if (Capacitor.isNativePlatform() || isFlutter) {
-      document.body.classList.add("is-native");
-    }
-  }, []);
 
   const {
     currentTrack, playTrack,
@@ -277,10 +268,10 @@ const MainLayout: React.FC = () => {
     const willBeExplicit = !updated.has(track.id);
     if (!willBeExplicit) {
       updated.delete(track.id);
-      showToast(`"${track.title}" marcada como Clean (Versión Clean)`, "success");
+      showToast(`"${track.title}" marked as Clean (Clean Version)`, "success");
     } else {
       updated.add(track.id);
-      showToast(`"${track.title}" marcada como Explicit 🔞 (Versión Explicit)`, "success");
+      showToast(`"${track.title}" marked as Explicit 🔞 (Explicit Version)`, "success");
     }
     saveExplicitTrackIds(updated);
     
@@ -311,8 +302,8 @@ const MainLayout: React.FC = () => {
     localStorage.setItem("ibrastream_filter_explicit", String(newVal));
     showToast(
       newVal
-        ? "Contenido explícito ocultado"
-        : "Mostrando todo el contenido",
+        ? "Explicit content hidden"
+        : "Showing all content",
       "success"
     );
   };
@@ -456,10 +447,10 @@ const MainLayout: React.FC = () => {
     const updated = new Set(pinnedPlaylistIds);
     if (updated.has(playlistId)) {
       updated.delete(playlistId);
-      showToast("Playlist desanclada de la biblioteca", "info");
+      showToast("Playlist unpinned from library", "info");
     } else {
       updated.add(playlistId);
-      showToast("Playlist fijada en la biblioteca 📌", "success");
+      showToast("Playlist pinned to library 📌", "success");
     }
     savePinnedPlaylistIds(updated);
   };
@@ -1444,13 +1435,13 @@ const MainLayout: React.FC = () => {
 
     const totalToDownload = tracksToDownload.length;
     if (totalToDownload === 0) {
-      showToast("Todas las canciones ya están descargadas", "info");
+      showToast("All songs are already downloaded", "info");
       setDownloadingPlaylistId(null);
       return;
     }
 
     setDownloadProgress({ downloaded: 0, total: totalToDownload });
-    showToast(`Iniciando descarga de ${totalToDownload} canciones...`, "info");
+    showToast(`Starting download of ${totalToDownload} songs...`, "info");
 
     const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("./services/musicApi");
     let downloadedCount = 0;
@@ -1469,18 +1460,18 @@ const MainLayout: React.FC = () => {
         });
         downloadedCount++;
         setDownloadProgress({ downloaded: downloadedCount, total: totalToDownload });
-        showToast(`Descargadas: ${downloadedCount}/${totalToDownload} canciones`, "info");
+        showToast(`Downloaded: ${downloadedCount}/${totalToDownload} songs`, "info");
         await new Promise(resolve => setTimeout(resolve, 1200));
       } catch (e) {
-        console.warn(`Error descargando ${track.title}`, e);
-        showToast(`Error al descargar: ${track.title}`, "error");
+        console.warn(`Error downloading ${track.title}`, e);
+        showToast(`Failed to download: ${track.title}`, "error");
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
     setDownloadingPlaylistId(null);
     setDownloadProgress(null);
-    showToast("Descarga de lista completada", "success");
+    showToast("Playlist download completed", "success");
   };
 
   const handleDownloadAlbum = async (album: Album, tracks: Track[]) => {
@@ -1495,13 +1486,13 @@ const MainLayout: React.FC = () => {
 
     const totalToDownload = tracksToDownload.length;
     if (totalToDownload === 0) {
-      showToast("Todas las canciones del álbum ya están descargadas", "info");
+      showToast("All songs from this album are already downloaded", "info");
       setDownloadingAlbumId(null);
       return;
     }
 
     setDownloadProgress({ downloaded: 0, total: totalToDownload });
-    showToast(`Iniciando descarga de álbum (${totalToDownload} canciones)...`, "info");
+    showToast(`Starting album download (${totalToDownload} songs)...`, "info");
 
     const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("./services/musicApi");
     let downloadedCount = 0;
@@ -1520,18 +1511,18 @@ const MainLayout: React.FC = () => {
         });
         downloadedCount++;
         setDownloadProgress({ downloaded: downloadedCount, total: totalToDownload });
-        showToast(`Descargadas del álbum: ${downloadedCount}/${totalToDownload}`, "info");
+        showToast(`Downloaded from album: ${downloadedCount}/${totalToDownload}`, "info");
         await new Promise(resolve => setTimeout(resolve, 1200));
       } catch (e) {
-        console.warn(`Error descargando ${track.title}`, e);
-        showToast(`Error al descargar: ${track.title}`, "error");
+        console.warn(`Error downloading ${track.title}`, e);
+        showToast(`Failed to download: ${track.title}`, "error");
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
     setDownloadingAlbumId(null);
     setDownloadProgress(null);
-    showToast(`Álbum "${album.title}" descargado con éxito`, "success");
+    showToast(`Album "${album.title}" downloaded successfully`, "success");
   };
 
   const handleSaveAlbumAsPlaylist = async (album: Album, tracks: Track[]) => {
@@ -1545,7 +1536,7 @@ const MainLayout: React.FC = () => {
       }
     }
     if (!tracksToSave || tracksToSave.length === 0) {
-      showToast("El álbum no tiene canciones para guardar", "info");
+      showToast("This album has no songs to save", "info");
       return;
     }
     const newPlaylist: Playlist = {
@@ -1556,7 +1547,7 @@ const MainLayout: React.FC = () => {
     };
     const updated = [...playlists, newPlaylist];
     savePlaylists(updated);
-    showToast(`Álbum guardado como playlist "${album.title}"`, "success");
+    showToast(`Album saved as playlist "${album.title}"`, "success");
   };
 
   const handleAddAlbumTracksToPlaylist = async (playlistId: string, album: Album, tracks: Track[]) => {
@@ -1570,7 +1561,7 @@ const MainLayout: React.FC = () => {
       }
     }
     if (!tracksToAdd || tracksToAdd.length === 0) {
-      showToast("No hay canciones para añadir", "info");
+      showToast("No tracks to add", "info");
       return;
     }
     const target = playlists.find((p) => p.id === playlistId);
@@ -1582,7 +1573,7 @@ const MainLayout: React.FC = () => {
       .map((t) => ({ ...t, dateAdded: new Date().toISOString() }));
 
     if (newTracks.length === 0) {
-      showToast(`Todas las canciones del álbum ya están en "${target.name}"`, "info");
+      showToast(`All tracks from this album are already in "${target.name}"`, "info");
       return;
     }
 
@@ -1598,7 +1589,7 @@ const MainLayout: React.FC = () => {
     });
 
     savePlaylists(updated);
-    showToast(`Se añadieron ${newTracks.length} canciones de "${album.title}" a "${target.name}"`, "success");
+    showToast(`Added ${newTracks.length} songs from "${album.title}" to "${target.name}"`, "success");
     setAlbumToAddToPlaylist(null);
   };
 
@@ -1767,16 +1758,16 @@ const MainLayout: React.FC = () => {
 
   // Check for updates on mount
   useEffect(() => {
-    if (Capacitor.isNativePlatform()) {
-      checkForUpdates().then((info) => {
-        if (info && info.hasUpdate) {
+    checkForUpdates().then((info) => {
+      if (info && info.hasUpdate) {
+        const dismissed = sessionStorage.getItem(`ibrastream_dismissed_update_${info.latestVersion}`);
+        if (!dismissed) {
           setUpdateInfo(info);
           setShowUpdateModal(true);
         }
-      });
-      startAutoUpdatePolling(30); // Check every 30 minutes
-    }
-    fetchFeaturedContent();
+      }
+    });
+    startAutoUpdatePolling(30);
   }, []);
 
   // Check for shared track ID in URL on mount
@@ -1800,58 +1791,8 @@ const MainLayout: React.FC = () => {
     }
   }, []);
 
-  // Listen for deep link room codes and query params
+  // Listen for room code query params
   useEffect(() => {
-    // 1. Handle runtime URL open events (deep links)
-    const handleUrlOpen = (event: { url: string }) => {
-      console.log("App opened with URL:", event.url);
-      try {
-        const url = new URL(event.url);
-        let roomCode = "";
-        
-        if (url.protocol === "ibrastream:") {
-          roomCode = url.searchParams.get("room") || "";
-          if (!roomCode) {
-            const parts = url.pathname.split("/").filter(Boolean);
-            if (parts.length > 0) {
-              roomCode = parts[parts.length - 1];
-            } else if (url.host) {
-              roomCode = url.host;
-            }
-          }
-        } else {
-          roomCode = url.searchParams.get("room") || "";
-        }
-        
-        if (roomCode) {
-          const targetRoom = roomCode.trim().toUpperCase();
-          showToast(`Joining room: ${targetRoom}`, "info");
-          joinRoom(targetRoom);
-        }
-      } catch (err) {
-        console.error("Failed to parse app URL open event:", err);
-      }
-    };
-
-    // 2. Setup Capacitor deep link listener if native
-    let listenerPromise: Promise<{ remove: () => void }> | null = null;
-    if (Capacitor.isNativePlatform()) {
-      const setupListener = async () => {
-        const listener = await CapApp.addListener("appUrlOpen", handleUrlOpen);
-        try {
-          const launchUrl = await CapApp.getLaunchUrl();
-          if (launchUrl && launchUrl.url) {
-            handleUrlOpen({ url: launchUrl.url });
-          }
-        } catch (err) {
-          console.error("Failed to get launch URL:", err);
-        }
-        return listener;
-      };
-      listenerPromise = setupListener();
-    }
-
-    // 3. Handle standard web query params on initial load
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get("room");
     if (roomParam) {
@@ -1859,23 +1800,13 @@ const MainLayout: React.FC = () => {
       const timer = setTimeout(() => {
         showToast(`Joining Listen Together room: ${targetRoom}`, "info");
         joinRoom(targetRoom);
-        // Clear the URL parameter without reloading
         const newUrl = window.location.pathname + window.location.hash;
         window.history.replaceState(null, "", newUrl);
       }, 1000);
       return () => {
         clearTimeout(timer);
-        if (listenerPromise) {
-          listenerPromise.then((l) => l.remove());
-        }
       };
     }
-
-    return () => {
-      if (listenerPromise) {
-        listenerPromise.then((l) => l.remove());
-      }
-    };
   }, [joinRoom]);
 
   // Listen to auth state changes and get current session
@@ -1915,23 +1846,23 @@ const MainLayout: React.FC = () => {
       if (cloudData) {
         if (cloudData.favorites) {
           setFavorites(cloudData.favorites);
-          localStorage.setItem("ibrastream_favorites", JSON.stringify(cloudData.favorites));
+          StorageService.setItemSync("ibrastream_favorites", cloudData.favorites);
         }
         if (cloudData.playlists) {
           setPlaylists(cloudData.playlists);
-          localStorage.setItem("ibrastream_playlists", JSON.stringify(cloudData.playlists));
+          StorageService.setItemSync("ibrastream_playlists", cloudData.playlists);
         }
         if (cloudData.followedArtists) {
           setFollowedArtists(cloudData.followedArtists);
-          localStorage.setItem("ibrastream_followed_artists", JSON.stringify(cloudData.followedArtists));
+          StorageService.setItemSync("ibrastream_followed_artists", cloudData.followedArtists);
         }
         if (cloudData.themeSettings) {
           setThemeSettings(cloudData.themeSettings);
-          localStorage.setItem("ibrastream_theme_settings", JSON.stringify(cloudData.themeSettings));
+          StorageService.setItemSync("ibrastream_theme_settings", cloudData.themeSettings);
         }
         if (cloudData.accumulatedStats) {
           setAccumulatedStats(cloudData.accumulatedStats);
-          localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(cloudData.accumulatedStats));
+          StorageService.setItemSync("ibrastream_accumulated_stats", cloudData.accumulatedStats);
         }
         showToast("Settings synchronized from cloud!", "success");
       } else {
@@ -2466,25 +2397,25 @@ const MainLayout: React.FC = () => {
   const handlePlayPlaylist = (playlist: Playlist) => {
     recordPlaylistActivity(playlist.id);
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("La playlist está vacía", "info");
+      showToast("Playlist is empty", "info");
       return;
     }
     playTrack(playlist.tracks[0], playlist.tracks, playlist.id);
-    showToast(`Reproduciendo playlist "${playlist.name}"`, "success");
+    showToast(`Playing playlist "${playlist.name}"`, "success");
   };
 
   const handleAddPlaylistToQueue = (playlist: Playlist) => {
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("La playlist está vacía", "info");
+      showToast("Playlist is empty", "info");
       return;
     }
     playlist.tracks.forEach((track) => addToQueue(track));
-    showToast(`Añadidas ${playlist.tracks.length} canciones a la cola`, "success");
+    showToast(`Added ${playlist.tracks.length} songs to queue`, "success");
   };
 
   const handleMergePlaylists = (sourcePlaylist: Playlist, targetPlaylistId: string) => {
     if (!sourcePlaylist.tracks || sourcePlaylist.tracks.length === 0) {
-      showToast("No hay canciones para transferir", "info");
+      showToast("No songs to transfer", "info");
       return;
     }
     const target = playlists.find((p) => p.id === targetPlaylistId);
@@ -2494,7 +2425,7 @@ const MainLayout: React.FC = () => {
     const newTracks = sourcePlaylist.tracks.filter((t) => !existingIds.has(t.id));
 
     if (newTracks.length === 0) {
-      showToast(`Todas las canciones ya están en "${target.name}"`, "info");
+      showToast(`All songs are already in "${target.name}"`, "info");
       return;
     }
 
@@ -2506,24 +2437,24 @@ const MainLayout: React.FC = () => {
     });
 
     savePlaylists(updated);
-    showToast(`Se añadieron ${newTracks.length} canciones a "${target.name}"`, "success");
+    showToast(`Added ${newTracks.length} songs to "${target.name}"`, "success");
   };
 
   const handleToggleHidePlaylist = (playlistId: string) => {
     const updated = new Set(hiddenPlaylistIds);
     if (updated.has(playlistId)) {
       updated.delete(playlistId);
-      showToast("Playlist visible de nuevo", "info");
+      showToast("Playlist visible again", "info");
     } else {
       updated.add(playlistId);
-      showToast("Playlist oculta", "info");
+      showToast("Playlist hidden", "info");
     }
     saveHiddenPlaylistIds(updated);
   };
 
   const handleTogglePlaylistExplicit = (playlist: Playlist, makeExplicit: boolean) => {
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("La playlist no tiene canciones", "info");
+      showToast("Playlist has no songs", "info");
       return;
     }
     const updatedExplicit = new Set(explicitTrackIds);
@@ -2538,8 +2469,8 @@ const MainLayout: React.FC = () => {
     saveExplicitTrackIds(updatedExplicit);
     showToast(
       makeExplicit
-        ? `Playlist "${playlist.name}" cambiada a Explicit 🔞`
-        : `Playlist "${playlist.name}" cambiada a Safe / Clean`,
+        ? `Playlist "${playlist.name}" switched to Explicit 🔞`
+        : `Playlist "${playlist.name}" switched to Safe / Clean`,
       "success"
     );
   };
@@ -3236,7 +3167,7 @@ const MainLayout: React.FC = () => {
                           onClick={() => setVisibleArtistTracksCount(prev => prev + 10)}
                           className="mt-4 py-2.5 px-6 self-center rounded-full bg-white/5 hover:bg-white/10 text-xs font-semibold text-gray-300 hover:text-white transition-all border border-white/5 hover:border-white/10"
                         >
-                          Ver más
+                          View more
                         </button>
                       )}
                     </div>
@@ -3338,7 +3269,7 @@ const MainLayout: React.FC = () => {
                           ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
                           : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
                       }`}
-                      title={downloadingAlbumId === selectedAlbum.id ? "Descargando álbum..." : "Descargar álbum"}
+                      title={downloadingAlbumId === selectedAlbum.id ? "Downloading album..." : "Download album"}
                     >
                       {downloadingAlbumId === selectedAlbum.id ? (
                         <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
@@ -3353,10 +3284,10 @@ const MainLayout: React.FC = () => {
                         setAlbumToAddToPlaylist({ album: selectedAlbum, tracks: albumTracks });
                       }}
                       className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 text-xs font-semibold transition-all border border-white/10 active:scale-95"
-                      title="Añadir canciones del álbum a una playlist existente"
+                      title="Add album tracks to an existing playlist"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>Añadir a playlist</span>
+                      <span>Add to playlist</span>
                     </button>
                     <button
                       onClick={(e) => {
@@ -3365,10 +3296,10 @@ const MainLayout: React.FC = () => {
                         handleSaveAlbumAsPlaylist(selectedAlbum, albumTracks);
                       }}
                       className="px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 text-xs font-semibold transition-all border border-white/10 active:scale-95"
-                      title="Crear una nueva playlist con este álbum"
+                      title="Create a new playlist with this album"
                     >
                       <ListMusic className="w-4 h-4" />
-                      <span>Guardar como playlist</span>
+                      <span>Save as playlist</span>
                     </button>
                   </div>
                 </div>
@@ -3509,9 +3440,9 @@ const MainLayout: React.FC = () => {
                           ? "bg-white/15 text-white border-white/30"
                           : "border-white/10 hover:border-white/20 text-gray-400 hover:text-white"
                       }`}
-                      title={showHiddenPlaylists ? "Ocultar playlists escondidas" : "Ver playlists ocultas"}
+                      title={showHiddenPlaylists ? "Hide hidden playlists" : "View hidden playlists"}
                     >
-                      {showHiddenPlaylists ? "Ocultar archivadas" : `Ver ocultas (${hiddenPlaylistIds.size})`}
+                      {showHiddenPlaylists ? "Hide archived" : `View hidden (${hiddenPlaylistIds.size})`}
                     </button>
                   )}
                   <button
@@ -3667,41 +3598,19 @@ const MainLayout: React.FC = () => {
 
                   <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-br from-brand-accent/10 to-transparent border border-white/5 flex flex-col md:flex-row gap-6 items-center">
                     <div
-                      className={`w-28 h-28 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center relative shadow-lg overflow-hidden ${isOwnPlaylist ? "group cursor-pointer" : ""}`}
+                      className={`w-44 h-44 sm:w-52 sm:h-52 md:w-60 md:h-60 rounded-2xl md:rounded-3xl bg-white/5 border border-white/10 flex items-center justify-center relative shadow-2xl shadow-black/60 overflow-hidden shrink-0 ${isOwnPlaylist ? "group cursor-pointer" : ""}`}
                       onClick={() => isOwnPlaylist && document.getElementById("playlist-cover-upload")?.click()}
                       title={isOwnPlaylist ? "Click to upload custom cover photo" : undefined}
                     >
                       {selectedPlaylist.coverUrl || (selectedPlaylist.tracks && selectedPlaylist.tracks.length > 0 && selectedPlaylist.tracks[0].thumbnail) ? (
-                        <img src={selectedPlaylist.coverUrl || selectedPlaylist.tracks[0].thumbnail} className="w-full h-full object-cover" alt="Playlist cover" />
+                        <img src={selectedPlaylist.coverUrl || selectedPlaylist.tracks[0].thumbnail} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="Playlist cover" />
                       ) : (
-                        <ListMusic className="w-12 h-12 text-brand-accent" />
+                        <ListMusic className="w-20 h-20 text-brand-accent/70" />
                       )}
                       {isOwnPlaylist && (
-                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <Plus className="w-6 h-6 text-white mb-1" />
-                          <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change Cover</span>
-                          {((Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined))) && (
-                            <button
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                if (!selectedPlaylist) return;
-                                await handleDownloadPlaylist(selectedPlaylist);
-                              }}
-                              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border active:scale-95 shrink-0 ${
-                                downloadingPlaylistId === selectedPlaylist.id
-                                  ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
-                                  : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
-                              }`}
-                              title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
-                              disabled={downloadingPlaylistId === selectedPlaylist.id}
-                            >
-                              {downloadingPlaylistId === selectedPlaylist.id ? (
-                                <div className="w-5 h-5 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <Download className="w-5 h-5" />
-                              )}
-                            </button>
-                          )}
+                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-[2px]">
+                          <Plus className="w-8 h-8 text-white mb-1.5" />
+                          <span className="text-[11px] font-bold text-white uppercase tracking-wider">Change Cover</span>
                         </div>
                       )}
                     </div>
@@ -3724,37 +3633,41 @@ const MainLayout: React.FC = () => {
                         }}
                       />
                     )}
-                    <div className="flex-1 text-center md:text-left">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-brand-accent">Playlist</span>
+                    <div className="flex-1 text-center md:text-left min-w-0 flex flex-col justify-center">
+                      <span className="text-xs font-bold uppercase tracking-widest text-brand-accent">Playlist</span>
                       {editingPlaylistId === selectedPlaylist.id ? (
                         <div className="flex items-center gap-2 mt-2 max-w-md mx-auto md:mx-0">
                           <input
                             type="text"
                             value={editingPlaylistName}
                             onChange={(e) => setEditingPlaylistName(e.target.value)}
-                            className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-brand-accent"
+                            className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white text-base focus:outline-none focus:border-brand-accent"
                           />
                           <button
                             onClick={() => handleRenamePlaylist(selectedPlaylist.id, editingPlaylistName)}
-                            className="px-3 py-1.5 bg-brand-accent text-black rounded-xl text-xs font-bold"
+                            className="px-3.5 py-1.5 bg-brand-accent text-black rounded-xl text-xs font-bold"
                           >
                             Save
                           </button>
                           <button
                             onClick={() => setEditingPlaylistId(null)}
-                            className="px-3 py-1.5 border border-white/10 text-gray-400 rounded-xl text-xs"
+                            className="px-3.5 py-1.5 border border-white/10 text-gray-400 rounded-xl text-xs"
                           >
                             Cancel
                           </button>
                         </div>
                       ) : (
-                        <h3 className="text-xl md:text-3xl font-extrabold text-white mt-1">{selectedPlaylist.name}</h3>
+                        <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black text-white mt-1.5 tracking-tight break-words line-clamp-2">
+                          {selectedPlaylist.name}
+                        </h1>
                       )}
-                      <p className="text-xs text-gray-400 mt-2">{selectedPlaylist.tracks.length} Songs</p>
+                      <p className="text-sm md:text-base font-medium text-gray-400 mt-2.5">
+                        {selectedPlaylist.tracks.length} {selectedPlaylist.tracks.length === 1 ? "Song" : "Songs"}
+                      </p>
                       {downloadingPlaylistId === selectedPlaylist.id && downloadProgress && (
-                        <div className="mt-3 flex flex-col gap-1.5 max-w-[200px] mx-auto md:mx-0">
-                          <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-brand-accent">
-                            <span>Descargando...</span>
+                        <div className="mt-3 flex flex-col gap-1.5 max-w-[220px] mx-auto md:mx-0">
+                          <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-brand-accent">
+                            <span>Downloading...</span>
                             <span>{downloadProgress.downloaded} / {downloadProgress.total}</span>
                           </div>
                           <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden border border-white/5">
@@ -3766,7 +3679,7 @@ const MainLayout: React.FC = () => {
                         </div>
                       )}
                       {selectedPlaylist.tracks.length > 0 && (
-                        <div className="flex items-center gap-4 mt-4 justify-center md:justify-start">
+                        <div className="flex items-center gap-4 mt-6 justify-center md:justify-start">
                           <button
                             onClick={() => {
                               const filtered = selectedPlaylist.tracks.filter(track =>
@@ -3812,7 +3725,7 @@ const MainLayout: React.FC = () => {
                                   ? "bg-brand-accent/25 border-brand-accent text-brand-accent animate-pulse"
                                   : "bg-white/10 hover:bg-white/20 border-white/10 text-white"
                               }`}
-                              title={downloadingPlaylistId === selectedPlaylist.id ? "Descargando..." : "Download playlist"}
+                              title={downloadingPlaylistId === selectedPlaylist.id ? "Downloading..." : "Download playlist"}
                               disabled={downloadingPlaylistId === selectedPlaylist.id}
                             >
                               {downloadingPlaylistId === selectedPlaylist.id ? (
@@ -3861,8 +3774,8 @@ const MainLayout: React.FC = () => {
                       if (playlistTracks.length === 0) {
                         return (
                           <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
-                            <p className="font-semibold text-gray-400">No hay canciones descargadas en esta lista</p>
-                            <p className="text-xs text-gray-600 mt-1">Desactiva el filtro "Solo canciones descargadas" en Ajustes para ver todas.</p>
+                            <p className="font-semibold text-gray-400">No downloaded songs in this playlist</p>
+                            <p className="text-xs text-gray-600 mt-1">Turn off "Downloaded tracks only" in Settings to view all tracks.</p>
                           </div>
                         );
                       }
@@ -4065,6 +3978,7 @@ const MainLayout: React.FC = () => {
                                       isExplicit={isTrackExplicit(track.id)}
 
                                       onOpenArtist={handleOpenArtist}
+                                      onOpenAlbum={handleOpenAlbum}
                                       onAddToPlaylist={handleOpenAddToPlaylist}
                                       trackIndex={idx + 1}
                                       onContextMenu={(e) => handleTrackContextMenu(e, track, selectedPlaylist?.id)}
@@ -4156,9 +4070,9 @@ const MainLayout: React.FC = () => {
                               </h3>
                               <p className="text-[10px] text-gray-500 mt-1">{playlist.tracks.length} Songs</p>
                             </div>
-                          </div>
-                          );
-                        })}
+                          </div>
+                          );
+                        })}
                       </div>
                     );
                   })()}
@@ -4781,8 +4695,8 @@ const MainLayout: React.FC = () => {
                 if (favTracks.length === 0) {
                   return (
                     <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
-                      <p className="font-semibold text-gray-400">No hay canciones descargadas en tus favoritos</p>
-                      <p className="text-xs text-gray-600 mt-1">Desactiva el filtro "Solo canciones descargadas" en Ajustes para ver todas.</p>
+                      <p className="font-semibold text-gray-400">No downloaded songs in your favorites</p>
+                      <p className="text-xs text-gray-600 mt-1">Turn off "Downloaded tracks only" in Settings to view all tracks.</p>
                     </div>
                   );
                 }
@@ -4899,6 +4813,7 @@ const MainLayout: React.FC = () => {
                               isFavorite={true}
                                isExplicit={isTrackExplicit(track.id)}
                               onOpenArtist={handleOpenArtist}
+                              onOpenAlbum={handleOpenAlbum}
                               onAddToPlaylist={handleOpenAddToPlaylist}
                               onContextMenu={(e) => handleTrackContextMenu(e, track, "favorites")}
                               playlistId="favorites"
@@ -5846,7 +5761,7 @@ const MainLayout: React.FC = () => {
                         <button
                           onClick={() => {
                             setSaveQueueMode(true);
-                            setNewPlaylistName("Cola de reproducción");
+                            setNewPlaylistName("Play Queue");
                             setShowPlaylistCreateModal(true);
                           }}
                           className="p-1.5 text-[10px] text-brand-accent hover:text-black hover:bg-brand-accent transition-all flex items-center gap-1 font-semibold border border-brand-accent/30 rounded-lg bg-brand-accent/10 px-2"
@@ -6101,7 +6016,7 @@ const MainLayout: React.FC = () => {
                         <button
                           onClick={() => {
                             setSaveQueueMode(true);
-                            setNewPlaylistName("Cola de reproducción");
+                            setNewPlaylistName("Play Queue");
                             setShowPlaylistCreateModal(true);
                           }}
                           className="px-2.5 py-1.5 rounded-full border border-brand-accent/30 bg-brand-accent/15 text-brand-accent hover:bg-brand-accent hover:text-black text-[10px] font-bold transition-all flex items-center gap-1"
@@ -6678,9 +6593,9 @@ const MainLayout: React.FC = () => {
               </button>
               
               <div>
-                <h3 className="text-sm font-bold text-white pr-6 text-left">Añadir álbum a playlist</h3>
+                <h3 className="text-sm font-bold text-white pr-6 text-left">Add album to playlist</h3>
                 <p className="text-[11px] text-gray-400 text-left mt-0.5 truncate">
-                  {albumToAddToPlaylist.album.title} • {(albumToAddToPlaylist.tracks.length > 0 ? albumToAddToPlaylist.tracks.length : albumTracks.length > 0 ? albumTracks.length : (albumToAddToPlaylist.album.numberOfTracks || 0))} canciones
+                  {albumToAddToPlaylist.album.title} • {(albumToAddToPlaylist.tracks.length > 0 ? albumToAddToPlaylist.tracks.length : albumTracks.length > 0 ? albumTracks.length : (albumToAddToPlaylist.album.numberOfTracks || 0))} tracks
                 </p>
               </div>
 
@@ -6689,7 +6604,7 @@ const MainLayout: React.FC = () => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
                 <input
                   type="text"
-                  placeholder="Buscar playlist..."
+                  placeholder="Search playlist..."
                   value={playlistSearchQuery}
                   onChange={(e) => setPlaylistSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 rounded-xl bg-white/5 border border-white/5 focus:border-brand-accent/50 text-white text-xs placeholder:text-gray-500 focus:outline-none transition-all"
@@ -6706,18 +6621,18 @@ const MainLayout: React.FC = () => {
                 className="flex items-center gap-2 px-1 text-xs font-bold text-brand-accent hover:underline transition-all text-left"
               >
                 <Plus className="w-4 h-4" />
-                Crear nueva playlist con este álbum
+                Create new playlist with this album
               </button>
 
               {/* List of playlists */}
               <div className="flex flex-col gap-2 max-h-[35vh] overflow-y-auto pr-1">
                 {playlists.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-4 text-center">No hay playlists creadas aún.</p>
+                  <p className="text-xs text-gray-500 py-4 text-center">No playlists created yet.</p>
                 ) : (() => {
                   const filtered = playlists.filter(p => p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()));
 
                   if (filtered.length === 0) {
-                    return <p className="text-xs text-gray-500 py-4 text-center">No se encontraron playlists.</p>;
+                    return <p className="text-xs text-gray-500 py-4 text-center">No playlists found.</p>;
                   }
 
                   return filtered.map(playlist => (
@@ -6736,7 +6651,7 @@ const MainLayout: React.FC = () => {
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-white text-xs font-bold">{playlist.name}</p>
-                          <p className="text-[10px] text-gray-400 mt-0.5">{playlist.tracks.length} canciones</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">{playlist.tracks.length} tracks</p>
                         </div>
                       </div>
                       <Plus className="w-4 h-4 text-gray-400 group-hover:text-brand-accent transition-colors shrink-0 ml-2" />
@@ -7011,7 +6926,12 @@ const MainLayout: React.FC = () => {
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 select-none animate-fadeIn backdrop-blur-md">
             <div className="bg-[#121212] border border-white/10 w-full max-w-md rounded-[var(--app-radius-xl)] p-6 shadow-2xl relative">
               <button 
-                onClick={() => setShowUpdateModal(false)}
+                onClick={() => {
+                  if (updateInfo) {
+                    sessionStorage.setItem(`ibrastream_dismissed_update_${updateInfo.latestVersion}`, "true");
+                  }
+                  setShowUpdateModal(false);
+                }}
                 className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 hover:bg-white/5 rounded-full transition-all"
               >
                 <X className="w-5 h-5" />
@@ -7037,7 +6957,12 @@ const MainLayout: React.FC = () => {
 
                 <div className="flex w-full gap-3">
                   <button
-                    onClick={() => setShowUpdateModal(false)}
+                    onClick={() => {
+                      if (updateInfo) {
+                        sessionStorage.setItem(`ibrastream_dismissed_update_${updateInfo.latestVersion}`, "true");
+                      }
+                      setShowUpdateModal(false);
+                    }}
                     className="flex-1 py-2.5 rounded-full border border-white/10 hover:bg-white/5 text-xs font-semibold text-gray-400 hover:text-white transition-all"
                   >
                     Later
@@ -7599,7 +7524,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
         >
           <ListMusic className="w-4.5 h-4.5" />
         </button>
-        {!isAndroid && (
+        {true && (
           <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
             <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
               {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}

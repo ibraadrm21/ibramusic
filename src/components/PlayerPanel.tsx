@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
-  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock, Waves
+  Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock, Waves,
+  ListMusic, Trash2, ArrowUp, ArrowDown
 } from "lucide-react";
 import { useAudio, useAudioProgress } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
-import { Capacitor } from "@capacitor/core";
 import { animate } from "animejs";
-
-const isAndroid = Capacitor.getPlatform() === "android";
-const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
 
 interface PlayerPanelProps {
   onToggleFavorite?: (track: Track) => void;
@@ -74,6 +71,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     queue,
     currentIndex,
     playTrack,
+    removeFromQueue,
+    clearQueue,
+    reorderQueue,
     roomId,
     isHost,
     sleepTimerRemaining,
@@ -89,7 +89,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
   const [sliderVal, setSliderVal] = useState<number>(0);
   const [artistPic, setArtistPic] = useState<string>("");
-  const [view, setView] = useState<"info" | "lyrics">("info");
+  const [view, setView] = useState<"info" | "lyrics" | "queue">("info");
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [plainLyrics, setPlainLyrics] = useState<string>("");
   const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
@@ -330,7 +330,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
       </div>
 
-      {/* Main Content Area: Album Art or Lyrics */}
+      {/* Main Content Area: Album Art, Lyrics, or Queue */}
       {view === "info" ? (
         <div className="flex-1 shrink flex flex-col items-center justify-center my-2 relative w-full overflow-hidden">
           <div className="relative group w-64 sm:w-72 md:w-80 max-w-full aspect-square rounded-none overflow-hidden shrink z-10">
@@ -360,7 +360,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             </div>
           </div>
         </div>
-      ) : (
+      ) : view === "lyrics" ? (
         /* Synced Lyrics Container */
         <div className="flex-1 flex flex-col my-4 min-h-0 relative z-10">
           {isLoadingLyrics ? (
@@ -373,11 +373,11 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
               {/* Sync offset controls pill */}
               <div className="flex justify-center mb-3 shrink-0">
                 <div className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1 rounded-full text-xs font-semibold text-gray-400 transition-all select-none backdrop-blur-md">
-                  <span>Sincronizar:</span>
+                  <span>Sync:</span>
                   <button 
                     onClick={() => updateOffset(lyricsOffset - 0.5)}
                     className="hover:text-white px-1.5 font-bold cursor-pointer transition-colors"
-                    title="Adelantar letra 0.5s"
+                    title="Advance lyrics 0.5s"
                   >
                     -0.5s
                   </button>
@@ -387,21 +387,21 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                   <button 
                     onClick={() => updateOffset(lyricsOffset + 0.5)}
                     className="hover:text-white px-1.5 font-bold cursor-pointer transition-colors"
-                    title="Retrasar letra 0.5s"
+                    title="Delay lyrics 0.5s"
                   >
                     +0.5s
                   </button>
                   {lyricsOffset !== 0 && (
                     <button 
-                      onClick={() => updateOffset(0)}
-                      className="text-brand-accent hover:text-white pl-1 font-bold cursor-pointer transition-colors border-l border-white/10 ml-0.5"
-                      title="Restablecer"
-                    >
-                      Reset
-                    </button>
-                  )}
-                </div>
+                    onClick={() => updateOffset(0)}
+                    className="text-brand-accent hover:text-white pl-1 font-bold cursor-pointer transition-colors border-l border-white/10 ml-0.5"
+                    title="Reset"
+                  >
+                    Reset
+                  </button>
+                )}
               </div>
+            </div>
               
               <div 
                 ref={lyricsContainerRef}
@@ -440,6 +440,107 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
               <p className="text-xs text-gray-600">We couldn't find lyrics for this song on LRCLIB.</p>
             </div>
           )}
+        </div>
+      ) : (
+        /* Queue View Container */
+        <div className="flex-1 flex flex-col my-2 min-h-0 relative z-10 overflow-hidden">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/5">
+            <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-400">
+              Up Next ({Math.max(0, queue.length - 1)})
+            </span>
+            {queue.length > 1 && (
+              <button
+                onClick={clearQueue}
+                className="text-[10px] text-gray-400 hover:text-red-400 flex items-center gap-1 transition-colors font-medium px-2 py-0.5 rounded-md hover:bg-white/5"
+                title="Clear queue"
+              >
+                <Trash2 className="w-3 h-3" /> Clear queue
+              </button>
+            )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto flex flex-col gap-2 pr-1 scrollbar-thin scrollbar-thumb-white/10">
+            {/* Now Playing Header in Queue */}
+            <div className="p-2.5 rounded-xl bg-white/5 border border-brand-accent/20 flex items-center gap-3">
+              <img src={currentTrack.thumbnail} className="w-9 h-9 rounded-lg object-cover" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] font-bold uppercase text-brand-accent tracking-wider">Now Playing</span>
+                </div>
+                <h4 className="font-bold text-xs text-white truncate">{currentTrack.title}</h4>
+                <p className="text-[10px] text-gray-400 truncate">{currentTrack.artist}</p>
+              </div>
+              <div className="w-2 h-2 rounded-full bg-brand-accent animate-pulse mr-1" />
+            </div>
+
+            {/* Upcoming Queue Items */}
+            {queue.length <= 1 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-gray-500 gap-2">
+                <ListMusic className="w-8 h-8 text-gray-700" />
+                <p className="text-xs font-semibold text-gray-400">No more tracks in the queue</p>
+                <p className="text-[10px] text-gray-600">Add tracks using the context menu or play a playlist</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5 mt-2">
+                {queue.slice(1).map((track, i) => {
+                  const originalIdx = i + 1;
+                  return (
+                    <div
+                      key={`${track.id}-${i}`}
+                      className="group flex items-center gap-2.5 p-2 rounded-xl bg-white/[0.02] hover:bg-white/10 border border-white/5 hover:border-white/10 transition-all cursor-pointer"
+                      onClick={() => playTrack(track)}
+                    >
+                      <span className="text-[10px] font-bold text-gray-500 w-4 text-center shrink-0">
+                        {i + 1}
+                      </span>
+                      <img src={track.thumbnail} className="w-8 h-8 rounded-lg object-cover shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1">
+                          {track.isUserAdded && (
+                            <span className="text-[8px] bg-brand-accent/20 text-brand-accent px-1 rounded font-bold">
+                              User
+                            </span>
+                          )}
+                          <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
+                            {track.title}
+                          </h4>
+                        </div>
+                        <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
+                      </div>
+
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                        {i > 0 && (
+                          <button
+                            onClick={() => reorderQueue(originalIdx, originalIdx - 1)}
+                            className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10"
+                            title="Move up"
+                          >
+                            <ArrowUp className="w-3 h-3" />
+                          </button>
+                        )}
+                        {i < queue.length - 2 && (
+                          <button
+                            onClick={() => reorderQueue(originalIdx, originalIdx + 1)}
+                            className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10"
+                            title="Move down"
+                          >
+                            <ArrowDown className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => removeFromQueue(track.id)}
+                          className="p-1 text-gray-400 hover:text-red-400 rounded hover:bg-white/10"
+                          title="Remove from queue"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -623,26 +724,24 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         </div>
 
         {/* Volume Indicator */}
-        {!isAndroid && !isFlutter && (
-          <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
-            <button onClick={toggleMute} className="text-gray-400 hover:text-white">
-              {isMuted || volume === 0 ? (
-                <VolumeX className="w-4.5 h-4.5 text-brand-accent" />
-              ) : (
-                <Volume2 className="w-4.5 h-4.5" />
-              )}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={isMuted ? 0 : volume}
-              onChange={(e) => changeVolume(parseFloat(e.target.value))}
-              className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
-            />
-          </div>
-        )}
+        <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
+          <button onClick={toggleMute} className="text-gray-400 hover:text-white">
+            {isMuted || volume === 0 ? (
+              <VolumeX className="w-4.5 h-4.5 text-brand-accent" />
+            ) : (
+              <Volume2 className="w-4.5 h-4.5" />
+            )}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={isMuted ? 0 : volume}
+            onChange={(e) => changeVolume(parseFloat(e.target.value))}
+            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
+          />
+        </div>
       </div>
 
       {/* Artist Profile & Next Up Sections (Only visible in Overview tab) */}
@@ -681,7 +780,17 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
           {/* Next Up Card */}
           <div className="rounded-2xl bg-white/5 border border-white/5 p-3 flex flex-col gap-2">
-            <span className="text-[9px] font-extrabold uppercase tracking-widest text-gray-400">Next In Queue</span>
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] font-extrabold uppercase tracking-widest text-gray-400">Next In Queue</span>
+              {queue.length > 1 && (
+                <button
+                  onClick={() => setView("queue")}
+                  className="text-[10px] text-brand-accent hover:underline font-semibold"
+                >
+                  View all ({queue.length - 1})
+                </button>
+              )}
+            </div>
             {currentIndex >= 0 && currentIndex < queue.length - 1 ? (
               (() => {
                 const nextTrackItem = queue[currentIndex + 1];

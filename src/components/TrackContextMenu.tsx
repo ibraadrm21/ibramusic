@@ -214,7 +214,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
             <Download className="w-4 h-4 text-gray-400" />
           )}
           <span>
-            {downloadStatus.isDownloading ? "Descargando..." : downloadStatus.isDownloaded ? "Eliminar descarga" : "Descargar canción"}
+            {downloadStatus.isDownloading ? "Downloading..." : downloadStatus.isDownloaded ? "Remove download" : "Download song"}
           </span>
         </button>
       )}
@@ -236,7 +236,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Plus className="w-4 h-4 text-gray-400" />
-            Añadir a lista
+            Add to playlist
           </span>
           <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
         </button>
@@ -249,7 +249,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
             onMouseLeave={handleMouseLeavePlaylist}
           >
             {playlists.length === 0 ? (
-              <div className="px-4 py-2 text-gray-500 italic text-center">No hay listas creadas</div>
+              <div className="px-4 py-2 text-gray-500 italic text-center">No playlists created</div>
             ) : (
               playlists.map((playlist) => (
                 <button
@@ -279,7 +279,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 text-red-400 hover:text-red-300 transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <Trash2 className="w-4 h-4" />
-          Quitar de esta lista
+          Remove from this playlist
         </button>
       )}
 
@@ -292,7 +292,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <Heart className={`w-4 h-4 ${isFavorite ? "text-red-500 fill-red-500" : "text-gray-400"}`} />
-        {isFavorite ? "Eliminar de Canciones que te gustan" : "Añadir a Canciones que te gustan"}
+        {isFavorite ? "Remove from Liked Songs" : "Add to Liked Songs"}
       </button>
 
       {/* Toggle Explicit/Clean */}
@@ -303,21 +303,21 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
             onClose();
           }}
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
-          title={isExplicit ? "Reproducir versión Clean (sin censura desactivada)" : "Reproducir versión Explicit (con lenguaje explícito)"}
+          title={isExplicit ? "Play Clean version" : "Play Explicit version"}
         >
           {isExplicit ? (
             <>
               <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-green-500/20 text-[9px] font-bold text-green-400 shrink-0">
                 C
               </span>
-              <span>Cambiar a versión Clean</span>
+              <span>Switch to Clean version</span>
             </>
           ) : (
             <>
               <span className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-red-500/20 text-[9px] font-bold text-red-400 shrink-0">
                 E
               </span>
-              <span>Cambiar a versión Explicit</span>
+              <span>Switch to Explicit version</span>
             </>
           )}
         </button>
@@ -332,7 +332,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <ListPlus className="w-4 h-4 text-gray-400" />
-        Añadir a la cola
+        Add to queue
       </button>
 
       {/* Play Next */}
@@ -345,7 +345,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <Play className="w-4 h-4 text-gray-400" />
-          Reproducir a continuación
+          Play next
         </button>
       )}
 
@@ -359,7 +359,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
         >
           <User className="w-4 h-4 text-gray-400" />
-          Ir al artista
+          Go to artist
         </button>
       )}
 
@@ -373,11 +373,11 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
         >
           <Disc className="w-4 h-4 text-gray-400" />
-          Ir al álbum
+          Go to album
         </button>
       )}
 
-      {/* Share / Compartir */}
+      {/* Share */}
       <button
         onClick={() => {
           onShare();
@@ -386,7 +386,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-t border-white/5 mt-1 pt-2.5"
       >
         <Copy className="w-4 h-4 text-gray-400" />
-        Compartir
+        Share
       </button>
     </div>
   );

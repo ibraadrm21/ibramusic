@@ -1,24 +1,13 @@
 import type { Track } from "./musicApi";
 import { searchTracks, getArtistTracks } from "./musicApi";
-import { Capacitor, CapacitorHttp } from "@capacitor/core";
 
 // Dynamic similar artists cache (in-memory)
 const similarArtistsCache = new Map<string, string[]>();
 
 /**
- * Generic fetch with support for CapacitorHttp (native) and CORS proxy fallbacks (web browser).
+ * Generic fetch with support for CORS proxy fallbacks (web browser).
  */
 async function fetchDeezer(url: string): Promise<any> {
-  if (Capacitor.isNativePlatform()) {
-    try {
-      const response = await CapacitorHttp.get({ url });
-      if (response.status === 200) {
-        return typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-      }
-    } catch (e) {
-      console.warn("CapacitorHttp failed for Deezer API:", e);
-    }
-  }
 
   // Try direct fetch first (works if Deezer has permissive CORS or on local builds/extensions)
   try {

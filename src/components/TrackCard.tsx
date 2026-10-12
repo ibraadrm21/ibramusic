@@ -11,6 +11,7 @@ interface TrackCardProps {
   onToggleFavorite?: (track: Track) => void;
   isFavorite?: boolean;
   onOpenArtist?: (artist: any) => void;
+  onOpenAlbum?: (album: any) => void;
   onAddToPlaylist?: (track: Track, e: React.MouseEvent<HTMLButtonElement>) => void;
   trackIndex?: number;
   onContextMenu?: (e: React.MouseEvent, track: Track) => void;
@@ -26,6 +27,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
   onToggleFavorite,
   isFavorite = false,
   onOpenArtist,
+  onOpenAlbum,
   onAddToPlaylist,
   trackIndex,
   onContextMenu,
@@ -271,12 +273,12 @@ export const TrackCard = React.memo<TrackCardProps>(({
       onTouchEnd={handleTouchEnd}
       whileHover={{ x: 4 }}
       transition={{ type: "spring", stiffness: 300, damping: 25 }}
-      className={`group flex items-center justify-between md:grid md:grid-cols-10 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
+      className={`group flex items-center justify-between md:grid md:grid-cols-12 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
         isCurrent ? "bg-white/10 border-l-4 border-brand-accent" : "hover:bg-white/5 border-l-4 border-transparent"
       }`}
     >
-      {/* Col 1: Play button, Cover, Title & Sub-artist (visible on all screen widths) */}
-      <div className="flex items-center gap-3 md:gap-4 col-span-8 flex-1 min-w-0">
+      {/* Col 1: Play button, Cover, Title & Sub-artist (col-span-5 on md+) */}
+      <div className="flex items-center gap-3 md:gap-4 md:col-span-5 flex-1 min-w-0">
         {/* Index/Play button */}
         <div className="flex items-center justify-center w-8 shrink-0">
           <button
@@ -373,7 +375,55 @@ export const TrackCard = React.memo<TrackCardProps>(({
         </div>
       </div>
 
-      {/* Col 2: Actions & Duration */}
+      {/* Col 2: Album Name column (md:col-span-3, hidden on small screens) */}
+      <div className="hidden md:flex md:col-span-3 items-center min-w-0 pr-2">
+        <span
+          onClick={(e) => {
+            if (onOpenAlbum && (track.albumId || track.albumName)) {
+              e.stopPropagation();
+              onOpenAlbum({
+                id: track.albumId || `album-${track.albumName}`,
+                title: track.albumName || "Album",
+                artist: track.artist,
+                thumbnail: track.thumbnail
+              });
+            }
+          }}
+          className={`text-xs text-gray-400 truncate ${
+            onOpenAlbum && (track.albumId || track.albumName)
+              ? "hover:text-white hover:underline cursor-pointer transition-colors"
+              : ""
+          }`}
+          title={track.albumName || "—"}
+        >
+          {track.albumName || "—"}
+        </span>
+      </div>
+
+      {/* Col 3: Date Added column (md:col-span-2, hidden on small screens) */}
+      <div className="hidden md:flex md:col-span-2 items-center min-w-0 pr-2 text-xs text-gray-500 select-none">
+        <span className="truncate" title={track.dateAdded ? new Date(track.dateAdded).toLocaleDateString() : "—"}>
+          {(() => {
+            if (!track.dateAdded) return "—";
+            try {
+              const date = new Date(track.dateAdded);
+              if (isNaN(date.getTime())) return "—";
+              const now = new Date();
+              const diffMs = now.getTime() - date.getTime();
+              const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+              if (diffDays <= 0) return "Today";
+              if (diffDays === 1) return "Yesterday";
+              if (diffDays < 7) return `${diffDays} days ago`;
+              if (diffDays < 30) return `${Math.floor(diffDays / 7)} wk ago`;
+              return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+            } catch {
+              return "—";
+            }
+          })()}
+        </span>
+      </div>
+
+      {/* Col 4: Actions & Duration (md:col-span-2, aligns with remaining table cols) */}
       <div className="col-span-3 md:col-span-2 flex items-center justify-end gap-1.5 md:gap-2.5 shrink-0" onClick={(e) => e.stopPropagation()}>
         {/* Add to Playlist Button */}
         {onAddToPlaylist && (

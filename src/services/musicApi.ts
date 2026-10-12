@@ -1,5 +1,4 @@
-import { Innertube } from 'youtubei.js'; // Used for Android stream fallback
-import { Capacitor } from '@capacitor/core';
+import { Innertube } from 'youtubei.js';
 
 export interface Track {
   id: string;
@@ -71,7 +70,7 @@ export const switchToNextInstance = () => {
 };
 
 export const resolveUrl = (url: string): string => {
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  const isNative = false;
   if (!isNative && typeof window !== 'undefined') {
     if (url.startsWith("https://api.deezer.com")) {
       return url.replace("https://api.deezer.com", "/api-deezer");
@@ -173,7 +172,7 @@ export const sharedCustomFetch = async (input: RequestInfo | URL, init?: Request
     }
   }
 
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  const isNative = false;
   if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '') {
     if (url.startsWith("https://www.youtube.com")) {
       url = url.replace("https://www.youtube.com", "/youtube-com");
@@ -343,7 +342,7 @@ export async function fetchNative(url: string, options: any = {}) {
     });
   }
 
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  const isNative = false;
   if (isNative) {
     const { CapacitorHttp } = await import('@capacitor/core');
     const headers = options.headers || {};
@@ -396,7 +395,7 @@ export async function fetchNative(url: string, options: any = {}) {
 }
 
 export async function fetchDeezerApi(url: string): Promise<any> {
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  const isNative = false;
   if (isNative) {
     try {
       const res = await fetchNative(url, { timeout: 5000 });
@@ -1549,8 +1548,25 @@ export async function getYouTubeVideoId(track: Track, signal?: AbortSignal): Pro
     }
     const chosen = pickBestCandidate(contents);
     if (chosen && chosen.id) {
-      console.log(`[getYouTubeVideoId] Resolved videoId via Innertube: ${chosen.title} (${chosen.id}) [explicitRequested: ${isExplicitRequested}]`);
+      console.log(`[getYouTubeVideoId] Resolved videoId via Innertube Music: ${chosen.title} (${chosen.id}) [explicitRequested: ${isExplicitRequested}]`);
       return chosen.id;
+    }
+
+    // 1b. Fallback to standard YouTube search via Innertube (catches videos, lyric videos, audio uploads, remixes)
+    try {
+      const ytSearchRes = await yt.search(fallbackQuery, { type: 'video' });
+      const ytVideos: any[] = (ytSearchRes.videos as any) || (ytSearchRes.results as any) || [];
+      if (Array.isArray(ytVideos) && ytVideos.length > 0) {
+        const firstVid = ytVideos.find((v: any) => v && (v.id || v.video_id));
+        const foundId = firstVid ? (firstVid.id || firstVid.video_id) : undefined;
+        if (foundId) {
+          const vidTitle = firstVid.title?.text || (typeof firstVid.title === "string" ? firstVid.title : cleanTitle);
+          console.log(`[getYouTubeVideoId] Resolved videoId via Innertube YouTube search: ${vidTitle} (${foundId})`);
+          return foundId;
+        }
+      }
+    } catch (ytErr) {
+      console.warn("[getYouTubeVideoId] Innertube standard search failed:", ytErr);
     }
   } catch (err) {
     console.warn("[getYouTubeVideoId] Innertube resolution failed, trying Piped fallback:", err);
@@ -1781,7 +1797,7 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
       "https://api.cobalt.tools/"
     ];
   }
-  const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  const isNative = false;
 
   for (const endpoint of cobaltEndpoints) {
     try {
@@ -1854,7 +1870,7 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
 
 export async function resolveTidalTrackById(trackId: string): Promise<Track | null> {
   try {
-    const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+    const isNative = false;
     let url = `https://tidal.com/track/${trackId}`;
     if (!isNative && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
       url = `/api-tidal-track/track/${trackId}`;

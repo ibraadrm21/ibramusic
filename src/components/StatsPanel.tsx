@@ -156,7 +156,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ accumulatedStats, curren
   }, [currentUser, localStats.totalMinutes, currentMonth, prevMonth]);
 
   const handleShareStats = () => {
-    const text = `📊 Mis estadísticas de este mes en ibramusic:\n⏱️ ¡Escuché ${localStats.totalMinutes} minutos este mes!\n🔥 Top Canción: "${localStats.topTracks[0]?.track.title || "N/A"}" (${localStats.topTracks[0]?.minutes || 0} min)\n👑 Top Artista: ${localStats.topArtists[0]?.name || "N/A"} (${localStats.topArtists[0]?.minutes || 0} min)\n¿Y tú cuántas horas has metido?`;
+    const text = `📊 My monthly stats on ibramusic:\n⏱️ Listened to ${localStats.totalMinutes} minutes this month!\n🔥 Top Track: "${localStats.topTracks[0]?.track.title || "N/A"}" (${localStats.topTracks[0]?.minutes || 0} min)\n👑 Top Artist: ${localStats.topArtists[0]?.name || "N/A"} (${localStats.topArtists[0]?.minutes || 0} min)\nHow many hours did you listen to?`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
       showToast("Stats share link copied to clipboard!", "success");
@@ -183,7 +183,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ accumulatedStats, curren
         )}
       </div>
 
-      {/* Pinned "Desempleado del Mes" (Previous Month Winner) */}
+      {/* Pinned "Top Listener of the Month" (Previous Month Winner) */}
       {prevWinner && (
         <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-amber-600/20 via-yellow-600/10 to-transparent p-6 border border-yellow-500/20 flex items-center justify-between gap-6 shadow-xl shadow-yellow-950/10 animate-[scaleUp_0.4s_ease-out]">
           <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -196,11 +196,11 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ accumulatedStats, curren
             </div>
             <div>
               <span className="text-[10px] font-black tracking-widest text-yellow-400 uppercase block mb-1">
-                Desempleado del Mes 👑
+                Top Listener of the Month 👑
               </span>
               <h3 className="text-lg font-black text-white">{prevWinner.username}</h3>
               <p className="text-xs text-gray-400 mt-0.5">
-                Top listener of the previous month with <strong className="text-yellow-400">{(prevWinner.minutes).toLocaleString()} minutes</strong> wasted in music!
+                Top listener of the previous month with <strong className="text-yellow-400">{(prevWinner.minutes).toLocaleString()} minutes</strong> spent streaming music!
               </p>
             </div>
           </div>

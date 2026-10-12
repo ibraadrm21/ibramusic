@@ -185,11 +185,13 @@ export class StorageService {
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if (!k) continue;
-        // Check for recommendation caches, meta caches, heavy search history, or old big items
+        // Check for lyrics caches, recommendation caches, meta caches, heavy search history, or old big items
         if (
+          k.startsWith("ibrastream_lyrics_") ||
           k.startsWith("ibrastream_recommendation_") ||
           k.startsWith("ibrastream_meta_") ||
           k.startsWith("ibrastream_home_recommendations") ||
+          k.startsWith("ibrastream_lyric_offset_") ||
           k.includes("cache")
         ) {
           keysToRemove.push(k);
@@ -199,12 +201,17 @@ export class StorageService {
         localStorage.removeItem(key);
       }
 
-      // If still bloated, check if recently_played or history or other keys exceed 100KB
+      // If still bloated, check if any non-auth key exceeds 25KB
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if (!k) continue;
         const val = localStorage.getItem(k) || "";
-        if (val.length > 50000 && !k.startsWith("sb-") && k !== "ibrastream_queue") {
+        if (
+          val.length > 25000 &&
+          !k.startsWith("sb-") &&
+          k !== "ibrastream_playlists" &&
+          k !== "ibrastream_favorites"
+        ) {
           localStorage.removeItem(k);
         }
       }

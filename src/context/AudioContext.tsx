@@ -1,10 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
 import type { Track } from "../services/musicApi";
-import { getYouTubeVideoId, fetchNative } from "../services/musicApi";
-import { Capacitor, registerPlugin } from "@capacitor/core";
-import { App } from "@capacitor/app";
+import { getYouTubeVideoId } from "../services/musicApi";
 import { supabase } from "../services/supabaseClient";
-import { downloadService } from "../services/downloadService";
 import { StorageService } from "../services/storageService";
 
 declare global {
@@ -14,90 +11,8 @@ declare global {
   }
 }
 
-const isAndroid = Capacitor.getPlatform() === "android";
-const isFlutter = typeof window !== 'undefined' && (window as any).FlutterPlayerChannel !== undefined;
-const Media3Session = (Capacitor as any).Plugins?.Media3Session || registerPlugin<any>("Media3Session");
 
-function withTimeout<T>(promise: Promise<T>, ms: number, errorMessage = "Request timed out"): Promise<T> {
-  let timeoutId: any;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(errorMessage));
-    }, ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
-}
 
-async function validateStreamUrl(url: string, ms = 2500, signal?: AbortSignal): Promise<boolean> {
-  if (isAndroid) {
-    return true;
-  }
-  // 1. Try standard browser fetch (with GET + Range: bytes=0-0) first because it's CORS-safe for Piped/Cobalt and DOES NOT download the body unless we call .text()/.json()
-  try {
-    const res = await withTimeout(
-      fetch(url, {
-        method: "GET",
-        headers: { "Range": "bytes=0-0" },
-        signal
-      }),
-      ms,
-      "Browser validation timed out"
-    );
-    if (res.status === 200 || res.status === 206) {
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
-        return true;
-      }
-    }
-  } catch (e) {
-    console.warn("Standard fetch validation failed/timed out, trying native HEAD...", e);
-  }
-
-  // 2. Try native HEAD request via CapacitorHttp (bypasses CORS, does not download body)
-  try {
-    const res = await withTimeout(
-      fetchNative(url, {
-        method: "HEAD",
-        timeout: ms - 500
-      }),
-      ms,
-      "Native HEAD validation timed out"
-    );
-    if (res.status === 200 || res.status === 204 || res.status === 206) {
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
-        return true;
-      }
-    }
-  } catch (e) {
-    console.warn("Native HEAD validation failed/timed out, trying native GET with Range...", e);
-  }
-
-  // 3. Fallback to native GET request with Range, but only as last resort
-  try {
-    const res = await withTimeout(
-      fetchNative(url, {
-        method: "GET",
-        timeout: ms - 500,
-        headers: { "Range": "bytes=0-0" }
-      }),
-      ms,
-      "Native GET validation timed out"
-    );
-    if (res.status === 200 || res.status === 206) {
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
-        return true;
-      }
-    }
-  } catch (e) {
-    console.warn("All validation methods failed", e);
-  }
-
-  return false;
-}
 
 
 // Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
@@ -497,81 +412,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearInterval(interval);
   }, []);
 
-  // Electron Tray controls listener
-  useEffect(() => {
-    const isElectron = typeof window !== 'undefined' && (window as any).electronAPI !== undefined;
-    if (!isElectron) return;
-
-    const electronAPI = (window as any).electronAPI;
-
-    electronAPI.onTrayPlayPause(() => {
-      togglePlayRef.current?.();
-    });
-    electronAPI.onTrayNext(() => {
-      nextTrackRef.current?.();
-    });
-    electronAPI.onTrayPrev(() => {
-      prevTrackRef.current?.();
-    });
-  }, []);
-
-  // Update Discord Rich Presence (RPC) activity
-  const lastRPCStateRef = useRef({ trackId: "", isPlaying: false, seekTime: 0 });
-  useEffect(() => {
-    const isElectron = typeof window !== 'undefined' && (window as any).electronAPI !== undefined;
-    if (!isElectron) return;
-
-    const electronAPI = (window as any).electronAPI;
-
-    if (!currentTrack) {
-      if (lastRPCStateRef.current.trackId !== "") {
-        lastRPCStateRef.current = { trackId: "", isPlaying: false, seekTime: 0 };
-        electronAPI.clearDiscordPresence();
-      }
-      return;
-    }
-
-    const timeDiff = Math.abs(currentTime - lastRPCStateRef.current.seekTime);
-    const hasTrackChanged = lastRPCStateRef.current.trackId !== currentTrack.id;
-    const hasPlayingChanged = lastRPCStateRef.current.isPlaying !== isPlaying;
-    const hasSeeked = timeDiff > 3;
-
-    if (hasTrackChanged || hasPlayingChanged || hasSeeked) {
-      lastRPCStateRef.current = { trackId: currentTrack.id, isPlaying, seekTime: currentTime };
-      electronAPI.updateDiscordPresence({
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        currentTime,
-        duration,
-        isPlaying
-      });
-    }
-  }, [currentTrack, isPlaying, currentTime, duration]);
-
-  // Android: Sync the remaining queue natively to Media3Session
-  useEffect(() => {
-    if (isAndroid && queue.length > 0) {
-      const idx = currentTrack ? queue.findIndex(t => t.id === currentTrack.id) : -1;
-      const remainingQueue = idx !== -1 ? queue.slice(idx) : queue;
-      const slicedQueue = remainingQueue.slice(0, 15).map(track => {
-        const cached = resolutionCache.get(track.id);
-        return {
-          id: track.id,
-          title: track.title,
-          artist: track.artist,
-          thumbnail: track.thumbnail,
-          duration: track.duration,
-          streamUrl: cached?.streamUrl || ""
-        };
-      });
-      
-      console.log(`[Media3Session] Syncing native queue with ${slicedQueue.length} items`);
-      Media3Session.setQueue({ tracks: slicedQueue }).catch((err: any) => {
-        console.warn("Failed to sync native queue to Media3:", err);
-      });
-    }
-  }, [queue, currentTrack]);
-
   // Trigger pre-resolution of the next song in the queue immediately in background
   useEffect(() => {
     if (!currentTrack || queue.length === 0) return;
@@ -637,9 +477,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     localStorage.setItem("ibrastream_eq_preset", eqPreset);
-    if (isAndroid) {
-      Media3Session.setEqualizerPreset({ preset: eqPreset }).catch(() => {});
-    }
+    
   }, [eqPreset]);
 
   const startSleepTimer = (minutes: number) => {
@@ -728,7 +566,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Initialize Dual YouTube IFrame Players (Deck 0 and Deck 1)
   useEffect(() => {
-    if (isFlutter) return;
+    
 
     // Silent audio for Media Session background capability
     const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
@@ -879,49 +717,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Android: Poll progress
-  useEffect(() => {
-    if (isAndroid) {
-      const interval = window.setInterval(() => {
-        Media3Session.getPlaybackInfo().then((info: any) => {
-          setCurrentTime(info.position || 0);
-          setDuration(info.duration || 0);
-          setIsPlaying(info.isPlaying);
-          if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && info.duration > 0) {
-            try {
-              navigator.mediaSession.setPositionState({
-                duration: info.duration,
-                playbackRate: 1,
-                position: Math.min(info.position || 0, info.duration)
-              });
-            } catch {}
-          }
-          if (roomIdRef.current && isHostRef.current && Date.now() - lastBroadcastRef.current > 4000) {
-            lastBroadcastRef.current = Date.now();
-            broadcastState(info.position || 0, true, currentTrackRef.current);
-          }
-        }).catch(() => {});
-      }, 500);
-      return () => clearInterval(interval);
-    }
-  }, []);
-
   // Volume sync & ramping helper for Seamless Transitions
   const isFadingInRef = useRef<boolean>(false);
   const fadeInIntervalRef = useRef<any>(null);
 
   const applyHardwareVolume = (effectiveVolume: number, targetDeck?: 0 | 1) => {
-    const targetVol = isFlutter || isAndroid ? 1.0 : (isMuted ? 0 : Math.max(0, Math.min(1, effectiveVolume)));
-    if (isAndroid) {
-      Media3Session.setVolume({ volume: targetVol }).catch(() => {});
-    } else if (isFlutter) {
-      // Flutter handles hardware controls natively
-    } else {
-      const deck = targetDeck !== undefined ? targetDeck : activeDeckRef.current;
-      const player = ytPlayersRef.current[deck];
-      if (player && typeof player.setVolume === "function") {
-        player.setVolume(targetVol * 100);
-      }
+    const targetVol = isMuted ? 0 : Math.max(0, Math.min(1, effectiveVolume));
+    const deck = targetDeck !== undefined ? targetDeck : activeDeckRef.current;
+    const player = ytPlayersRef.current[deck];
+    if (player && typeof player.setVolume === "function") {
+      player.setVolume(targetVol * 100);
     }
   };
 
@@ -1331,15 +1136,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const handleTrackEnded = () => {
     if (isRepeatRef.current === "one") {
-      if (isAndroid) {
-        Media3Session.seek({ position: 0 });
-        Media3Session.setPlaybackState({ isPlaying: true });
-      } else {
-        const active = getActivePlayer();
-        if (active) {
-          active.seekTo(0, true);
-          active.playVideo();
-        }
+      const active = getActivePlayer();
+      if (active) {
+        active.seekTo(0, true);
+        active.playVideo();
       }
       setIsPlaying(true);
     } else {
@@ -1391,100 +1191,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         localStorage.removeItem("ibrastream_playing_playlist_id");
       }
-    } else if (newQueue && !isRemoteSync) {
-      setUserQueue([]);
-      setPlayingPlaylistId(null);
-      localStorage.removeItem("ibrastream_playing_playlist_id");
-    }
-
-    if (isFlutter && !isRemoteSync) {
-      setIsLoading(true);
-      let videoId = "";
-      try {
-        videoId = await getYouTubeVideoId(track, abortController.signal);
-        if (abortController.signal.aborted) return;
-      } catch (e) {
-        console.error("Failed to resolve videoId for Flutter:", e);
-        showToast(`Failed to play "${track.title}". Stream unavailable.`, "error");
-        setIsLoading(false);
-        setIsPlaying(false);
-        return;
-      }
-
-      const resolvedTrack = {
-        ...track,
-        id: `yt-${videoId}`
-      };
-
-      if (newQueue) {
-        setOriginalPlaylistQueue(newQueue);
-        if (isShuffle) {
-          const otherTracks = newQueue.filter(t => t.id !== track.id);
-          const shuffled = [resolvedTrack, ...shuffleArray(otherTracks)];
-          setPlaylistQueue(shuffled);
-          setPlaylistIndex(0);
-        } else {
-          setPlaylistQueue(newQueue);
-          const index = newQueue.findIndex(t => t.id === track.id);
-          setPlaylistIndex(index !== -1 ? index : 0);
-        }
-        setCurrentTrackSource('playlist');
-      } else {
-        if (currentTrack && currentTrack.id === track.id) {
-          // Same track, do nothing
-        } else {
-          const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
-          if (userQueueIdx !== -1) {
-            setUserQueue(prev => prev.slice(userQueueIdx + 1));
-            setCurrentTrackSource('user_queue');
-          } else {
-            const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
-            if (playlistIdx !== -1) {
-              setPlaylistIndex(playlistIdx);
-              setCurrentTrackSource('playlist');
-            } else {
-              setPlaylistQueue([resolvedTrack]);
-              setPlaylistIndex(0);
-              setCurrentTrackSource('playlist');
-            }
-          }
-        }
-      }
-      setCurrentTrack(resolvedTrack);
-      setIsPlaying(true);
-      setIsLoading(false);
-
-      const activeQueue = newQueue || queue;
-      // Pre-map activeQueue to ensure track IDs matched to cached videoIds are sent as "yt-videoId"
-      const mappedActiveQueue = activeQueue.map(t => {
-        if (t.id === track.id || t.id === resolvedTrack.id) return resolvedTrack;
-        const cached = resolutionCache.get(t.id);
-        if (cached && cached.videoId) {
-          return { ...t, id: `yt-${cached.videoId}` };
-        }
-        return t;
-      });
-
-      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
-        action: 'play',
-        track: {
-          id: resolvedTrack.id,
-          title: resolvedTrack.title,
-          artist: resolvedTrack.artist,
-          duration: resolvedTrack.duration,
-          thumbnail: resolvedTrack.thumbnail || ''
-        },
-        queue: mappedActiveQueue.map(t => {
-          return {
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            duration: t.duration,
-            thumbnail: t.thumbnail || ''
-          };
-        })
-      }));
-      return;
     }
 
     if (newQueue && !isRemoteSync) {
@@ -1492,13 +1198,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (isShuffle) {
         const otherTracks = newQueue.filter(t => t.id !== track.id);
         const shuffled = [track, ...shuffleArray(otherTracks)];
+        playlistQueueRef.current = shuffled;
+        playlistIndexRef.current = 0;
         setPlaylistQueue(shuffled);
         setPlaylistIndex(0);
       } else {
-        setPlaylistQueue(newQueue);
+        playlistQueueRef.current = newQueue;
         const index = newQueue.findIndex(t => t.id === track.id);
-        setPlaylistIndex(index !== -1 ? index : 0);
+        const targetIdx = index !== -1 ? index : 0;
+        playlistIndexRef.current = targetIdx;
+        setPlaylistQueue(newQueue);
+        setPlaylistIndex(targetIdx);
       }
+      currentTrackSourceRef.current = 'playlist';
       setCurrentTrackSource('playlist');
     } else if (!isRemoteSync) {
       if (currentTrack && currentTrack.id === track.id) {
@@ -1506,16 +1218,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         const userQueueIdx = userQueue.findIndex(t => t.id === track.id);
         if (userQueueIdx !== -1) {
-          setUserQueue(prev => prev.slice(userQueueIdx + 1));
+          const nextUQ = userQueue.slice(userQueueIdx + 1);
+          userQueueRef.current = nextUQ;
+          setUserQueue(nextUQ);
+          currentTrackSourceRef.current = 'user_queue';
           setCurrentTrackSource('user_queue');
         } else {
           const playlistIdx = playlistQueue.findIndex(t => t.id === track.id);
           if (playlistIdx !== -1) {
+            playlistIndexRef.current = playlistIdx;
             setPlaylistIndex(playlistIdx);
+            currentTrackSourceRef.current = 'playlist';
             setCurrentTrackSource('playlist');
           } else {
+            playlistQueueRef.current = [track];
+            playlistIndexRef.current = 0;
             setPlaylistQueue([track]);
             setPlaylistIndex(0);
+            currentTrackSourceRef.current = 'playlist';
             setCurrentTrackSource('playlist');
           }
         }
@@ -1553,9 +1273,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isTransitioningRef.current = false;
 
     // Stop current playing song immediately so user hears silence while loading next song
-    if (isAndroid) {
-      Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
-    } else {
       [0, 1].forEach(deck => {
         const p = ytPlayersRef.current[deck];
         if (p && typeof p.pauseVideo === "function") {
@@ -1565,27 +1282,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           } catch {}
         }
       });
-    }
-
-    // 1. Check for Offline Local File first
-    if (isAndroid) {
-      const localUri = await downloadService.getLocalUri(track.id);
-      if (localUri) {
-        console.log(`Playing offline version for: ${track.title}`);
-        await Media3Session.updateMetadata({
-          title: track.title,
-          artist: track.artist,
-          artwork: track.thumbnail,
-          duration: track.duration,
-          streamUrl: localUri,
-          mediaId: track.id
-        });
-        await Media3Session.setPlaybackState({ isPlaying: true });
-        setIsLoading(false);
-        setIsPlaying(true);
-        return;
-      }
-    }
 
     // Broadcast immediately if host
     if (roomIdRef.current && isHostRef.current) {
@@ -1601,9 +1297,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (cached && cached.videoId) {
         console.log(`[Cache Hit] Playing pre-resolved track: ${track.title} [key: ${cacheKey}]`);
         videoId = cached.videoId;
-        if (isAndroid && cached.streamUrl) {
-          streamUrl = cached.streamUrl;
-        }
+        
       } else {
         videoId = await getYouTubeVideoId(track, abortController.signal);
         if (abortController.signal.aborted) return;
@@ -1631,40 +1325,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.warn("Failed to fetch YouTube views:", e);
         }
       });
-
-      if (isAndroid) {
-        if (!streamUrl) {
-          try {
-            streamUrl = await getAndroidStreamUrl(videoId, track, abortController.signal);
-            if (abortController.signal.aborted) return;
-            setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
-          } catch (e) {
-            console.warn("Client-side stream resolution failed, falling back to PlaybackService native resolution:", e);
-            streamUrl = `https://ibrastream.resolve/yt-${videoId}/audio.mp3?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`;
-          }
-        }
-
-        console.log(`[Android Native] Playing via Media3/ExoPlayer: ${track.title}, streamUrl=${streamUrl}`);
-        await Media3Session.updateMetadata({
-          title: track.title,
-          artist: track.artist,
-          artwork: track.thumbnail,
-          duration: track.duration,
-          streamUrl,
-          mediaId: track.id
-        });
-        await Media3Session.setPlaybackState({ isPlaying: true });
-        setIsLoading(false);
-        setIsPlaying(true);
-        return;
-      }
-
-      // Web / Desktop / Non-Android: Load video via YouTube IFrame API
+      // Web: Load video via YouTube IFrame API
 
       let activePlayer = getActivePlayer();
       if (!activePlayer || typeof activePlayer.loadVideoById !== "function") {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        activePlayer = getActivePlayer();
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          activePlayer = getActivePlayer();
+          if (activePlayer && typeof activePlayer.loadVideoById === "function") {
+            break;
+          }
+        }
         if (!activePlayer || typeof activePlayer.loadVideoById !== "function") {
           throw new Error("YouTube Player not fully initialized.");
         }
@@ -1679,30 +1350,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       playbackExpectedRef.current = false;
       setIsPlaying(false);
       setIsLoading(false);
-      showToast(`Failed to play "${track.title}". Stream unavailable.`, "error");
-    }
-  };
+      showToast(`Cannot play "${track.title}". Skipping to next...`, "error");
 
-  const getAndroidStreamUrl = async (videoId: string, _track: Track, signal?: AbortSignal): Promise<string> => {
-    try {
-      console.log("Trying primary deciphering via youtubei.js (Innertube) for Android...");
-      const { getYouTubeAudioStream } = await import("../services/musicApi");
-      const url = await getYouTubeAudioStream(videoId);
-      if (url) {
-        console.log("Successfully got stream URL via youtubei.js on Android, validating accessibility natively...");
-        const isValid = await validateStreamUrl(url, 2500, signal);
-        if (isValid) {
-          console.log(`Stream URL validated successfully`);
-          return url;
-        } else {
-          throw new Error("Validation returned invalid response or hung");
-        }
+      // Auto-advance queue gracefully if upcoming track exists instead of stalling
+      const upcoming = getNextUpcomingTrack();
+      if (upcoming && upcoming.track.id !== track.id) {
+        setTimeout(() => {
+          nextTrackRef.current();
+        }, 1200);
       }
-    } catch (e) {
-      console.warn("youtubei.js/Cobalt stream resolution or validation failed on Android:", e);
     }
-
-    throw new Error("Failed to get playback stream URL.");
   };
 
   const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
@@ -1710,28 +1367,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     
     const cacheKey = getResolutionKey(track);
     const cached = resolutionCache.get(cacheKey) || resolutionCache.get(track.id);
-    if (cached && cached.videoId && cached.streamUrl) {
-      if (isAndroid) {
-        try {
-          const isValid = await validateStreamUrl(cached.streamUrl, 2500, signal);
-          if (isValid) {
-            await Media3Session.setNextMetadata({
-              title: track.title,
-              artist: track.artist,
-              artwork: track.thumbnail,
-              duration: track.duration,
-              streamUrl: cached.streamUrl,
-              mediaId: track.id
-            });
-            return;
-          }
-          cached.streamUrl = undefined;
-        } catch (e) {
-          cached.streamUrl = undefined;
-        }
-      } else {
-        return;
-      }
+    if (cached && cached.videoId) {
+      return;
     }
 
     try {
@@ -1747,9 +1384,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (signal?.aborted) return;
       let streamUrl: string | undefined;
       
-      if (isAndroid) {
-        streamUrl = await getAndroidStreamUrl(videoId, track, signal);
-      }
+      
       if (signal?.aborted) return;
       
       setResolutionCache(cacheKey, {
@@ -1759,20 +1394,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       console.log(`[Pre-Resolve] Pre-resolved track: ${track.title}`);
 
-      if (isAndroid && streamUrl) {
-        try {
-          await Media3Session.setNextMetadata({
-            title: track.title,
-            artist: track.artist,
-            artwork: track.thumbnail,
-            duration: track.duration,
-            streamUrl,
-            mediaId: track.id
-          });
-        } catch (e) {
-          console.warn("Failed to set native next metadata after resolution:", e);
-        }
-      }
+      
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         console.log(`[Pre-Resolve] Aborted pre-resolution for track: ${track.title}`);
@@ -1790,27 +1412,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (!currentTrack) return;
 
-    if (isFlutter) {
-      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
-        action: 'togglePlay'
-      }));
-      return;
-    }
+    
 
     const nextState = !isPlaying;
     playbackExpectedRef.current = nextState;
 
-    if (isAndroid) {
-      Media3Session.setPlaybackState({ isPlaying: nextState })
-        .catch((err: any) => console.error("Toggle play failed", err));
+    const active = getActivePlayer();
+    if (!active) return;
+    if (nextState) {
+      active.playVideo?.();
     } else {
-      const active = getActivePlayer();
-      if (!active) return;
-      if (nextState) {
-        active.playVideo?.();
-      } else {
-        active.pauseVideo?.();
-      }
+      active.pauseVideo?.();
     }
 
     setIsPlaying(nextState);
@@ -1825,12 +1437,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (isFlutter) {
-      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
-        action: 'next'
-      }));
-      return;
-    }
+    
     if (currentTrackRef.current) {
       setHistory(prev => [...prev.slice(-49), currentTrackRef.current!]);
     }
@@ -1854,9 +1461,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else {
       playbackExpectedRef.current = false;
       setIsPlaying(false);
-      if (isAndroid) {
-        Media3Session.setPlaybackState({ isPlaying: false }).catch(() => {});
-      }
+      
     }
   };
 
@@ -1869,12 +1474,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       seek(0);
       return;
     }
-    if (isFlutter) {
-      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
-        action: 'prev'
-      }));
-      return;
-    }
+    
 
     if (history.length > 0) {
       const prevTrk = history[history.length - 1];
@@ -1904,21 +1504,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
-    if (isFlutter) {
-      (window as any).FlutterPlayerChannel.postMessage(JSON.stringify({
-        action: 'seek',
-        seconds: time
-      }));
-      return;
-    }
-    if (isAndroid) {
-      Media3Session.seek({ position: time }).catch(() => {});
-    } else {
+    
+    
       const active = getActivePlayer();
       if (active && typeof active.seekTo === "function") {
         active.seekTo(time, true);
       }
-    }
+    
     setCurrentTime(time);
 
     if ("mediaSession" in navigator && "setPositionState" in navigator.mediaSession && duration > 0) {
@@ -1940,9 +1532,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const clamped = Math.max(0, Math.min(1, vol));
     setVolume(clamped);
     if (clamped > 0) setIsMuted(false);
-    if (isAndroid) {
-      Media3Session.setVolume({ volume: clamped === 0 || isMuted ? 0 : 1.0 }).catch(() => {});
-    }
+    
   };
 
   const toggleMute = () => setIsMuted(prev => !prev);
@@ -2375,12 +1965,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (remoteIsPlaying !== isPlayingRef.current) {
         playbackExpectedRef.current = remoteIsPlaying;
         if (remoteIsPlaying) {
-          if (isAndroid) Media3Session.setPlaybackState({ isPlaying: true });
-          else getActivePlayer()?.playVideo?.();
+          getActivePlayer()?.playVideo?.();
           setIsPlaying(true);
         } else {
-          if (isAndroid) Media3Session.setPlaybackState({ isPlaying: false });
-          else getActivePlayer()?.pauseVideo?.();
+          getActivePlayer()?.pauseVideo?.();
           setIsPlaying(false);
         }
       }
@@ -2416,108 +2004,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         supabase.removeChannel(channelRef.current);
       }
     };
-  }, []);
-
-  // Android: native Media3 listeners
-  useEffect(() => {
-    if (!isAndroid) return;
-    try {
-      Media3Session.addListener("onIsPlayingChanged", (data: { isPlaying: boolean }) => {
-        setIsPlaying(data.isPlaying);
-        if (data.isPlaying) setIsLoading(false);
-        if (roomIdRef.current && isHostRef.current) {
-          broadcastState(undefined, data.isPlaying, currentTrackRef.current, true);
-        }
-      });
-      Media3Session.addListener("onPlaybackReady", () => setIsLoading(false));
-      Media3Session.addListener("onPlaybackError", (data: { error: string }) => {
-        console.error("Native playback error:", data.error);
-        setIsLoading(false);
-        setIsPlaying(false);
-        showToast("Playback error: unable to play track", "error");
-      });
-      Media3Session.addListener("onPlaybackEnded", () => {
-        handleTrackEndedRef.current();
-      });
-      Media3Session.addListener("onMediaItemTransition", (data: { mediaId: string }) => {
-        console.log("Native listener: onMediaItemTransition:", data.mediaId);
-        const q = queueRef.current;
-        const targetTrack = q.find(t => t.id === data.mediaId);
-        if (targetTrack) {
-          const idx = q.findIndex(t => t.id === targetTrack.id);
-          setCurrentTrack(targetTrack);
-          
-          setUserQueue(prevUserQ => {
-            const userQueueIdx = prevUserQ.findIndex(t => t.id === targetTrack.id);
-            if (userQueueIdx !== -1) {
-              setCurrentTrackSource('user_queue');
-              return prevUserQ.slice(userQueueIdx + 1);
-            } else {
-              setPlaylistQueue(prevPlayQ => {
-                const playlistIdx = prevPlayQ.findIndex(t => t.id === targetTrack.id);
-                if (playlistIdx !== -1) {
-                  setPlaylistIndex(playlistIdx);
-                  setCurrentTrackSource('playlist');
-                }
-                return prevPlayQ;
-              });
-              return prevUserQ;
-            }
-          });
-
-          setIsPlaying(true);
-          setIsLoading(false);
-          
-          // Also pre-resolve the next track after this natively transitioned track
-          if (idx + 1 < q.length) {
-            const nextTrack = q[idx + 1];
-            preResolveTrack(nextTrack).catch(() => {});
-          }
-        }
-      });
-      Media3Session.addListener("onNotificationCommand", (data: { command: string; position?: number }) => {
-        if (data.command === "next") nextTrackRef.current();
-        else if (data.command === "previous") prevTrackRef.current();
-        else if (data.command === "seek" && data.position !== undefined) seek(data.position);
-      });
-    } catch (err) {
-      console.warn("Failed to register native listeners:", err);
-    }
-    return () => {
-      Media3Session.removeAllListeners().catch(() => {});
-    };
-  }, []);
-
-  // Android: when the app returns to foreground, check if we should be playing
-  // but the native player stopped (e.g. track ended while JS was throttled).
-  useEffect(() => {
-    if (!isAndroid) return;
-
-    let handle: any;
-    App.addListener("appStateChange", ({ isActive }) => {
-      if (!isActive) return; // going to background — ignore
-      // Give the WebView a moment to un-throttle, then check state
-      setTimeout(() => {
-        Media3Session.getPlaybackInfo().then((info: any) => {
-          const stoppedOrEnded = !info.isPlaying;
-          const hasQueue = queueRef.current.length > 0;
-          const hasTrack = !!currentTrackRef.current;
-          // If we have a queue but nothing is playing, advance to next track
-          if (stoppedOrEnded && hasQueue && hasTrack) {
-            // Only auto-advance if position is near the end (>95% done)
-            // to avoid accidentally skipping a user-paused track
-            const pos = info.position || 0;
-            const dur = info.duration || 0;
-            const nearEnd = dur > 0 && pos / dur > 0.95;
-            if (nearEnd) {
-              nextTrackRef.current();
-            }
-          }
-        }).catch(() => {});
-      }, 600);
-    }).then((h) => { handle = h; });
-
-    return () => { handle?.remove?.(); };
   }, []);
 
   const progressValue = React.useMemo(() => ({
@@ -2636,43 +2122,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onlyDownloaded,
     currentUser,
   ]);
-
-  // Listen to state changes from Flutter
-  useEffect(() => {
-    if (isFlutter) {
-      (window as any).onFlutterPlayerStateChanged = (state: any) => {
-        setIsPlaying(state.isPlaying);
-        setCurrentTime(state.position);
-        setDuration(state.duration);
-        
-        if (state.ended) {
-          handleTrackEndedRef.current();
-          return;
-        }
-
-        const videoId = (state.currentTrackId || '').replace('yt-', '');
-        if (videoId) {
-          const found = queueRef.current.find(t => t.id === videoId) || playlistQueue.find(t => t.id === videoId);
-          if (found) {
-            setCurrentTrack(found);
-          }
-        }
-        
-        if (state.queueIndex !== undefined && state.queueIndex !== null) {
-          const activeQueue = queueRef.current;
-          if (activeQueue && activeQueue[state.queueIndex]) {
-            setCurrentTrack(activeQueue[state.queueIndex]);
-            if (currentTrackSource === 'playlist') {
-              setPlaylistIndex(state.queueIndex);
-            }
-          }
-        }
-      };
-      return () => {
-        delete (window as any).onFlutterPlayerStateChanged;
-      };
-    }
-  }, [isFlutter, playlistQueue, currentTrackSource]);
 
   return (
     <AudioContext.Provider value={audioContextValue}>
