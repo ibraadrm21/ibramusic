@@ -208,70 +208,6 @@ export const sharedCustomFetch = async (input: RequestInfo | URL, init?: Request
     }
   }
 
-  if (isNative) {
-    const normalizedHeaders: Record<string, string> = {};
-    if (headers) {
-      for (const [key, val] of Object.entries(headers)) {
-        normalizedHeaders[key.toLowerCase()] = val;
-      }
-    }
-
-    let dataPayload = body;
-    const contentType = normalizedHeaders['content-type'];
-    if (typeof body === 'string' && contentType?.includes('application/json')) {
-      try {
-        dataPayload = JSON.parse(body);
-      } catch (e) {}
-    }
-
-    if (url.includes("youtubei.googleapis.com") || url.includes("youtube.com")) {
-      const isIOSClient = (typeof body === 'string' && body.includes('"clientName":"IOS"')) || 
-                          (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'IOS');
-      const isAndroidMusic = (typeof body === 'string' && body.includes('"clientName":"ANDROID_MUSIC"')) || 
-                             (dataPayload && dataPayload.context && dataPayload.context.client && dataPayload.context.client.clientName === 'ANDROID_MUSIC');
-      if (isIOSClient) {
-        normalizedHeaders["user-agent"] = "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)";
-      } else if (isAndroidMusic) {
-        normalizedHeaders["user-agent"] = "com.google.android.apps.youtube.music/7.02.52 (Linux; U; Android 12L; Build/SQ3A.220605.009.A1) gzip";
-      } else {
-        normalizedHeaders["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-      }
-    }
-
-    const { CapacitorHttp } = await import('@capacitor/core');
-    const response = await CapacitorHttp.request({
-      url,
-      method,
-      headers: normalizedHeaders,
-      data: dataPayload,
-      responseType: 'text'
-    });
-
-    const responseHeaders = new Headers();
-    if (response.headers) {
-      for (const [key, val] of Object.entries(response.headers)) {
-        responseHeaders.set(key, val as string);
-      }
-    }
-
-    const responseInstance = new Response(
-      typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
-      {
-        status: response.status,
-        headers: responseHeaders
-      }
-    );
-
-    Object.defineProperty(responseInstance, 'url', {
-      value: url,
-      writable: false,
-      configurable: true,
-      enumerable: true
-    });
-
-    return responseInstance;
-  }
-
   const upperMethod = method.toUpperCase();
   if (upperMethod === "GET" || upperMethod === "HEAD") {
     body = null;
@@ -290,14 +226,14 @@ export const getYoutubeClient = (): Promise<Innertube> => {
       fetch: sharedCustomFetch
     });
   }
-  return youtubeClientPromise;
+  return youtubeClientPromise!;
 };
 
 export const getYoutubeWebClient = (): Promise<Innertube> => {
   if (!youtubeWebClientPromise) {
     youtubeWebClientPromise = Innertube.create({ fetch: sharedCustomFetch });
   }
-  return youtubeWebClientPromise;
+  return youtubeWebClientPromise!;
 };
 
 // Helper to perform native-first requests to bypass CORS and auto-patching issues on Android
@@ -342,42 +278,8 @@ export async function fetchNative(url: string, options: any = {}) {
     });
   }
 
-  const isNative = false;
-  if (isNative) {
-    const { CapacitorHttp } = await import('@capacitor/core');
-    const headers = options.headers || {};
-    let dataPayload = options.body;
-    if (typeof options.body === 'string') {
-      try {
-        dataPayload = JSON.parse(options.body);
-      } catch (e) {}
-    }
-    const timeout = options.timeout || 4000;
-    const response = await CapacitorHttp.request({
-      url,
-      method: options.method || 'GET',
-      headers,
-      data: dataPayload,
-      responseType: 'text',
-      connectTimeout: timeout,
-      readTimeout: timeout
-    });
-    const responseHeaders = new Headers();
-    if (response.headers) {
-      for (const [key, val] of Object.entries(response.headers)) {
-        responseHeaders.set(key, val as string);
-      }
-    }
-    const res = new Response(
-      typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
-      {
-        status: response.status,
-        headers: responseHeaders
-      }
-    );
-    Object.defineProperty(res, 'url', { value: url });
-    return res;
-  } else {
+  // Native capacitor bypass for Web
+  {
     if (options.timeout) {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), options.timeout);
@@ -519,18 +421,18 @@ export async function checkTrackDualVersions(track: Track): Promise<boolean> {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     const cleanT = norm(cleanTitle);
 
-    const matches = songs.filter(s => {
+    const matches = songs.filter((s: any) => {
       const st = norm((s.title || '').replace(/\(.*?\)|\[.*?\]/g, ''));
       return st === cleanT || st.includes(cleanT) || cleanT.includes(st);
     });
 
-    const hasExplicit = matches.some(s => {
+    const hasExplicit = matches.some((s: any) => {
       const tl = (s.title || '').toLowerCase();
       const hasBadge = s.badges?.some((b: any) => b.label?.toLowerCase() === 'explicit');
       return hasBadge || tl.includes('explicit');
     });
 
-    const hasClean = matches.some(s => {
+    const hasClean = matches.some((s: any) => {
       const tl = (s.title || '').toLowerCase();
       const hasBadge = s.badges?.some((b: any) => b.label?.toLowerCase() === 'explicit');
       return !hasBadge && !tl.includes('explicit');
@@ -1797,36 +1699,14 @@ export async function getYouTubeAudioStream(videoId: string): Promise<string> {
       "https://api.cobalt.tools/"
     ];
   }
-  const isNative = false;
 
   for (const endpoint of cobaltEndpoints) {
     try {
       console.log(`[Downloader] Attempting stream resolution via Cobalt: ${endpoint}...`);
       let responseData: any = null;
 
-      if (isNative) {
-        const { CapacitorHttp } = await import('@capacitor/core');
-        const response = await CapacitorHttp.request({
-          url: endpoint,
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Origin': 'https://cobalt.tools',
-            'Referer': 'https://cobalt.tools/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          },
-          connectTimeout: 6000,
-          readTimeout: 6000,
-          data: {
-            url: `https://www.youtube.com/watch?v=${videoId}`,
-            downloadMode: 'audio',
-            audioFormat: 'mp3'
-          }
-        });
-        if (response.status === 200 && response.data) {
-          responseData = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
-        }
+      if (false) {
+        // Disabled native capacitor branch for web
       } else {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
