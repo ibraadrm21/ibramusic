@@ -2,6 +2,10 @@
   "outputDirectory": "web-build",
   "rewrites": [
     {
+      "source": "/api-spicylyrics/:path*",
+      "destination": "https://api.spicylyrics.org/:path*"
+    },
+    {
       "source": "/api-deezer/:path*",
       "destination": "https://api.deezer.com/:path*"
     }

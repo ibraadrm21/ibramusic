@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { X, Play, Pause, Share2, Sparkles, Clock, Music, User, RefreshCw, ArrowLeft, ArrowRight } from "lucide-react";
 import type { Track } from "../services/musicApi";
+import type { ListeningEntry } from "../services/listeningHistory";
+import { downloadFile } from "../services/libraryFiles";
+import { Modal } from "./Modal";
 
 interface WrappedModalProps {
   isOpen: boolean;
   onClose: () => void;
-  history: Track[];
+  entries: ListeningEntry[];
+  onSavePlaylist: (name: string, tracks: Track[]) => void;
 }
 
 // Music personalities descriptions
@@ -46,8 +50,11 @@ const MOCK_HISTORY: Track[] = [
   { id: "6", title: "Sweater Weather", artist: "The Neighbourhood", duration: 240, thumbnail: "https://i.scdn.co/image/ab67616d0000b27382c40c11f753229b48f65750", audioUrl: "" }
 ];
 
-export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, history: realHistory }) => {
+export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, entries, onSavePlaylist }) => {
   const [isDemo, setIsDemo] = useState(false);
+  const [year, setYear] = useState(new Date().getFullYear());
+  const years = [...new Set([new Date().getFullYear(), ...entries.map(item => new Date(item.at).getFullYear())])].sort((a, b) => b - a);
+  const period = useMemo(() => entries.filter(item => new Date(item.at).getFullYear() === year), [entries, year]);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -59,20 +66,14 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
   const startTimeRef = useRef<number>(Date.now());
   const pausedProgressRef = useRef<number>(0);
 
-  // Determine active dataset
-  const activeHistory = useMemo(() => {
-    if (isDemo || realHistory.length < 5) {
-      return MOCK_HISTORY;
-    }
-    return realHistory;
-  }, [realHistory, isDemo]);
+  const activeHistory = useMemo(() => isDemo ? MOCK_HISTORY : period.map(item => item.track), [period, isDemo]);
 
   // Compute Stats
   const stats = useMemo(() => {
     if (activeHistory.length === 0) return null;
 
     // Total counts
-    const totalSongs = activeHistory.length;
+    const totalSongs = isDemo ? activeHistory.length : period.filter(item => item.completed).length;
 
     // Track play counts
     const trackCounts: Record<string, { track: Track; count: number }> = {};
@@ -104,12 +105,12 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
 
     // Total Minutes Listened
     // If track has duration, sum it. Otherwise, assume average 3.2 minutes per song.
-    const totalSeconds = activeHistory.reduce((acc, curr) => acc + (curr.duration && curr.duration > 10 ? curr.duration : 192), 0);
-    const totalMinutes = Math.max(1, Math.round(totalSeconds / 60));
+    const totalSeconds = isDemo ? activeHistory.reduce((sum, track) => sum + track.duration, 0) : period.reduce((sum, entry) => sum + entry.seconds, 0);
+    const totalMinutes = Math.floor(totalSeconds / 60);
 
     // Personality classification
     const uniqueTracks = Object.keys(trackCounts).length;
-    const diversityRatio = uniqueTracks / totalSongs;
+    const diversityRatio = uniqueTracks / Math.max(1, activeHistory.length);
     
     let personality = PERSONALITIES[0]; // default Deep Diver
     if (diversityRatio > 0.6) {
@@ -130,7 +131,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
       personality,
       uniqueTracks
     };
-  }, [activeHistory]);
+  }, [activeHistory, isDemo, period]);
 
   // Handle slide progress
   useEffect(() => {
@@ -175,13 +176,12 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
   // Set isDemo correctly when modal opens based on history size
   useEffect(() => {
     if (isOpen) {
-      setIsDemo(realHistory.length < 5);
       setCurrentSlide(0);
       setProgress(0);
       setIsPlaying(true);
       pausedProgressRef.current = 0;
     }
-  }, [isOpen, realHistory]);
+  }, [isOpen, year, isDemo]);
 
   const handleNext = () => {
     if (currentSlide < totalSlides - 1) {
@@ -210,7 +210,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
 
   const handleShare = () => {
     if (!stats) return;
-    const text = `🎵 My Spotify Wrapped on ibramusic!\n⏱️ Listened to ${stats.totalMinutes} minutes of music!\n🏆 My top song: "${stats.topTracks[0]?.track.title}" by ${stats.topTracks[0]?.track.artist}\n👑 My top artist: ${stats.topArtists[0]?.name}\n✨ Music personality: ${stats.personality.name}\nDiscover your musical journey on ibramusic!`;
+    const text = `🎵 Mi Wrapped de IbraMusic\n⏱️ Listened to ${stats.totalMinutes} minutes of music!\n🏆 My top song: "${stats.topTracks[0]?.track.title}" by ${stats.topTracks[0]?.track.artist}\n👑 My top artist: ${stats.topArtists[0]?.name}\n✨ Music personality: ${stats.personality.name}\nDiscover your musical journey on ibramusic!`;
     
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -219,7 +219,42 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
     }
   };
 
-  if (!isOpen || !stats) return null;
+  if (!isOpen) return null;
+  if (!stats) return (
+    <Modal title={"Tu Wrapped " + year} onClose={onClose}>
+      <label className="flex gap-2">Año <select value={year} onChange={event => setYear(Number(event.target.value))} className="rounded-lg bg-brand-darkBg px-2">{years.map(value => <option key={value}>{value}</option>)}</select></label>
+      <p className="my-4 text-sm text-gray-300">Aún no hay escucha registrada para este año.</p>
+      <button className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black" onClick={() => setIsDemo(true)}>Ver demostración</button>
+    </Modal>
+  );
+
+  function saveImage() {
+    if (!stats) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 960;
+    canvas.height = 1200;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const gradient = ctx.createLinearGradient(0, 0, 960, 1200);
+    gradient.addColorStop(0, "#372063");
+    gradient.addColorStop(1, "#0f1118");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 76px system-ui";
+    ctx.fillText("IbraMusic", 64, 150);
+    ctx.font = "bold 58px system-ui";
+    ctx.fillText((isDemo ? "Demo · " : "") + "Wrapped " + year, 64, 250, 832);
+    ctx.font = "bold 112px system-ui";
+    ctx.fillText(String(stats.totalMinutes), 64, 470);
+    ctx.font = "38px system-ui";
+    ctx.fillText("minutos escuchados", 64, 540);
+    ctx.fillText("Canción más escuchada", 64, 720);
+    ctx.fillText(stats.topTracks[0]?.track.title ?? "—", 64, 792, 832);
+    ctx.fillText("Artista más escuchado", 64, 942);
+    ctx.fillText(stats.topArtists[0]?.name ?? "—", 64, 1014, 832);
+    canvas.toBlob(blob => { if (blob) downloadFile("IbraMusic-Wrapped-" + year + ".png", blob, "image/png"); }, "image/png");
+  }
 
   // Background color classes matching slides
   const bgGradients = [
@@ -232,7 +267,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md select-none text-white animate-[fadeIn_0.2s_ease]">
+    <div role="dialog" aria-modal="true" aria-label={"IbraMusic Wrapped " + year} onKeyDown={event => { if (event.key === "Escape") onClose(); }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md select-none text-white animate-[fadeIn_0.2s_ease]">
       {/* Container sizing matches mobile story frame */}
       <div className={`relative w-full h-full md:max-w-md md:h-[80vh] md:rounded-[36px] overflow-hidden flex flex-col shadow-2xl transition-all duration-700 ${bgGradients[currentSlide]} border border-white/5`}>
         
@@ -255,18 +290,23 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold tracking-widest uppercase bg-white/10 px-2 py-0.5 rounded-full border border-white/10 backdrop-blur-md flex items-center gap-1.5">
               <Sparkles className="w-3 h-3 text-brand-accent animate-spin" style={{ animationDuration: '4s' }} />
-              {isDemo ? "Demo Wrapped" : "Your Wrapped"}
+              {isDemo ? "Demo" : "Wrapped"}
             </span>
+            <select aria-label="Año de Wrapped" value={year} onChange={event => { setYear(Number(event.target.value)); setIsDemo(false); }} className="rounded-lg bg-black/30 px-2 py-1 text-xs text-white">{years.map(value => <option key={value}>{value}</option>)}</select>
+            {isDemo && <button className="text-xs underline" onClick={() => setIsDemo(false)}>Mis datos</button>}
           </div>
           
           <div className="flex items-center gap-3">
             <button 
+              aria-label={isPlaying ? "Pausar diapositivas" : "Continuar diapositivas"}
               onClick={togglePlayPause} 
               className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md flex items-center justify-center transition-all border border-white/10 active:scale-90"
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
             </button>
             <button 
+              autoFocus
+              aria-label="Cerrar Wrapped"
               onClick={onClose} 
               className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md flex items-center justify-center transition-all border border-white/10 active:scale-90"
             >
@@ -403,7 +443,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
                     </div>
                     <span className="text-xs font-black tracking-wider uppercase">ibramusic</span>
                   </div>
-                  <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">wrapped 2026</span>
+                  <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Wrapped {year}</span>
                 </div>
 
                 <div className="flex flex-col gap-3 relative z-10">
@@ -452,14 +492,16 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, his
               </div>
 
               {/* Action buttons */}
-              <div className="flex gap-3 mt-2 w-full">
+              <div className="flex flex-wrap gap-2 mt-2 w-full">
                 <button
                   onClick={handleShare}
                   className="flex-1 py-3 px-4 bg-brand-accent text-black font-extrabold text-xs rounded-2xl flex items-center justify-center gap-1.5 shadow-lg shadow-brand-accent/20 active:scale-95 transition-all hover:bg-brand-accent/90"
                 >
                   <Share2 className="w-3.5 h-3.5" />
-                  {copied ? "Copied!" : "Share stats"}
+                  {copied ? "Copiado" : "Compartir"}
                 </button>
+                <button onClick={saveImage} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">Imagen</button>
+                {!isDemo && <button onClick={() => onSavePlaylist("Wrapped " + year, stats.topTracks.map(item => item.track))} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">Guardar lista</button>}
                 
                 <button
                   onClick={() => {

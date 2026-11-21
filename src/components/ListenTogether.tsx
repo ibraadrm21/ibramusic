@@ -16,10 +16,23 @@ export const ListenTogether: React.FC<ListenTogetherProps> = ({ alwaysOpen = fal
     joinRoom,
     leaveRoom,
     closeRoom,
+    syncRoom,
+    roomRequests,
+    answerRoomRequest,
+    transferRoom,
+    directRequests,
+    setDirectRequests,
     showToast
   } = useAudio();
 
   const [inputRoomId, setInputRoomId] = useState("");
+  const [inviteMinutes, setInviteMinutes] = useState(60);
+  function invitationUrl(id: string) {
+    const url = new URL(window.location.pathname, window.location.origin);
+    url.searchParams.set("room", id);
+    if (inviteMinutes) url.searchParams.set("exp", String(Date.now() + inviteMinutes * 60000));
+    return url.href;
+  }
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [isOpen, setIsOpen] = useState(alwaysOpen || false);
@@ -44,10 +57,7 @@ export const ListenTogether: React.FC<ListenTogetherProps> = ({ alwaysOpen = fal
   const handleCopyLink = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (roomId) {
-      const origin = window.location.origin.includes("localhost") || window.location.origin.includes("127.0.0.1") 
-        ? window.location.origin 
-        : "https://ibrastream.vercel.app";
-      const shareUrl = `${origin}/?room=${roomId}`;
+      const shareUrl = invitationUrl(roomId);
       navigator.clipboard.writeText(shareUrl);
       setLinkCopied(true);
       showToast("Room link copied to clipboard", "success");
@@ -58,11 +68,8 @@ export const ListenTogether: React.FC<ListenTogetherProps> = ({ alwaysOpen = fal
   const handleShareLink = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (roomId) {
-      const origin = window.location.origin.includes("localhost") || window.location.origin.includes("127.0.0.1") 
-        ? window.location.origin 
-        : "https://ibrastream.vercel.app";
-      const shareUrl = `${origin}/?room=${roomId}`;
-      
+      const shareUrl = invitationUrl(roomId);
+
       if (navigator.share) {
         try {
           await navigator.share({
@@ -225,6 +232,23 @@ export const ListenTogether: React.FC<ListenTogetherProps> = ({ alwaysOpen = fal
                 </div>
               </div>
 
+              {!isHost && <button className="min-h-9 rounded-lg border border-white/15 px-3 text-xs" disabled={!isConnected} onClick={syncRoom}>{isConnected ? "Sincronizar con el anfitrión" : "Reconectando…"}</button>}
+              {isHost && <div className="grid gap-2 rounded-lg border border-white/10 p-2 text-xs">
+                <label className="flex flex-wrap gap-2">Caducidad del enlace <select className="rounded bg-brand-darkBg" value={inviteMinutes} onChange={event => setInviteMinutes(Number(event.target.value))}><option value={15}>15 minutos</option><option value={60}>1 hora</option><option value={1440}>1 día</option><option value={0}>Sin caducidad</option></select></label>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={directRequests} onChange={event => setDirectRequests(event.target.checked)} /> Añadir peticiones automáticamente</label>
+                {roomRequests.map(item => <div key={item.id} className="grid gap-1">
+                  <p>{item.track.title} · {item.proposer}</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => answerRoomRequest(item.id, true)} className="underline">Aceptar</button>
+                    <button onClick={() => answerRoomRequest(item.id, false)} className="underline">Rechazar</button>
+                  </div>
+                </div>)}
+                {participants.filter(item => !item.isHost).length > 0 && <label className="flex flex-wrap items-center gap-2">Transferir sala
+                  <select value="" className="rounded bg-brand-darkBg p-1" onChange={event => {
+                    if (event.target.value) transferRoom(event.target.value);
+                  }}><option value="">Elige un oyente</option>{participants.filter(item => !item.isHost).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+                </label>}
+              </div>}
               {/* Leave / Close Room Action */}
               {isHost ? (
                 <div className="flex gap-2 w-full mt-1.5 animate-fadeIn">

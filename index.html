@@ -1,11 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="description" content="ibrastream - A beautiful and premium music player web application using MusicAPI and React" />
-    <title>ibraStream - Let The Music Take You Away</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f0f0f" />
+    <meta name="description" content="Busca música, organiza tus listas y escucha con amigos en IbraMusic." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="IbraMusic" />
+    <meta property="og:description" content="Busca música, organiza tus listas y escucha con amigos en IbraMusic." />
+    <title>IbraMusic</title>
     <script>
       window.onerror = function(message, source, lineno, colno, error) {
         if (window.electronAPI && window.electronAPI.writeLog) {
@@ -16,7 +21,17 @@
           console.warn("Storage quota exceeded caught by window.onerror:", message);
           return true;
         }
-        alert("Startup error: " + message + "\nSource: " + source + "\nLine: " + lineno + ":" + colno + "\nStack: " + (error ? error.stack : "N/A"));
+        const root = document.getElementById("root");
+        if (root && !root.hasChildNodes()) {
+          const notice = document.createElement("p");
+          notice.textContent = "No se pudo abrir IbraMusic. ";
+          notice.setAttribute("role", "alert");
+          const reload = document.createElement("button");
+          reload.textContent = "Reintentar";
+          reload.onclick = () => window.location.reload();
+          notice.append(reload);
+          root.append(notice);
+        }
         return false;
       };
 
@@ -40,21 +55,6 @@
         };
       }
 
-      // Prevent Chromium and YouTube player from pausing when page visibility changes
-      Object.defineProperty(document, 'visibilityState', {
-        get: function() { return 'visible'; },
-        configurable: true
-      });
-      Object.defineProperty(document, 'hidden', {
-        get: function() { return false; },
-        configurable: true
-      });
-      document.addEventListener('visibilitychange', function(e) {
-        e.stopImmediatePropagation();
-      }, true);
-      window.addEventListener('visibilitychange', function(e) {
-        e.stopImmediatePropagation();
-      }, true);
     </script>
   </head>
   <body style="background: #0f0f0f; margin: 0; padding: 0;">

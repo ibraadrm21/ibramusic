@@ -1,7 +1,9 @@
+import { largeCoverUrl } from "../services/coverArt";
 import React, { useRef } from "react";
 import { Play, Pause, Heart, ListPlus, Plus, MoreVertical } from "lucide-react";
 import { motion } from "framer-motion";
 import type { Track } from "../services/musicApi";
+import { getArtistsFromTrack } from "../services/musicApi";
 import { useAudio } from "../context/AudioContext";
 
 interface TrackCardProps {
@@ -33,42 +35,13 @@ export const TrackCard = React.memo<TrackCardProps>(({
   onContextMenu,
   playlistId,
   isExplicit,
-  hasDualVersions
 }) => {
   const { currentTrack, isPlaying, isLoading, playTrack, togglePlay, addToQueue } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
 
-  const [isDual, setIsDual] = React.useState<boolean>(
-    hasDualVersions ?? (track.hasDualVersions === true)
-  );
-
-  React.useEffect(() => {
-    let isMounted = true;
-    if (hasDualVersions !== undefined) {
-      setIsDual(hasDualVersions);
-      return;
-    }
-    if (track.hasDualVersions !== undefined) {
-      setIsDual(track.hasDualVersions);
-      return;
-    }
-    // Only resolve for explicit tracks to save network requests
-    if (isExplicit || track.isExplicit) {
-      import("../services/musicApi").then(({ checkTrackDualVersions }) => {
-        checkTrackDualVersions(track).then((res) => {
-          if (isMounted) setIsDual(res);
-        });
-      });
-    } else {
-      setIsDual(false);
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [track.id, track.artist, track.title, track.hasDualVersions, track.isExplicit, isExplicit, hasDualVersions]);
-
-  const showExplicitBadge = (isExplicit || track.isExplicit) && isDual;
+  const showExplicitBadge = isExplicit || track.isExplicit;
+  const playLabel = (isCurrent && isPlaying ? "Pausar " : "Reproducir ") + track.title;
 
   const longPressTimeoutRef = useRef<number | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -121,11 +94,16 @@ export const TrackCard = React.memo<TrackCardProps>(({
     if (isCurrent) {
       togglePlay();
     } else {
-      playTrack(track, tracksQueue.length > 0 ? tracksQueue : [track], playlistId);
+      const trackToPlay = {
+        ...track,
+        isExplicit: isExplicit !== undefined ? isExplicit : track.isExplicit
+      };
+      playTrack(trackToPlay, tracksQueue.length > 0 ? tracksQueue : [trackToPlay], playlistId);
     }
   };
 
   if (variant === "square") {
+    const largeCover = largeCoverUrl(track.thumbnail);
     return (
       <motion.div
         onClick={handlePlayClick}
@@ -146,10 +124,14 @@ export const TrackCard = React.memo<TrackCardProps>(({
         {/* Cover Art Container */}
         <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
           <img
-            src={track.thumbnail || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
+            src={largeCover || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
             alt={track.title}
             loading="lazy"
             onError={(e) => {
+              if (track.thumbnail && e.currentTarget.getAttribute("src") === largeCover && largeCover !== track.thumbnail) {
+                e.currentTarget.src = track.thumbnail;
+                return;
+              }
               const ytId = track.id.startsWith("yt-") ? track.id.substring(3) : (/^[a-zA-Z0-9_-]{11}$/.test(track.id) ? track.id : null);
               if (ytId && !e.currentTarget.src.includes("i.ytimg.com")) {
                 e.currentTarget.src = `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`;
@@ -160,8 +142,9 @@ export const TrackCard = React.memo<TrackCardProps>(({
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
           />
           {/* Glass Overlay Play Button */}
-          <div className={`absolute inset-0 bg-black/40 ${isCurrent && isLoading ? "opacity-100" : "opacity-0 group-hover:opacity-100"} transition-opacity duration-300 flex items-center justify-center`}>
+          <div className={`absolute inset-0 bg-black/40 ${isCurrent && isLoading ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} transition-opacity duration-300 flex items-center justify-center`}>
             <button
+              aria-label={playLabel}
               onClick={handlePlayClick}
               disabled={isCurrent && isLoading}
               className={`p-3 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black transition-all duration-300 glow-accent ${isCurrent && isLoading ? "translate-y-0" : "transform translate-y-3 group-hover:translate-y-0"}`}
@@ -222,9 +205,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
             {track.title}
           </h3>
           <div className="text-[10px] text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
-            {track.artists && track.artists.length > 0 ? (
-              track.artists.map((art, i) => (
-                <React.Fragment key={art.id}>
+            {(() => {
+              const artistList = getArtistsFromTrack(track);
+              return artistList.map((art, i) => (
+                <React.Fragment key={art.id || i}>
                   <span
                     onClick={(e) => {
                       if (onOpenArtist) {
@@ -236,22 +220,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
                   >
                     {art.name}
                   </span>
-                  {i < track.artists!.length - 1 && <span>,</span>}
+                  {i < artistList.length - 1 && <span>,</span>}
                 </React.Fragment>
-              ))
-            ) : (
-              <span
-                onClick={(e) => {
-                  if (onOpenArtist && track.artistId) {
-                    e.stopPropagation();
-                    onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
-                  }
-                }}
-                className="hover:text-brand-accent transition-colors"
-              >
-                {track.artist}
-              </span>
-            )}
+              ));
+            })()}
           </div>
         </div>
       </motion.div>
@@ -282,9 +254,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
         {/* Index/Play button */}
         <div className="flex items-center justify-center w-8 shrink-0">
           <button
+            aria-label={playLabel}
             onClick={handlePlayClick}
             disabled={isCurrent && isLoading}
-            className={`flex items-center justify-center p-2 rounded-full bg-brand-accent text-black ${isCurrent && isLoading ? "" : "hidden group-hover:flex"}`}
+            className={`flex items-center justify-center p-2 rounded-full bg-brand-accent text-black ${isCurrent && isLoading ? "" : "md:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
           >
             {isCurrent && isLoading ? (
               <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -341,9 +314,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
             </h4>
           </div>
           <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-1 select-none">
-            {track.artists && track.artists.length > 0 ? (
-              track.artists.map((art, i) => (
-                <React.Fragment key={art.id}>
+            {(() => {
+              const artistList = getArtistsFromTrack(track);
+              return artistList.map((art, i) => (
+                <React.Fragment key={art.id || i}>
                   <span
                     onClick={(e) => {
                       if (onOpenArtist) {
@@ -355,22 +329,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
                   >
                     {art.name}
                   </span>
-                  {i < track.artists!.length - 1 && <span>,</span>}
+                  {i < artistList.length - 1 && <span>,</span>}
                 </React.Fragment>
-              ))
-            ) : (
-              <span
-                onClick={(e) => {
-                  if (onOpenArtist && track.artistId) {
-                    e.stopPropagation();
-                    onOpenArtist({ id: track.artistId, name: track.artist, thumbnail: track.thumbnail });
-                  }
-                }}
-                className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
-              >
-                {track.artist}
-              </span>
-            )}
+              ));
+            })()}
           </div>
         </div>
       </div>

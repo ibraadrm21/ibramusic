@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Download, CloudOff, ListPlus } from "lucide-react";
-import type { Track } from "../services/musicApi";
-import { downloadService } from "../services/downloadService";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Compass, ListPlus, CircleHelp } from "lucide-react";
+import type { Track, Artist } from "../services/musicApi";
+import { getArtistsFromTrack } from "../services/musicApi";
 
 interface TrackContextMenuProps {
   x: number;
@@ -15,12 +15,17 @@ interface TrackContextMenuProps {
   onToggleFavorite: () => void;
   onToggleExplicit: () => void;
   onAddToQueue: () => void;
-  onGoToArtist?: () => void;
+  queueActionLabel?: string;
+  onGoToArtist?: (artist?: Artist) => void;
   onGoToAlbum?: () => void;
   onShare: () => void;
+  onStartRadio?: () => void;
+  onStartArtistRadio?: () => void;
+  onDiscoveryAction?: (action: "more" | "hide" | "mute") => void;
   onAddToPlaylist: (playlistId: string) => void;
   onRemoveFromPlaylist?: () => void;
   onPlayNext?: () => void;
+  onWrongSong?: () => void;
   onSelect?: () => void;
 }
 
@@ -36,19 +41,24 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   onToggleFavorite,
   onToggleExplicit,
   onAddToQueue,
+  queueActionLabel,
   onGoToArtist,
   onGoToAlbum,
   onShare,
+  onStartRadio,
+  onStartArtistRadio,
+  onDiscoveryAction,
   onAddToPlaylist,
   onRemoveFromPlaylist,
   onPlayNext,
+  onWrongSong,
   onSelect
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [adjustedCoords, setAdjustedCoords] = useState({ left: x, top: y });
-  const [showPlaylistSubmenu, setShowPlaylistSubmenu] = useState(false);
+  const [submenu, setSubmenu] = useState<"playlist" | "discovery" | null>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
   const submenuTimeoutRef = useRef<number | null>(null);
-  const [downloadStatus, setDownloadStatus] = useState(downloadService.getStatus(track.id));
   const [hasDualVersions, setHasDualVersions] = useState<boolean>(track.hasDualVersions === true);
 
   // Check if track has both explicit and clean versions available
@@ -68,40 +78,6 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
     };
   }, [track.id, track.artist, track.title, track.hasDualVersions]);
 
-  // Sync download status
-  useEffect(() => {
-    const handleStatusChange = () => {
-      setDownloadStatus(downloadService.getStatus(track.id));
-    };
-    window.addEventListener('ibrastream_download_status_change', handleStatusChange);
-    return () => window.removeEventListener('ibrastream_download_status_change', handleStatusChange);
-  }, [track.id]);
-
-  const handleDownload = async () => {
-    if (downloadStatus.isDownloaded) {
-      await downloadService.removeDownload(track.id);
-    } else {
-      try {
-        const { getYouTubeAudioStream, getYouTubeVideoId, getMonochromeAudioStream } = await import("../services/musicApi");
-        await downloadService.downloadTrack(track, async () => {
-          // 1. Try Monochrome for high-fidelity audio first
-          try {
-            const monochromeStream = await getMonochromeAudioStream(track);
-            if (monochromeStream) return monochromeStream;
-          } catch (e) {
-            console.warn("[Download] Monochrome fallback:", e);
-          }
-          // 2. Fallback to YouTube stream
-          const videoId = await getYouTubeVideoId(track);
-          return await getYouTubeAudioStream(videoId);
-        });
-      } catch (err) {
-        console.error("Download failed", err);
-      }
-    }
-    onClose();
-  };
-
   // Close context menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -115,43 +91,74 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
     };
   }, [onClose]);
 
-  // Adjust coordinates to ensure the menu is fully visible on the screen
   useEffect(() => {
-    if (menuRef.current) {
-      const menuWidth = 240; // Approx width
-      const menuHeight = menuRef.current.offsetHeight || 350; // Approx or calculated height
-      
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+    const menu = menuRef.current;
+    if (!menu) return;
 
-      let left = x;
-      let top = y;
-
-      // Check right boundary
-      if (x + menuWidth > viewportWidth) {
-        left = Math.max(10, viewportWidth - menuWidth - 15);
-      }
-      // Check bottom boundary
-      if (y + menuHeight > viewportHeight) {
-        top = Math.max(10, viewportHeight - menuHeight - 15);
-      }
-
+    const positionMenu = () => {
+      const left = Math.max(10, Math.min(x, window.innerWidth - menu.offsetWidth - 15));
+      const top = Math.max(10, Math.min(y, window.innerHeight - menu.offsetHeight - 15));
       setAdjustedCoords({ left, top });
-    }
+    };
+
+    positionMenu();
+    const observer = new ResizeObserver(positionMenu);
+    observer.observe(menu);
+    window.addEventListener("resize", positionMenu);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", positionMenu);
+    };
   }, [x, y]);
 
-  const handleMouseEnterPlaylist = () => {
-    if (submenuTimeoutRef.current) {
-      window.clearTimeout(submenuTimeoutRef.current);
-      submenuTimeoutRef.current = null;
-    }
-    setShowPlaylistSubmenu(true);
-  };
+  useLayoutEffect(() => {
+    const panel = submenuRef.current;
+    const anchor = panel?.parentElement;
+    if (!panel || !anchor) return;
 
-  const handleMouseLeavePlaylist = () => {
-    submenuTimeoutRef.current = window.setTimeout(() => {
-      setShowPlaylistSubmenu(false);
-    }, 150);
+    const margin = 10;
+    const row = anchor.getBoundingClientRect();
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    const preferredLeft = row.right + width <= window.innerWidth - margin ? row.right : row.left - width;
+    const left = Math.max(margin, Math.min(preferredLeft, window.innerWidth - width - margin));
+    const top = Math.max(margin, Math.min(row.top, window.innerHeight - height - margin));
+    panel.style.left = (left - row.left) + "px";
+    panel.style.top = (top - row.top) + "px";
+  }, [submenu, adjustedCoords, playlists.length]);
+
+  useEffect(() => () => {
+    if (submenuTimeoutRef.current !== null) window.clearTimeout(submenuTimeoutRef.current);
+  }, []);
+
+  const submenuRow = (kind: "playlist" | "discovery", label: string, Icon: typeof Plus, content: React.ReactNode) => {
+    const open = submenu === kind;
+    return (
+      <div className="relative" onPointerEnter={event => {
+        if (event.pointerType !== "mouse") return;
+        if (submenuTimeoutRef.current !== null) window.clearTimeout(submenuTimeoutRef.current);
+        setSubmenu(kind);
+      }} onPointerLeave={event => {
+        if (event.pointerType !== "mouse") return;
+        submenuTimeoutRef.current = window.setTimeout(() => setSubmenu(current => current === kind ? null : current), 150);
+      }} onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setSubmenu(current => current === kind ? null : current);
+      }}>
+        <button type="button" aria-expanded={open} onClick={event => {
+          if (submenuTimeoutRef.current !== null) window.clearTimeout(submenuTimeoutRef.current);
+          setSubmenu(open && event.detail === 0 ? null : kind);
+        }} className={"flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-all hover:bg-white/5 hover:text-white " + (open ? "bg-white/5 text-white" : "")}>
+          <Icon className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" />
+          {label}
+          <ChevronRight className="ml-auto size-3.5 text-gray-500" aria-hidden="true" />
+        </button>
+        {open && (
+          <div ref={submenuRef} className="absolute left-full top-0 z-10 max-h-[min(15rem,calc(100dvh-20px))] w-56 max-w-[calc(100vw-20px)] overflow-y-auto rounded-2xl border border-white/10 bg-brand-darkBg glass-panel py-1.5 shadow-xl shadow-black/80">
+            {content}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -199,75 +206,17 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         </button>
       )}
 
-      {/* Download option */}
-      {/* Download option - available across native and web */ true && (
-        <button
-          onClick={handleDownload}
-          disabled={downloadStatus.isDownloading}
-          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
-        >
-          {downloadStatus.isDownloading ? (
-            <div className="w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
-          ) : downloadStatus.isDownloaded ? (
-            <CloudOff className="w-4 h-4 text-red-400" />
-          ) : (
-            <Download className="w-4 h-4 text-gray-400" />
-          )}
-          <span>
-            {downloadStatus.isDownloading ? "Downloading..." : downloadStatus.isDownloaded ? "Remove download" : "Download song"}
-          </span>
+      {submenuRow("playlist", "Add to playlist", Plus, playlists.length === 0 ? (
+        <div className="px-4 py-2 text-center italic text-gray-500">No playlists created</div>
+      ) : playlists.map(playlist => (
+        <button type="button" key={playlist.id} onClick={() => {
+          onAddToPlaylist(playlist.id);
+          onClose();
+        }} className="flex w-full items-center gap-2 px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white">
+          <Music className="size-3.5 shrink-0 text-gray-500" aria-hidden="true" />
+          <span className="truncate">{playlist.name}</span>
         </button>
-      )}
-
-      {/* Playlist submenu trigger */}
-      <div
-        className="relative"
-        onMouseEnter={handleMouseEnterPlaylist}
-        onMouseLeave={handleMouseLeavePlaylist}
-      >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowPlaylistSubmenu(!showPlaylistSubmenu);
-          }}
-          className={`w-full px-4 py-2.5 text-left flex items-center justify-between hover:bg-white/5 hover:text-white transition-all ${
-            showPlaylistSubmenu ? "bg-white/5 text-white" : ""
-          }`}
-        >
-          <span className="flex items-center gap-2.5">
-            <Plus className="w-4 h-4 text-gray-400" />
-            Add to playlist
-          </span>
-          <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
-        </button>
-
-        {/* Floating playlist submenu */}
-        {showPlaylistSubmenu && (
-          <div
-            className="absolute left-full top-0 ml-1.5 w-56 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-xl shadow-black/80 animate-[fadeIn_0.15s_ease-out] max-h-60 overflow-y-auto"
-            onMouseEnter={handleMouseEnterPlaylist}
-            onMouseLeave={handleMouseLeavePlaylist}
-          >
-            {playlists.length === 0 ? (
-              <div className="px-4 py-2 text-gray-500 italic text-center">No playlists created</div>
-            ) : (
-              playlists.map((playlist) => (
-                <button
-                  key={playlist.id}
-                  onClick={() => {
-                    onAddToPlaylist(playlist.id);
-                    onClose();
-                  }}
-                  className="w-full px-4 py-2 text-left hover:bg-white/5 hover:text-white transition-all truncate flex items-center gap-2"
-                >
-                  <Music className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                  <span className="truncate">{playlist.name}</span>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-      </div>
+      )))}
 
       {/* Remove from this playlist option */}
       {currentPlaylistId && onRemoveFromPlaylist && (
@@ -332,7 +281,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <ListPlus className="w-4 h-4 text-gray-400" />
-        Add to queue
+        {queueActionLabel ?? "Añadir al final de la cola"}
       </button>
 
       {/* Play Next */}
@@ -349,19 +298,50 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         </button>
       )}
 
-      {/* Go to Artist */}
-      {track.artistId && onGoToArtist && (
-        <button
-          onClick={() => {
-            onGoToArtist();
-            onClose();
-          }}
-          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
-        >
-          <User className="w-4 h-4 text-gray-400" />
-          Go to artist
-        </button>
-      )}
+      {/* Go to Artist (Supports single and multiple artists) */}
+      {onGoToArtist && (() => {
+        const artistList = getArtistsFromTrack(track);
+        if (artistList.length > 1) {
+          return artistList.map((art, idx) => (
+            <button
+              key={art.id || idx}
+              onClick={() => {
+                onGoToArtist({
+                  id: art.id,
+                  name: art.name,
+                  thumbnail: track.thumbnail
+                });
+                onClose();
+              }}
+              className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all text-xs"
+              title={`Go to ${art.name}`}
+            >
+              <User className="w-4 h-4 text-brand-accent shrink-0" />
+              <span className="truncate">Go to {art.name}</span>
+            </button>
+          ));
+        }
+
+        if (track.artistId || track.artist) {
+          return (
+            <button
+              onClick={() => {
+                onGoToArtist({
+                  id: track.artistId || `artist-${encodeURIComponent(track.artist)}`,
+                  name: track.artist,
+                  thumbnail: track.thumbnail
+                });
+                onClose();
+              }}
+              className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
+            >
+              <User className="w-4 h-4 text-gray-400" />
+              Go to artist
+            </button>
+          );
+        }
+        return null;
+      })()}
 
       {/* Go to Album */}
       {(track.albumId || track.albumName) && onGoToAlbum && (
@@ -377,7 +357,29 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         </button>
       )}
 
-      {/* Share */}
+      {onStartRadio && submenuRow("discovery", "Descubrir", Compass, <>
+        <button type="button" className="w-full px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white" onClick={() => { onStartRadio(); onClose(); }}>Radio de esta canción</button>
+        {onStartArtistRadio && <button type="button" className="w-full px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white" onClick={() => { onStartArtistRadio(); onClose(); }}>Radio de este artista</button>}
+        {onDiscoveryAction && (["more", "hide", "mute"] as const).map(action => (
+          <button type="button" key={action} className="w-full px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white" onClick={() => { onDiscoveryAction(action); onClose(); }}>
+            {{ more: "Más como esto", hide: "Ocultar canción", mute: "Mostrar menos de este artista" }[action]}
+          </button>
+        ))}
+      </>)}
+      {onWrongSong && (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          onClick={() => {
+            onWrongSong();
+            onClose();
+          }}
+          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
+        >
+          <CircleHelp aria-hidden="true" className="w-4 h-4 text-gray-400" />
+          ¿Wrong song?
+        </button>
+      )}
       <button
         onClick={() => {
           onShare();

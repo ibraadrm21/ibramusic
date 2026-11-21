@@ -27,6 +27,8 @@ dist-ssr
 out/
 release/
 web-build/
+graphify-out/
+.graphify/
 *.bak
 dump-instances.cjs
 test-*.cjs

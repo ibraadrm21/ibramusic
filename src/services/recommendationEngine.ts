@@ -1,52 +1,10 @@
 import type { Track } from "./musicApi";
-import { searchTracks, getArtistTracks } from "./musicApi";
+import { searchTracks, getArtistTracks, fetchDeezerApi, getRelatedTracks, getArtistsFromTrack } from "./musicApi";
+
+import { normalizeSearch, trackTitleArtistKey } from "./catalog";
 
 // Dynamic similar artists cache (in-memory)
 const similarArtistsCache = new Map<string, string[]>();
-
-/**
- * Generic fetch with support for CORS proxy fallbacks (web browser).
- */
-async function fetchDeezer(url: string): Promise<any> {
-
-  // Try direct fetch first (works if Deezer has permissive CORS or on local builds/extensions)
-  try {
-    const res = await fetch(url);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (e) {
-    console.warn("Direct fetch failed for Deezer, trying CORS proxies...", e);
-  }
-
-  // CORS Proxy fallbacks for web browsers
-  const proxies = [
-    (target: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
-    (target: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`,
-    (target: string) => `https://corsproxy.io/?${encodeURIComponent(target)}`
-  ];
-
-  for (const getProxyUrl of proxies) {
-    try {
-      const proxyUrl = getProxyUrl(url);
-      const res = await fetch(proxyUrl);
-      if (res.ok) {
-        if (proxyUrl.includes("allorigins")) {
-          const json = await res.json();
-          if (json && json.contents) {
-            return JSON.parse(json.contents);
-          }
-        } else {
-          return await res.json();
-        }
-      }
-    } catch (e) {
-      console.warn(`Proxy fetch failed for Deezer URL: ${url}`, e);
-    }
-  }
-
-  throw new Error(`Failed to fetch Deezer API: ${url}`);
-}
 
 /**
  * Dynamically queries the Deezer API to find similar artists for a given artist name.
@@ -81,7 +39,7 @@ export async function getSimilarArtistsDynamic(artistName: string): Promise<stri
     
     // Step 1: Search for artist ID
     const searchUrl = `https://api.deezer.com/search/artist?q=${encodeURIComponent(artistName)}`;
-    const searchData = await fetchDeezer(searchUrl);
+    const searchData = await fetchDeezerApi(searchUrl);
     const artists = searchData.data || [];
     if (artists.length === 0) {
       throw new Error(`Artist "${artistName}" not found on Deezer`);
@@ -91,8 +49,8 @@ export async function getSimilarArtistsDynamic(artistName: string): Promise<stri
     
     // Step 2: Fetch related/similar artists
     const relatedUrl = `https://api.deezer.com/artist/${artistId}/related`;
-    const relatedData = await fetchDeezer(relatedUrl);
-    const relatedList = relatedData.data || [];
+    const relatedData = await fetchDeezerApi(relatedUrl);
+    const relatedList = relatedData?.data || [];
     
     const similarNames = relatedList.map((art: any) => art.name as string).filter(Boolean);
     
@@ -174,176 +132,61 @@ async function fetchFallbackPool(): Promise<Track[]> {
   return [];
 }
 
-/**
- * Computes general recommendations for the Home dashboard.
- * Profiles user favorites, recently played tracks, and current playing track
- * to determine top genres, then pulls recommendations from those genres.
- */
-export async function getHomeRecommendations(favorites: Track[], recentlyPlayed: Track[], currentTrack?: Track | null): Promise<Track[]> {
-  const allUserHistory = [...favorites, ...recentlyPlayed];
-  if (currentTrack) allUserHistory.push(currentTrack);
-
-  // If the user has absolutely no activity/favorites yet, populate with fallback seeds
-  if (allUserHistory.length === 0) {
-    const fallbackPool = await fetchFallbackPool();
-    return [...fallbackPool].sort(() => 0.5 - Math.random()).slice(0, 12);
+export async function getHomeRecommendations(recent: Track[], excluded: ReadonlySet<string>): Promise<Track[]> {
+  const history = recent.slice(0, 50);
+  const seen = new Set([...excluded, ...history.map(trackTitleArtistKey)]);
+  const leadArtist = (track: Track) => track.artists?.[0]?.name || getArtistsFromTrack(track)[0].name;
+  const artists = new Map<string, { name: string; weight: number; track: Track }>();
+  history.forEach((track, index) => {
+    const name = leadArtist(track);
+    const key = normalizeSearch(name);
+    if (!track.artist) return;
+    const previous = artists.get(key);
+    const weight = 1 + (50 - index) / 50;
+    artists.set(key, previous ? { ...previous, weight: previous.weight + weight } : { name, weight, track });
+  });
+  const seeds = [...artists.values()].sort((a, b) => b.weight - a.weight).slice(0, 6);
+  const songSeeds = new Map<string, Track>();
+  for (const track of [...history.slice(0, 2), ...seeds.map(seed => seed.track), ...history]) {
+    songSeeds.set(trackTitleArtistKey(track), track);
+    if (songSeeds.size === 4) break;
   }
+  const relatedPools = Promise.all([...songSeeds.values()].map(track => getRelatedTracks(track).catch(() => [])));
+  const artistPools = Promise.all(seeds.map(async seed => {
+    const [original, similar] = await Promise.all([
+      searchTracks(seed.name).catch(() => []),
+      getSimilarArtistsDynamic(seed.name).catch(() => []),
+    ]);
+    const nearby = similar.find(name => !artists.has(normalizeSearch(name)))
+      ?? RELATED_ARTISTS_BY_GENRE[normalizeSearch(seed.name)]?.artists.find(name => !artists.has(normalizeSearch(name)));
+    const related = nearby ? await searchTracks(nearby).catch(() => []) : [];
+    const matches = (tracks: Track[], name: string) => tracks.filter(track =>
+      normalizeSearch(leadArtist(track)) === normalizeSearch(name));
+    return [matches(original, seed.name), nearby ? matches(related, nearby) : []];
+  }));
+  const [songResults, artistResults] = await Promise.all([relatedPools, artistPools]);
+  const pools = [...songResults, ...artistResults.flat()];
+  if (history.length === 0) pools.push(await fetchFallbackPool());
 
-  try {
-    // 1. Profile user tastes by count of artists and genres
-    const artistWeights: Record<string, { count: number; id?: string }> = {};
-    const genreCounts: Record<string, number> = {};
-
-    favorites.forEach(track => {
-      if (!track || !track.artist) return;
-      const art = track.artist.toLowerCase();
-      artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 3, id: track.artistId }; // High weight for favorites
-
-      // Lookup genre if mapped
-      const match = RELATED_ARTISTS_BY_GENRE[art];
-      if (match) {
-        genreCounts[match.genre] = (genreCounts[match.genre] || 0) + 3;
-      }
-    });
-
-    recentlyPlayed.forEach(track => {
-      if (!track || !track.artist) return;
-      const art = track.artist.toLowerCase();
-      artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 1, id: track.artistId };
-
-      const match = RELATED_ARTISTS_BY_GENRE[art];
-      if (match) {
-        genreCounts[match.genre] = (genreCounts[match.genre] || 0) + 1;
-      }
-    });
-
-    if (currentTrack && currentTrack.artist) {
-      const art = currentTrack.artist.toLowerCase();
-      artistWeights[art] = { count: (artistWeights[art]?.count || 0) + 4, id: currentTrack.artistId }; // Current track has highest immediate relevance
-
-      const match = RELATED_ARTISTS_BY_GENRE[art];
-      if (match) {
-        genreCounts[match.genre] = (genreCounts[match.genre] || 0) + 4;
-      }
+  const recommendations: Track[] = [];
+  const artistCounts = new Map<string, number>();
+  const candidates = pools.map(pool => pool.filter(track => track.id && track.title && track.artist && !seen.has(trackTitleArtistKey(track))));
+  const rounds = Math.max(0, ...candidates.map(pool => pool.length));
+  for (let index = 0; index < rounds && recommendations.length < 36; index++) {
+    for (const pool of candidates) {
+      const track = pool[index];
+      if (!track) continue;
+      const key = trackTitleArtistKey(track);
+      const artist = normalizeSearch(leadArtist(track));
+      const count = artistCounts.get(artist) ?? 0;
+      if (seen.has(key) || count >= 6) continue;
+      seen.add(key);
+      artistCounts.set(artist, count + 1);
+      recommendations.push(track);
+      if (recommendations.length === 36) break;
     }
-
-    // Sort to find top user genres
-    const topGenres = Object.entries(genreCounts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([genre]) => genre);
-
-    // Identify top artists
-    const topArtists = Object.entries(artistWeights)
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 3)
-      .map(([name, info]) => ({ name, id: info.id }));
-
-    // 2. Build recommendations from top genres, top artists, and dynamic similar artists
-    const searchQueries: string[] = [];
-
-    // Fetch dynamic similar artists for top artists in parallel
-    const dynamicSimilarPools = await Promise.all(
-      topArtists.map(art => getSimilarArtistsDynamic(art.name).catch(() => []))
-    );
-
-    // Add dynamic similar artists (up to 2 per top artist)
-    dynamicSimilarPools.forEach(similarList => {
-      if (similarList && similarList.length > 0) {
-        const shuffled = [...similarList].sort(() => 0.5 - Math.random());
-        shuffled.slice(0, 2).forEach(artist => {
-          if (!searchQueries.includes(artist)) {
-            searchQueries.push(artist);
-          }
-        });
-      }
-    });
-
-    // Add related artists based on top genres
-    topGenres.slice(0, 2).forEach(genre => {
-      const entry = Object.values(RELATED_ARTISTS_BY_GENRE).find(e => e.genre === genre);
-      if (entry) {
-        const randomArtist = entry.artists[Math.floor(Math.random() * entry.artists.length)];
-        if (!searchQueries.includes(randomArtist)) {
-          searchQueries.push(randomArtist);
-        }
-      }
-    });
-
-    // Add top artists
-    topArtists.forEach(art => {
-      if (!searchQueries.includes(art.name)) {
-        searchQueries.push(art.name);
-      }
-    });
-
-    // Add a couple of popular seeds if the search query list is still small
-    while (searchQueries.length < 4) {
-      const randomSeed = POPULAR_SEEDS[Math.floor(Math.random() * POPULAR_SEEDS.length)];
-      if (!searchQueries.includes(randomSeed)) {
-        searchQueries.push(randomSeed);
-      }
-    }
-
-    // Fetch tracks for all determined queries in parallel
-    const pools = await Promise.all(
-      searchQueries.map(query => searchTracks(query).catch(() => []))
-    );
-
-    const candidates = pools.flat();
-    const seenIds = new Set<string>();
-    const scoredCandidates: { track: Track; score: number }[] = [];
-
-    const historyIds = new Set(allUserHistory.filter(h => h && h.id).map(h => h.id));
-
-    candidates.forEach(track => {
-      if (!track || !track.id || !track.artist) return;
-      if (historyIds.has(track.id) || seenIds.has(track.id)) return;
-      seenIds.add(track.id);
-
-      let score = 0;
-      const trackArtist = track.artist.toLowerCase();
-
-      // Weight 1: Exact favorite/recent artist match
-      if (artistWeights[trackArtist]) {
-        score += artistWeights[trackArtist].count * 10;
-      }
-
-      // Weight 2: Dynamic similar artist match
-      const isSimilarToTop = dynamicSimilarPools.some(pool => 
-        pool.some(name => name.toLowerCase() === trackArtist)
-      );
-      if (isSimilarToTop) {
-        score += 15;
-      }
-
-      // Weight 2: Genre match
-      const artistGenreMatch = RELATED_ARTISTS_BY_GENRE[trackArtist];
-      if (artistGenreMatch && topGenres.includes(artistGenreMatch.genre)) {
-        const index = topGenres.indexOf(artistGenreMatch.genre);
-        score += (3 - Math.min(index, 2)) * 12; // Higher score if matching top 1 or top 2 genre
-      }
-
-      // Weight 3: Serendipity factor
-      score += Math.random() * 8;
-
-      scoredCandidates.push({ track, score });
-    });
-
-    const sorted = scoredCandidates
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.track);
-
-    if (sorted.length < 6) {
-      const fallback = await fetchFallbackPool();
-      return [...sorted, ...fallback.filter(s => s && s.id && !historyIds.has(s.id))].slice(0, 12);
-    }
-
-    return sorted.slice(0, 12);
-  } catch (err) {
-    console.error("Home recommendation calculation failed:", err);
-    const fallback = await fetchFallbackPool();
-    return fallback.slice(0, 12);
   }
+  return recommendations;
 }
 
 /**

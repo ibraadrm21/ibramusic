@@ -1,16 +1,30 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { readFileSync } from 'node:fs'
+import { offline } from './build/offline'
 
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [react(), offline()],
+  define: {
+    __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version),
+  },
   server: {
     host: '0.0.0.0',
     watch: {
       ignored: ['**/android_flutter/**']
     },
     proxy: {
+      '/api-spicylyrics': {
+        target: 'https://api.spicylyrics.org',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api-spicylyrics/, ''),
+        headers: {
+          'Origin': 'https://spicylyrics.org',
+          'Referer': 'https://spicylyrics.org/'
+        }
+      },
       '/api-deezer': {
         target: 'https://api.deezer.com',
         changeOrigin: true,
@@ -179,6 +193,7 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: 'web-build'
+    outDir: 'web-build',
+    chunkSizeWarningLimit: 700
   }
 })

@@ -2,11 +2,16 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Heart, 
   Volume2, VolumeX, Info, ExternalLink, Disc, Mic, X, Clock, Waves,
-  ListMusic, Trash2, ArrowUp, ArrowDown
+  ListMusic, Trash2, ArrowUp, ArrowDown, Maximize2, FileText
 } from "lucide-react";
 import { useAudio, useAudioProgress } from "../context/AudioContext";
 import type { Track } from "../services/musicApi";
+import { getArtistsFromTrack } from "../services/musicApi";
 import { animate } from "animejs";
+import { Modal } from "./Modal";
+import { downloadFile } from "../services/libraryFiles";
+
+const lyricsControl = "inline-flex min-h-8 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 transition-colors hover:text-white";
 
 interface PlayerPanelProps {
   onToggleFavorite?: (track: Track) => void;
@@ -17,29 +22,128 @@ interface PlayerPanelProps {
   isExplicit?: boolean;
 }
 
-interface LyricLine {
-  time: number; // in seconds
+export interface LyricWord {
   text: string;
+  startTime: number;
+  endTime: number;
 }
 
-function parseLRC(lrc: string): LyricLine[] {
-  const lines = lrc.split("\n");
-  const result: LyricLine[] = [];
-  const timeReg = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+export interface LyricLine {
+  time: number; // in seconds
+  text: string;
+  words?: LyricWord[];
+}
 
-  for (const line of lines) {
-    const text = line.replace(timeReg, "").trim();
-    const matches = [...line.matchAll(timeReg)];
-    for (const match of matches) {
-      const min = parseInt(match[1]);
-      const sec = parseInt(match[2]);
-      const ms = match[3] ? parseInt(match[3]) : 0;
-      const time = min * 60 + sec + ms / (ms > 99 ? 1000 : 100);
-      result.push({ time, text });
+function parseTimeTag(m: string, s: string, ms?: string): number {
+  const min = parseInt(m, 10);
+  const sec = parseInt(s, 10);
+  const millis = ms ? parseInt(ms, 10) : 0;
+  return min * 60 + sec + millis / (millis > 99 ? 1000 : 100);
+}
+
+function parseLRC(lrc: string, rawLrc?: string, enableWordSync: boolean = true): LyricLine[] {
+  const source = (enableWordSync && rawLrc && rawLrc.includes("<")) ? rawLrc : (lrc || rawLrc || "");
+  if (!source) return [];
+
+  const lines = source.split("\n");
+  const result: LyricLine[] = [];
+  const lineTimeReg = /\[(\d+):(\d+)(?:\.(\d+))?\]/g;
+
+  // Step 1: Parse all timestamped lines and explicit <mm:ss.xx> word tags if present
+  for (const rawLine of lines) {
+    const lineMatches = [...rawLine.matchAll(lineTimeReg)];
+    if (lineMatches.length === 0) continue;
+
+    const rest = rawLine.replace(/\[\d+:\d+(?:\.\d+)?\]/g, "").trim();
+    if (!rest) continue;
+
+    let words: LyricWord[] | undefined = undefined;
+    if (enableWordSync && rest.includes("<")) {
+      const wordRegex = /<(\d+):(\d+)(?:\.(\d+))?>([^<]*)/g;
+      const tokens: { time: number; text: string }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = wordRegex.exec(rest)) !== null) {
+        tokens.push({
+          time: parseTimeTag(m[1], m[2], m[3]),
+          text: m[4]
+        });
+      }
+
+      if (tokens.length > 0) {
+        words = [];
+        for (let i = 0; i < tokens.length; i++) {
+          const current = tokens[i];
+          const textTrimmed = current.text.trim();
+          if (!textTrimmed && i === tokens.length - 1) {
+            if (words.length > 0) {
+              words[words.length - 1].endTime = current.time;
+            }
+            continue;
+          }
+          if (!textTrimmed) continue;
+          const nextToken = tokens[i + 1];
+          const endTime = nextToken ? nextToken.time : current.time + 0.6;
+          words.push({
+            text: textTrimmed,
+            startTime: current.time,
+            endTime: Math.max(endTime, current.time + 0.08)
+          });
+        }
+      }
+    }
+
+    const cleanText = words && words.length > 0
+      ? words.map(w => w.text.trim()).filter(Boolean).join(" ").trim()
+      : rawLine.replace(lineTimeReg, "").replace(/<\d+:\d+(?:\.\d+)?>/g, " ").replace(/\s+/g, " ").trim();
+
+    for (const match of lineMatches) {
+      const time = parseTimeTag(match[1], match[2], match[3]);
+      result.push({ time, text: cleanText, words });
     }
   }
 
-  return result.sort((a, b) => a.time - b.time);
+  result.sort((a, b) => a.time - b.time);
+
+  // Step 2: For lines that lack explicit word tags, automatically generate word timings
+  // so that Word-by-Word karaoke works on EVERY song with synced lyrics!
+  if (enableWordSync) {
+    for (let i = 0; i < result.length; i++) {
+      const currentLine = result[i];
+      if (currentLine.words && currentLine.words.length > 0) continue;
+
+      const rawWords = currentLine.text.trim().split(/\s+/).filter(Boolean);
+      if (rawWords.length === 0) continue;
+
+      const nextLine = result[i + 1];
+      const nextTime = nextLine ? nextLine.time : undefined;
+      const lineDuration = nextTime && nextTime > currentLine.time
+        ? Math.min(nextTime - currentLine.time, Math.max(2.0, rawWords.length * 0.7))
+        : Math.max(1.5, rawWords.length * 0.45);
+
+      const activeSingingDuration = Math.max(0.6, lineDuration * 0.88);
+      const weights = rawWords.map(w => Math.max(2, w.replace(/[^a-zA-Z0-9]/g, "").length));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+
+      let curStart = currentLine.time;
+      const genWords: LyricWord[] = [];
+      for (let w = 0; w < rawWords.length; w++) {
+        const wordDur = (weights[w] / totalWeight) * activeSingingDuration;
+        const end = w === rawWords.length - 1
+          ? currentLine.time + activeSingingDuration
+          : curStart + wordDur;
+
+        genWords.push({
+          text: rawWords[w].trim(),
+          startTime: curStart,
+          endTime: end
+        });
+        curStart = end;
+      }
+      currentLine.words = genWords;
+    }
+  }
+
+  return result;
 }
 
 
@@ -80,7 +184,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     currentUser,
     ambientGlowEnabled,
     seamlessTransitions,
-    setSeamlessTransitions
+    setSeamlessTransitions,
+    lyricsProvider,
+    lyricsWordByWord
   } = useAudio();
 
   const { currentTime, duration } = useAudioProgress();
@@ -92,9 +198,16 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   const [view, setView] = useState<"info" | "lyrics" | "queue">("info");
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [plainLyrics, setPlainLyrics] = useState<string>("");
+  const [rawLrcText, setRawLrcText] = useState<string>("");
+  const [syncedLrcText, setSyncedLrcText] = useState<string>("");
+  const [lyricsSource, setLyricsSource] = useState<string>("lrclib");
   const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
   const [monthlyListeners, setMonthlyListeners] = useState<number | undefined>(undefined);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [lyricsExpanded, setLyricsExpanded] = useState(false);
+  const [lyricsFollow, setLyricsFollow] = useState(true);
+  const fullLyrics = useRef<HTMLDivElement | null>(null);
+  const [lyricsFont, setLyricsFont] = useState(26);
   const [lyricsOffset, setLyricsOffset] = useState<number>(0);
   const [hasDualVersions, setHasDualVersions] = useState<boolean>(currentTrack?.hasDualVersions === true);
 
@@ -122,7 +235,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     setLyricsOffset(newOffset);
     if (currentTrack) {
       const userId = currentUser ? currentUser.id : "guest";
-      localStorage.setItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}`, String(newOffset));
+      localStorage.setItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}_${isExplicit || currentTrack.isExplicit ? "explicit" : "clean"}`, String(newOffset));
     }
   };
 
@@ -142,10 +255,12 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     setMonthlyListeners(undefined);
     setLyrics([]);
     setPlainLyrics("");
+    setRawLrcText("");
+    setSyncedLrcText("");
     
     // Load saved offset for this song & user combination
     const userId = currentUser ? currentUser.id : "guest";
-    const saved = localStorage.getItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}`);
+    const saved = localStorage.getItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}_${isExplicit || currentTrack.isExplicit ? "explicit" : "clean"}`) ?? localStorage.getItem(`ibrastream_lyric_offset_${userId}_${currentTrack.id}`);
     setLyricsOffset(saved ? parseFloat(saved) : 0);
 
     setIsLoadingLyrics(true);
@@ -178,11 +293,15 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     // Fetch lyrics from cache or network in parallel
     import("../services/musicApi").then(({ getLyricsForTrack }) => {
       if (!active) return;
-      getLyricsForTrack(currentTrack)
+      getLyricsForTrack(currentTrack, lyricsProvider, lyricsWordByWord)
         .then(data => {
           if (!active) return;
+          if (data.provider) setLyricsSource(data.provider);
+          else setLyricsSource(lyricsProvider);
+          setRawLrcText(data.rawLrc || "");
+          setSyncedLrcText(data.syncedLyrics || "");
           if (data.syncedLyrics) {
-            setLyrics(parseLRC(data.syncedLyrics));
+            setLyrics(parseLRC(data.syncedLyrics, data.rawLrc, lyricsWordByWord));
           } else if (data.plainLyrics) {
             setPlainLyrics(data.plainLyrics);
           }
@@ -202,22 +321,36 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
     return () => {
       active = false;
     };
-  }, [currentTrack, currentUser]);
+  }, [currentTrack, currentUser, lyricsProvider, lyricsWordByWord]);
+
+  // Re-parse when word-by-word mode is toggled or new lyrics arrive
+  useEffect(() => {
+    if (syncedLrcText || rawLrcText) {
+      setLyrics(parseLRC(syncedLrcText || rawLrcText, rawLrcText, lyricsWordByWord));
+    }
+  }, [lyricsWordByWord, syncedLrcText, rawLrcText]);
 
   const activeLineIndex = lyrics.reduce((acc, line, idx) => {
     if (currentTime >= (line.time + lyricsOffset)) return idx;
     return acc;
   }, -1);
 
+  useEffect(() => {
+    if (lyricsExpanded && lyricsFollow) {
+      fullLyrics.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "center" });
+    }
+  }, [lyricsExpanded, lyricsFollow, activeLineIndex]);
+
   // Auto-scroll lyrics container & animate active line with animejs
   useEffect(() => {
-    if (view === "lyrics" && lyricsContainerRef.current) {
+    if (lyricsFollow && view === "lyrics" && lyricsContainerRef.current) {
       const activeEl = lyricsContainerRef.current.querySelector(".lyrics-active-line");
       if (activeEl) {
         activeEl.scrollIntoView({
           behavior: "smooth",
           block: "center"
         });
+        if (document.documentElement.dataset.motion === "reduced" || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
         animate(activeEl, {
           scale: [0.97, 1.05],
           translateX: [-6, 0],
@@ -268,7 +401,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       {/* Immersive blurred backdrop overlay */}
       {ambientGlowEnabled && document.documentElement.getAttribute("data-theme") !== "noir" && (
         <div 
-          className="absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none filter blur-[100px] bg-center bg-cover"
+          className="player-cover-glow absolute inset-0 z-0 pointer-events-none transition-all duration-1000 opacity-20 select-none filter blur-[100px] bg-center bg-cover"
           style={{
             backgroundImage: `url(${currentTrack.thumbnail})`,
           }}
@@ -286,7 +419,8 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         {onClose && (
           <button 
             onClick={onClose}
-            className="md:hidden p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white"
+            aria-label="Cerrar reproductor"
+            className="lg:hidden grid size-11 place-items-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white"
           >
             ← Back
           </button>
@@ -302,7 +436,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             onClick={() => setView("lyrics")} 
             className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 ${view === "lyrics" ? "bg-white text-black font-bold shadow" : "hover:text-white"}`}
           >
-            <Mic className="w-3.5 h-3.5" /> Lyrics
+            <Mic className="w-3.5 h-3.5" /> Letras
           </button>
         </div>
         <div className="flex items-center gap-1">
@@ -363,6 +497,50 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
       ) : view === "lyrics" ? (
         /* Synced Lyrics Container */
         <div className="flex-1 flex flex-col my-4 min-h-0 relative z-10">
+          <div className="mb-2 flex flex-wrap gap-2">
+            <button type="button" className={lyricsControl} onClick={() => setLyricsExpanded(true)}><Maximize2 className="size-3.5" aria-hidden="true" /> Ampliar letra</button>
+            <button type="button" className={lyricsControl} onClick={() => downloadFile("reporte-letra.txt", [
+              "IbraMusic · Incidencia con una letra",
+              currentTrack.title + " — " + currentTrack.artist,
+              "Proveedor: " + lyricsSource,
+              "Describe el problema: letra incorrecta, desfase u otro.",
+            ].join("\n"), "text/plain")}><FileText className="size-3.5" aria-hidden="true" /> Preparar reporte</button>
+          </div>
+          {lyricsExpanded && (
+            <Modal title="Letras" wide onClose={() => setLyricsExpanded(false)}>
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <img src={currentTrack.thumbnail} alt="" className="size-11 shrink-0 rounded-lg bg-white/5 object-cover" />
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-bold text-white">{currentTrack.title}</p>
+                    <p className="truncate text-xs text-gray-400">{currentTrack.artist}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={lyricsControl}>
+                    Tamaño
+                    <input type="range" min={16} max={44} value={lyricsFont} onChange={event => setLyricsFont(Number(event.target.value))}
+                      className="h-1.5 w-20 cursor-pointer appearance-none rounded-full bg-white/15 accent-brand-accent" />
+                  </label>
+                  <button type="button" role="switch" aria-checked={lyricsFollow} className={lyricsControl} onClick={() => setLyricsFollow(!lyricsFollow)}>
+                    Seguir la letra
+                    <span aria-hidden="true" className={"relative h-3.5 w-6 rounded-full transition-colors " + (lyricsFollow ? "bg-brand-accent" : "bg-white/15")}>
+                      <span className={"absolute left-0.5 top-0.5 size-2.5 rounded-full transition-transform " + (lyricsFollow ? "translate-x-2.5 bg-black" : "bg-gray-400")} />
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <div ref={fullLyrics} className="mt-4 max-h-[58dvh] space-y-3 overflow-auto px-1 py-4 font-bold leading-relaxed sm:px-3" style={{ fontSize: lyricsFont }}>
+                {lyrics.length ? lyrics.map((line, index) => (
+                  <button type="button" key={index} aria-current={index === activeLineIndex ? "true" : undefined}
+                    className={"lyrics-line block w-full rounded-lg px-2 py-1 text-left transition-colors " + (index === activeLineIndex
+                      ? "lyrics-active-line text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.4)]"
+                      : index < activeLineIndex ? "lyrics-line-past text-white/40 hover:text-white/80" : "lyrics-line-future text-white/20 hover:text-white/60")}
+                    onClick={() => seek(Math.max(0, line.time + lyricsOffset))}>{line.text || "•••"}</button>
+                )) : <p className="whitespace-pre-wrap text-gray-300">{isLoadingLyrics ? "Cargando letras…" : plainLyrics || "Letra no disponible."}</p>}
+              </div>
+            </Modal>
+          )}
           {isLoadingLyrics ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2">
               <div className="w-8 h-8 border-4 border-brand-accent border-t-transparent rounded-full animate-spin" />
@@ -411,27 +589,81 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                 {lyrics.map((line, idx) => {
                   const isActive = idx === activeLineIndex;
                   const isPast = idx < activeLineIndex;
+                  const effectiveTime = currentTime - lyricsOffset;
+                  const hasWordSync = Boolean(lyricsWordByWord && line.words && line.words.length > 0);
+
                   return (
-                    <p
+                    <button
+                      type="button"
                       key={idx}
-                      onClick={() => seek(line.time)}
+                      aria-current={isActive ? "true" : undefined}
+                      onClick={() => seek(Math.max(0, line.time + lyricsOffset))}
                       className={`lyrics-line text-lg md:text-xl font-bold cursor-pointer transition-all duration-300 text-left origin-left leading-relaxed ${
                         isActive 
-                          ? "lyrics-active-line text-white scale-105 filter drop-shadow-[0_0_12px_rgba(255,255,255,0.4)] opacity-100" 
+                          ? `lyrics-active-line scale-105 ${hasWordSync ? '' : 'text-white filter drop-shadow-[0_0_12px_rgba(255,255,255,0.4)] opacity-100'}`
                           : isPast 
                             ? "lyrics-line-past text-white/40 hover:text-white/80" 
                             : "lyrics-line-future text-white/20 hover:text-white/60"
                       }`}
                     >
-                      {line.text || "•••"}
-                    </p>
+                      {isActive && hasWordSync ? (
+                        line.words!.map((word, wIdx) => {
+                          const isPastWord = effectiveTime >= word.endTime;
+                          const isCurrentWord = effectiveTime >= word.startTime && effectiveTime < word.endTime;
+                          return (
+                            <span
+                              key={wIdx}
+                              className={`transition-all duration-150 inline-block mr-[0.28em] ${
+                                isCurrentWord
+                                  ? "!text-white scale-110 !font-black !opacity-100 drop-shadow-[0_0_18px_rgba(255,255,255,0.95)]"
+                                  : isPastWord
+                                    ? "!text-white/60 !font-semibold !opacity-60"
+                                    : "!text-white/20 !font-medium !opacity-20 select-none"
+                              }`}
+                            >
+                              {word.text}
+                            </span>
+                          );
+                        })
+                      ) : (
+                        line.text || "•••"
+                      )}
+                    </button>
                   );
                 })}
+                <div className="pt-8 pb-4 text-center shrink-0">
+                  <a
+                    href={lyricsSource === "spicylyrics" ? "https://spicylyrics.org" : lyricsSource === "lrcred" ? "https://lrc.red" : "https://lrclib.net"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-gray-300 transition-colors bg-white/5 hover:bg-white/10 px-3 py-1 rounded-full border border-white/5"
+                  >
+                    <span>Lyrics via {lyricsSource === "spicylyrics" ? "Spicy Lyrics" : lyricsSource === "lrcred" ? "lrc.red" : "lrclib.net"}</span>
+                    {lyricsWordByWord && lyrics.some(l => l.words && l.words.length > 0) && (
+                      <span className="text-[9px] font-black uppercase tracking-wider text-brand-accent bg-brand-accent/20 px-1.5 py-0.5 rounded-full border border-brand-accent/30">
+                        Word-sync
+                      </span>
+                    )}
+                    <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                  </a>
+                </div>
               </div>
             </>
           ) : plainLyrics ? (
             <div className="plain-lyrics flex-1 overflow-y-auto whitespace-pre-wrap text-base font-medium text-gray-300 leading-loose py-4 text-left">
+              <span className="mb-2 block text-sm text-gray-300">Letra sin sincronización</span>
               {plainLyrics}
+              <div className="pt-6 pb-2 text-center">
+                <a
+                  href={lyricsSource === "spicylyrics" ? "https://spicylyrics.org" : lyricsSource === "lrcred" ? "https://lrc.red" : "https://lrclib.net"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-gray-300 transition-colors bg-white/5 hover:bg-white/10 px-3 py-1 rounded-full border border-white/5"
+                >
+                  <span>Lyrics via {lyricsSource === "spicylyrics" ? "Spicy Lyrics" : lyricsSource === "lrcred" ? "lrc.red" : "lrclib.net"}</span>
+                  <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                </a>
+              </div>
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2 text-center px-4">
@@ -569,9 +801,10 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             </h2>
           </div>
           <div className="text-sm text-gray-400 mt-1 flex flex-wrap gap-x-1 select-none">
-            {currentTrack.artists && currentTrack.artists.length > 0 ? (
-              currentTrack.artists.map((art, i) => (
-                <React.Fragment key={art.id}>
+            {(() => {
+              const artistList = getArtistsFromTrack(currentTrack);
+              return artistList.map((art, i) => (
+                <React.Fragment key={art.id || i}>
                   <span
                     onClick={() => {
                       if (onOpenArtist) {
@@ -583,22 +816,10 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                   >
                     {art.name}
                   </span>
-                  {i < currentTrack.artists!.length - 1 && <span>,</span>}
+                  {i < artistList.length - 1 && <span>,</span>}
                 </React.Fragment>
-              ))
-            ) : (
-              <span
-                onClick={() => {
-                  if (onOpenArtist && currentTrack.artistId) {
-                    onOpenArtist({ id: currentTrack.artistId, name: currentTrack.artist, thumbnail: currentTrack.thumbnail });
-                    if (onClose) onClose();
-                  }
-                }}
-                className="cursor-pointer hover:text-brand-accent hover:underline transition-colors"
-              >
-                {currentTrack.artist}
-              </span>
-            )}
+              ));
+            })()}
           </div>
         </div>
 
@@ -652,7 +873,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             onMouseUp={handleSliderMouseUp}
             onTouchEnd={handleSliderMouseUp}
             disabled={roomId !== null && !isHost}
-            className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
+            className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer playback-range accent-brand-accent focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between text-[11px] text-gray-400 font-semibold tracking-wider">
             <span>{formatTime(currentTime)}</span>
@@ -725,7 +946,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
 
         {/* Volume Indicator */}
         <div className="flex items-center gap-3 bg-white/5 border border-white/5 px-4 py-2.5 rounded-2xl mt-2">
-          <button onClick={toggleMute} className="text-gray-400 hover:text-white">
+          <button aria-label={isMuted ? "Activar sonido" : "Silenciar"} onClick={toggleMute} className="text-gray-300 hover:text-white">
             {isMuted || volume === 0 ? (
               <VolumeX className="w-4.5 h-4.5 text-brand-accent" />
             ) : (
@@ -739,7 +960,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             step={0.01}
             value={isMuted ? 0 : volume}
             onChange={(e) => changeVolume(parseFloat(e.target.value))}
-            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
+            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer playback-range accent-brand-accent"
           />
         </div>
       </div>

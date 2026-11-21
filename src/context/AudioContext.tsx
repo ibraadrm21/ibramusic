@@ -1,8 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
 import type { Track } from "../services/musicApi";
-import { getYouTubeVideoId } from "../services/musicApi";
+import { getArtistsFromTrack, getYouTubeVideoId } from "../services/musicApi";
 import { supabase } from "../services/supabaseClient";
 import { StorageService } from "../services/storageService";
+import { readTrackVersionPreference, trackVersionId } from "../services/explicitPreferences";
+import { downloadService } from "../services/downloadService";
+import { measure } from "../services/metrics";
+import { createLocalPlayback } from "../services/localPlayback";
+import type { ListeningStats } from "../services/librarySync";
+import { BACKLOG_LIMIT, LISTENING_HISTORY_KEY, type ListeningEntry } from "../services/listeningHistory";
 
 declare global {
   interface Window {
@@ -17,28 +23,135 @@ declare global {
 
 // Cache for pre-resolved YouTube video IDs and native stream URLs to enable instant loading/playback
 const resolutionCache = new Map<string, { videoId: string; streamUrl?: string; timestamp: number }>();
+// In-flight resolution promises to prevent redundant duplicate network requests for the same track
+const inFlightResolutions = new Map<string, Promise<string>>();
 
 const getResolutionKey = (track: Track): string => {
   const explicitFlag = track.isExplicit === true ? "explicit" : track.isExplicit === false ? "clean" : "default";
-  return `${track.id}:${explicitFlag}`;
+  return `v3:${track.id}:${explicitFlag}`;
 };
 
-// Keep cache memory footprint strictly capped at 100 items
-const setResolutionCache = (key: string, value: { videoId: string; streamUrl?: string; timestamp: number }) => {
-  if (resolutionCache.size > 100) {
+const getCachedResolution = (track: Track): { videoId: string; streamUrl?: string; timestamp: number } | undefined => {
+  const key = getResolutionKey(track);
+  const found = resolutionCache.get(key);
+  if (found && found.videoId) return found;
+  return undefined;
+};
+
+// Keep cache memory footprint strictly capped at 150 items
+const setResolutionCache = (trackOrKey: Track | string, value: { videoId: string; streamUrl?: string; timestamp: number }) => {
+  if (resolutionCache.size > 150) {
     const oldestKey = resolutionCache.keys().next().value;
     if (oldestKey) resolutionCache.delete(oldestKey);
   }
+  const key = typeof trackOrKey === "string" ? trackOrKey : getResolutionKey(trackOrKey);
   resolutionCache.set(key, value);
 };
 
+function withExplicitPreference(track: Track): Track {
+  const chosen = readTrackVersionPreference(track.id);
+  if (chosen !== undefined) return track.isExplicit === chosen ? track : { ...track, isExplicit: chosen };
+  if (track.isExplicit === true) return track;
+  if (localStorage.getItem("ibrastream_filter_explicit") === "true") return track.isExplicit === false ? track : { ...track, isExplicit: false };
+  const ids = StorageService.getItemSync<string[]>("ibrastream_explicit_tracks")
+    ?? StorageService.getItemSync<string[]>("ibrastream_explicit_track_ids");
+  return Array.isArray(ids) && (ids.includes(track.id) || ids.includes(trackVersionId(track.id)))
+    ? { ...track, isExplicit: true }
+    : track;
+}
+
+const videoIdPattern = /^[a-zA-Z0-9_-]{11}$/;
+
+function trackSourceKey(track: Track): string {
+  const version = withExplicitPreference(track).isExplicit === true ? "explicit" : "clean";
+  return `ibrastream_track_source_v3:${track.id}:${version}`;
+}
+
+function readTrackVideoId(sourceKey: string): string | undefined {
+  const saved = StorageService.getItemSync<{ videoId: string }>(sourceKey);
+  return typeof saved?.videoId === "string" && videoIdPattern.test(saved.videoId) ? saved.videoId : undefined;
+}
+
+function getPreferredTrackVideoId(track: Track): string | undefined {
+  const sourceKey = trackSourceKey(track);
+  return readTrackVideoId(sourceKey) ?? (
+    sourceKey.endsWith(":clean") && readTrackVersionPreference(track.id) === undefined
+      ? readTrackVideoId(sourceKey.replace(/:clean$/, ":default"))
+      : undefined
+  );
+}
+
+export const resolveTrackVideoId = async (track: Track, signal?: AbortSignal, excludeVideoIds?: string[], usePreferredSource = true): Promise<string> => {
+  if (!track) return "";
+  const hasExclusions = Array.isArray(excludeVideoIds) && excludeVideoIds.length > 0;
+  const excludedSet = hasExclusions ? new Set(excludeVideoIds) : null;
+  const enrichedTrack = withExplicitPreference(track);
+  const preferredVideoId = usePreferredSource ? getPreferredTrackVideoId(enrichedTrack) : undefined;
+  if (preferredVideoId && !excludedSet?.has(preferredVideoId)) return preferredVideoId;
+
+  // 1. Instant cache hit check (checks both explicit key and plain track id)
+  const cached = getCachedResolution(enrichedTrack);
+  if (cached && cached.videoId && (!excludedSet || !excludedSet.has(cached.videoId))) {
+    return cached.videoId;
+  }
+
+  // 2. In-flight check: if already resolving this track, share the existing Promise!
+  const chosenVersion = readTrackVersionPreference(track.id) !== undefined;
+  const inFlightKey = getResolutionKey(enrichedTrack) + (hasExclusions ? `_ex_${[...excludedSet!].sort().join("_")}` : "");
+  if (inFlightResolutions.has(inFlightKey)) {
+    try {
+      return await inFlightResolutions.get(inFlightKey)!;
+    } catch {
+      // Fall through on error to retry fresh
+    }
+  }
+
+  // 3. Initiate resolution
+  const promise: Promise<string> = getYouTubeVideoId(enrichedTrack, signal, excludeVideoIds, chosenVersion)
+    .then(videoId => {
+      if (videoId && inFlightResolutions.get(inFlightKey) === promise && (!excludedSet || !excludedSet.has(videoId))) {
+        setResolutionCache(enrichedTrack, { videoId, timestamp: Date.now() });
+      }
+      return videoId;
+    })
+    .finally(() => {
+      if (inFlightResolutions.get(inFlightKey) === promise) inFlightResolutions.delete(inFlightKey);
+    });
+
+  inFlightResolutions.set(inFlightKey, promise);
+  return promise;
+};
+
 export const invalidateTrackResolution = (trackId: string) => {
+  const cleanId = trackId.replace(/^yt-/, "");
   for (const key of Array.from(resolutionCache.keys())) {
-    if (key === trackId || key.startsWith(`${trackId}:`)) {
+    if (
+      key === trackId ||
+      key === cleanId ||
+      key.includes(`:${trackId}:`) ||
+      key.includes(`:${cleanId}:`) ||
+      key.startsWith(`${trackId}:`) ||
+      key.startsWith(`${cleanId}:`)
+    ) {
       resolutionCache.delete(key);
     }
   }
+  for (const key of Array.from(inFlightResolutions.keys())) {
+    if (
+      key === trackId ||
+      key === cleanId ||
+      key.includes(`:${trackId}:`) ||
+      key.includes(`:${cleanId}:`)
+    ) {
+      inFlightResolutions.delete(key);
+    }
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("ibrastream_track_resolution_invalidated", { detail: { trackId } }));
+  }
 };
+
+interface RoomTrackRequest { id: string; track: Track; proposer: string }
 
 interface AudioContextType {
   currentTrack: Track | null;
@@ -52,8 +165,26 @@ interface AudioContextType {
   isRepeat: "none" | "one" | "all";
   playingPlaylistId: string | null;
   setPlayingPlaylistId: (id: string | null) => void;
-  playTrack: (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean) => void;
+  playShuffledPlaylist: (tracks: Track[], playlistId: string) => void;
+  playTrack: (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean, startAt?: number, forceOnline?: boolean) => void;
   togglePlay: () => void;
+  playbackError: string | null;
+  setPlaybackError: (err: string | null) => void;
+  privateSession: boolean;
+  setPrivateSession: (value: boolean) => void;
+  autoplay: boolean;
+  setAutoplay: (value: boolean) => void;
+  normalizeLocalAudio: boolean;
+  setNormalizeLocalAudio: (value: boolean) => void;
+  smartShuffle: boolean;
+  setSmartShuffle: (value: boolean) => void;
+  listeningEntries: ListeningEntry[];
+  clearListeningHistory: () => void;
+  retryPlayback: () => void;
+  chooseTrackSource: (track: Track, videoId: string) => void;
+  getTrackSourceVideoId: (track: Track) => string | undefined;
+  pauseForTrackPreview: () => () => void;
+  undoQueue: (() => void) | null;
   nextTrack: () => void;
   prevTrack: () => void;
   seek: (time: number, isRemoteSync?: boolean) => void;
@@ -73,17 +204,24 @@ interface AudioContextType {
   playlistIndex: number;
   currentTrackSource: 'playlist' | 'user_queue' | null;
   history: Track[];
-  accumulatedStats: any;
-  setAccumulatedStats: React.Dispatch<React.SetStateAction<any>>;
+  accumulatedStats: ListeningStats;
+  setAccumulatedStats: React.Dispatch<React.SetStateAction<ListeningStats>>;
   // Listen Together
   roomId: string | null;
   isHost: boolean;
   isConnected: boolean;
-  participants: { id: string; name: string; pfp?: string }[];
+  participants: { id: string; name: string; pfp?: string; isHost?: boolean }[];
   createRoom: () => void;
   joinRoom: (roomId: string) => void;
   leaveRoom: () => void;
   closeRoom: () => void;
+  syncRoom: () => void;
+  proposeRoomTrack: (track: Track) => void;
+  roomRequests: RoomTrackRequest[];
+  answerRoomRequest: (id: string, add: boolean) => void;
+  transferRoom: (id: string) => void;
+  directRequests: boolean;
+  setDirectRequests: (value: boolean) => void;
   updateUserIdentity: (name: string, pfp?: string) => void;
   // Custom Settings & Premium features
   ambientGlowEnabled: boolean;
@@ -92,13 +230,13 @@ interface AudioContextType {
   setSeamlessTransitions: (val: boolean) => void;
   seamlessDuration: number;
   setSeamlessDuration: (seconds: number) => void;
-  eqPreset: "flat" | "bass" | "vocal" | "electronic";
-  setEqPreset: (val: "flat" | "bass" | "vocal" | "electronic") => void;
   sleepTimerRemaining: number | null;
   startSleepTimer: (minutes: number) => void;
   cancelSleepTimer: () => void;
-  onlyDownloaded: boolean;
-  setOnlyDownloaded: (val: boolean) => void;
+  lyricsProvider: "spicylyrics" | "lrcred" | "lrclib";
+  setLyricsProvider: (val: "spicylyrics" | "lrcred" | "lrclib") => void;
+  lyricsWordByWord: boolean;
+  setLyricsWordByWord: (enabled: boolean) => void;
   currentUser: any;
 }
 
@@ -128,8 +266,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState(() => {
+    const saved = StorageService.getItemSync<{ id: string; seconds: number }>("ibrastream_resume_position");
+    return saved && saved.id === currentTrack?.id && Number.isFinite(saved.seconds) ? Math.max(0, saved.seconds) : 0;
+  });
+  const [duration, setDuration] = useState(currentTrack?.duration ?? 0);
   const [volume, setVolume] = useState<number>(() => {
     const saved = localStorage.getItem("ibrastream_volume");
     return saved ? parseFloat(saved) : 0.8;
@@ -155,12 +296,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return saved ? parseInt(saved, 10) : -1;
   });
   const [history, setHistory] = useState<Track[]>(() => {
-    const hasReset = localStorage.getItem("ibrastream_history_reset_20260704");
-    if (!hasReset) {
-      localStorage.removeItem("ibrastream_history");
-      localStorage.setItem("ibrastream_history_reset_20260704", "true");
-      return [];
-    }
     const saved = localStorage.getItem("ibrastream_history");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
@@ -307,13 +442,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [queue, currentIndex, currentTrack, userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, history, currentTrackSource]);
 
-  const [accumulatedStats, setAccumulatedStats] = useState(() => {
-    const hasResetAcc = localStorage.getItem("ibrastream_accumulated_reset_20260704_v3");
-    if (!hasResetAcc) {
-      localStorage.removeItem("ibrastream_accumulated_stats");
-      localStorage.setItem("ibrastream_accumulated_reset_20260704_v3", "true");
-      return { totalSeconds: 0, tracks: {}, artists: {} };
-    }
+  const [accumulatedStats, setAccumulatedStats] = useState<ListeningStats>(() => {
     const saved = localStorage.getItem("ibrastream_accumulated_stats");
     try {
       return saved ? JSON.parse(saved) : { totalSeconds: 0, tracks: {}, artists: {} };
@@ -322,110 +451,128 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  const prevTimeRef = useRef<number>(0);
-  const lastTrackIdRef = useRef<string | null>(null);
-  const playCountLockRef = useRef<boolean>(false);
-
-  // Track play count once after 50% of duration or 30 seconds (whichever is earlier)
-  useEffect(() => {
-    if (!currentTrack) {
-      playCountLockRef.current = false;
-      lastTrackIdRef.current = null;
-      return;
-    }
-
-    if (lastTrackIdRef.current !== currentTrack.id) {
-      lastTrackIdRef.current = currentTrack.id;
-      playCountLockRef.current = false;
-    }
-
-    const playThreshold = duration ? Math.min(duration * 0.5, 30) : 30;
-
-    if (!playCountLockRef.current && currentTime >= playThreshold) {
-      playCountLockRef.current = true;
-      setAccumulatedStats((prev: any) => {
-        const next = {
-          ...prev,
-          tracks: { ...prev.tracks },
-          artists: { ...prev.artists }
-        };
-
-        if (!next.tracks[currentTrack.id]) {
-          next.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
-        } else {
-          next.tracks[currentTrack.id] = { ...next.tracks[currentTrack.id] };
-        }
-        next.tracks[currentTrack.id].count += 1;
-
-        const artistName = currentTrack.artist || "Unknown Artist";
-        if (!next.artists[artistName]) {
-          next.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
-        } else {
-          next.artists[artistName] = { ...next.artists[artistName] };
-        }
-        next.artists[artistName].count += 1;
-
-        return next;
-      });
-    }
-  }, [currentTime, currentTrack, duration]);
-
-  // Track seconds played buffered in ref to eliminate high-frequency React re-renders
-  const accumulatedStatsRef = useRef(accumulatedStats);
-  useEffect(() => {
-    accumulatedStatsRef.current = accumulatedStats;
-  }, [accumulatedStats]);
+  const [privateSession, setPrivateSession] = useState(() => sessionStorage.getItem("ibrastream_private_session") === "true");
+  const [autoplay, setAutoplay] = useState(() => localStorage.getItem("ibrastream_autoplay") === "true");
+  const [listeningEntries, setListeningEntries] = useState<ListeningEntry[]>(() => StorageService.getItemSync<ListeningEntry[]>(LISTENING_HISTORY_KEY) ?? []);
+  const listeningEntriesRef = useRef(listeningEntries);
+  const activeListenRef = useRef<ListeningEntry | null>(null);
+  const listeningDirty = useRef(false);
+  const positionSample = useRef<{ id: string; seconds: number; at: number } | null>(null);
+  const statisticsRef = useRef(accumulatedStats);
 
   useEffect(() => {
-    if (!currentTrack || !isPlaying) {
-      prevTimeRef.current = currentTime;
-      return;
-    }
-
-    const diff = currentTime - prevTimeRef.current;
-    prevTimeRef.current = currentTime;
-
-    if (diff > 0 && diff < 3) {
-      const stats = accumulatedStatsRef.current;
-      stats.totalSeconds = (stats.totalSeconds || 0) + diff;
-
-      if (!stats.tracks[currentTrack.id]) {
-        stats.tracks[currentTrack.id] = { track: currentTrack, seconds: 0, count: 0 };
-      }
-      stats.tracks[currentTrack.id].seconds = (stats.tracks[currentTrack.id].seconds || 0) + diff;
-
-      const artistName = currentTrack.artist || "Unknown Artist";
-      if (!stats.artists[artistName]) {
-        stats.artists[artistName] = { name: artistName, seconds: 0, count: 0, thumbnail: currentTrack.thumbnail || "" };
-      }
-      stats.artists[artistName].seconds = (stats.artists[artistName].seconds || 0) + diff;
-    }
-  }, [currentTime, isPlaying, currentTrack]);
-
-  // Flush stats to localStorage every 10 seconds or on unmount
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (accumulatedStatsRef.current) {
-        localStorage.setItem("ibrastream_accumulated_stats", JSON.stringify(accumulatedStatsRef.current));
-      }
-    }, 10000);
-    return () => clearInterval(interval);
+    let active = true;
+    void StorageService.getItem<ListeningEntry[]>(LISTENING_HISTORY_KEY).then(saved => {
+      if (!active || !Array.isArray(saved) || listeningDirty.current) return;
+      listeningEntriesRef.current = saved.slice(-BACKLOG_LIMIT);
+      setListeningEntries(listeningEntriesRef.current);
+    });
+    return () => { active = false; };
   }, []);
 
-  // Trigger pre-resolution of the next song in the queue immediately in background
+  useEffect(() => { statisticsRef.current = accumulatedStats; }, [accumulatedStats]);
+
+  function flushListening() {
+    if (!listeningDirty.current) return;
+    listeningDirty.current = false;
+    const items = listeningEntriesRef.current.slice(-BACKLOG_LIMIT);
+    listeningEntriesRef.current = items;
+    StorageService.setItemSync(LISTENING_HISTORY_KEY, items);
+    StorageService.setItemSync("ibrastream_accumulated_stats", statisticsRef.current);
+    setListeningEntries([...items]);
+    setAccumulatedStats({ ...statisticsRef.current });
+  }
+
   useEffect(() => {
-    if (!currentTrack || queue.length === 0) return;
-    const idx = queue.findIndex(t => t.id === currentTrack.id);
-    if (idx !== -1 && idx + 1 < queue.length) {
-      const nextTrack = queue[idx + 1];
-      const abortController = new AbortController();
-      
-      preResolveTrack(nextTrack, abortController.signal).catch(() => {});
-      return () => {
-        abortController.abort();
-      };
+    const timer = window.setInterval(flushListening, 10000);
+    window.addEventListener("pagehide", flushListening);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("pagehide", flushListening);
+    };
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("ibrastream_autoplay", String(autoplay));
+  }, [autoplay]);
+
+  useEffect(() => {
+    sessionStorage.setItem("ibrastream_private_session", String(privateSession));
+    activeListenRef.current = null;
+    positionSample.current = null;
+  }, [privateSession]);
+
+  function clearListeningHistory() {
+    activeListenRef.current = null;
+    positionSample.current = null;
+    listeningDirty.current = false;
+    listeningEntriesRef.current = [];
+    statisticsRef.current = { totalSeconds: 0, tracks: {}, artists: {} };
+    setListeningEntries([]);
+    setAccumulatedStats(statisticsRef.current);
+    setHistory([]);
+    StorageService.setItemSync(LISTENING_HISTORY_KEY, []);
+    StorageService.setItemSync("ibrastream_accumulated_stats", statisticsRef.current);
+    void StorageService.removeItem("ibrastream_recently_played");
+    window.dispatchEvent(new Event("ibrastream_history_updated"));
+  }
+
+  useEffect(() => {
+    if (!currentTrack || !isPlaying || privateSession) {
+      positionSample.current = null;
+      return;
     }
-  }, [currentTrack, queue]);
+
+    const previous = positionSample.current;
+    const at = Date.now();
+    positionSample.current = { id: currentTrack.id, seconds: currentTime, at };
+    if (!previous || previous.id !== currentTrack.id) return;
+    const elapsed = (at - previous.at) / 1000;
+    const advanced = currentTime - previous.seconds;
+    if (advanced <= 0 || elapsed > 5 || advanced > elapsed * 2.1 + .3) {
+      if (advanced < -5 && currentTime < 2 && previous.seconds > duration - 2) activeListenRef.current = null;
+      return;
+    }
+    const seconds = Math.min(advanced, elapsed);
+    if (seconds <= 0) return;
+
+    let entry = activeListenRef.current;
+    if (!entry || entry.track.id !== currentTrack.id) {
+      entry = { id: crypto.randomUUID(), at, track: currentTrack, seconds: 0, completed: false };
+      activeListenRef.current = entry;
+      listeningEntriesRef.current.push(entry);
+    }
+    entry.seconds += seconds;
+    listeningDirty.current = true;
+
+    const stats = statisticsRef.current;
+    const track = stats.tracks[currentTrack.id] ??= { track: currentTrack, seconds: 0, count: 0 };
+    const name = currentTrack.artist || "Artista desconocido";
+    const artist = stats.artists[name] ??= { name, thumbnail: currentTrack.thumbnail, seconds: 0, count: 0 };
+    track.seconds += seconds;
+    artist.seconds += seconds;
+    stats.totalSeconds += seconds;
+    if (!entry.completed && entry.seconds >= Math.min(duration ? duration / 2 : 30, 30)) {
+      entry.completed = true;
+      track.count++;
+      artist.count++;
+    }
+  }, [currentTime, currentTrack, duration, isPlaying, privateSession]);
+
+  // Trigger pre-resolution of upcoming songs immediately in background (without aborting on re-render)
+  useEffect(() => {
+    if (!currentTrack || !isPlaying || !navigator.onLine) return;
+    const candidate = getNextUpcomingTrack();
+    if (candidate && candidate.track) {
+      resolveTrackVideoId(candidate.track).catch(() => {});
+    }
+    if (queue.length > 2) {
+      const secondTrack = queue[2];
+      if (secondTrack && (!candidate || secondTrack.id !== candidate.track.id)) {
+        resolveTrackVideoId(secondTrack).catch(() => {});
+      }
+    }
+  }, [currentTrack?.id, queue.length, isPlaying]);
 
   // Settings & Sleep Timer States
   const [ambientGlowEnabled, setAmbientGlowEnabled] = useState<boolean>(() => {
@@ -440,13 +587,31 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = localStorage.getItem("ibrastream_seamless_duration");
     return saved ? parseInt(saved, 10) : 4; // Default 4 seconds crossfade
   });
-  const [onlyDownloaded, setOnlyDownloaded] = useState<boolean>(() => {
-    const saved = localStorage.getItem("ibrastream_only_downloaded");
-    return saved === "true"; // Default to false
+  const [lyricsProvider, setLyricsProviderState] = useState<"spicylyrics" | "lrcred" | "lrclib">(() => {
+    const saved = localStorage.getItem("ibrastream_lyrics_provider");
+    return saved === "spicylyrics" || saved === "lrcred" || saved === "lrclib" ? saved : "spicylyrics";
   });
-  const [eqPreset, setEqPreset] = useState<"flat" | "bass" | "vocal" | "electronic">(() => {
-    return (localStorage.getItem("ibrastream_eq_preset") as any) || "flat";
+
+  const setLyricsProvider = (provider: "spicylyrics" | "lrcred" | "lrclib") => {
+    setLyricsProviderState(provider);
+    localStorage.setItem("ibrastream_lyrics_provider", provider);
+    window.dispatchEvent(new CustomEvent("ibrastream_lyrics_provider_changed", { detail: provider }));
+  };
+  const [lyricsWordByWord, setLyricsWordByWordState] = useState<boolean>(() => {
+    const saved = localStorage.getItem("ibrastream_lyrics_word_by_word");
+    return saved !== "false"; // Default enabled
   });
+
+  const setLyricsWordByWord = (enabled: boolean) => {
+    setLyricsWordByWordState(enabled);
+    localStorage.setItem("ibrastream_lyrics_word_by_word", String(enabled));
+    if (enabled && lyricsProvider !== "spicylyrics" && lyricsProvider !== "lrcred") {
+      setLyricsProviderState("spicylyrics");
+      localStorage.setItem("ibrastream_lyrics_provider", "spicylyrics");
+      window.dispatchEvent(new CustomEvent("ibrastream_lyrics_provider_changed", { detail: "spicylyrics" }));
+    }
+    window.dispatchEvent(new CustomEvent("ibrastream_lyrics_word_by_word_changed", { detail: enabled }));
+  };
   const [sleepTimerRemaining, setSleepTimerRemaining] = useState<number | null>(null);
   const sleepTimerRef = useRef<number | null>(null);
   const originalVolumeRef = useRef<number>(volume);
@@ -469,16 +634,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem("ibrastream_ambient_glow", String(ambientGlowEnabled));
   }, [ambientGlowEnabled]);
-
-  useEffect(() => {
-    localStorage.setItem("ibrastream_only_downloaded", String(onlyDownloaded));
-    window.dispatchEvent(new Event("ibrastream_only_downloaded_changed"));
-  }, [onlyDownloaded]);
-
-  useEffect(() => {
-    localStorage.setItem("ibrastream_eq_preset", eqPreset);
-    
-  }, [eqPreset]);
 
   const startSleepTimer = (minutes: number) => {
     originalVolumeRef.current = volume;
@@ -530,6 +685,67 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [sleepTimerRemaining, isPlaying]);
 
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [undoQueue, setUndoQueue] = useState<(() => void) | null>(null);
+  const undoQueueTimer = useRef<number | undefined>(undefined);
+  const [normalizeLocalAudio, setNormalizeLocalAudio] = useState(() => localStorage.getItem("ibrastream_normalize_local") === "true");
+  const [smartShuffle, setSmartShufflePreference] = useState(() => localStorage.getItem("ibrastream_balanced_shuffle") === "true");
+  const localDeck = useRef<{ audio: HTMLAudioElement; url: string; player: ReturnType<typeof createLocalPlayback> } | null>(null);
+  useEffect(() => {
+    localStorage.setItem("ibrastream_normalize_local", String(normalizeLocalAudio));
+    if (localDeck.current) void localDeck.current.player.setNormalization(normalizeLocalAudio);
+  }, [normalizeLocalAudio]);
+  useEffect(() => {
+    localStorage.setItem("ibrastream_balanced_shuffle", String(smartShuffle));
+  }, [smartShuffle]);
+  const playbackStarted = useRef<number | null>(null);
+  const loadedTrackId = useRef<string | null>(null);
+  const lastResolvedVideoIdRef = useRef<string | null>(null);
+  const failedVideoIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const fallbackRetriesRef = useRef<Map<string, number>>(new Map());
+  const playTrackRef = useRef<any>(null);
+  const currentTimeRef = useRef(0);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+  const resumeSnapshot = useRef<{ id: string; seconds: number } | null>(null);
+  const lastResumeSave = useRef(0);
+  const lastDuration = useRef(0);
+
+  useEffect(() => {
+    const save = () => {
+      if (resumeSnapshot.current) StorageService.setItemSync("ibrastream_resume_position", resumeSnapshot.current);
+    };
+    window.addEventListener("pagehide", save);
+    return () => {
+      window.removeEventListener("pagehide", save);
+      clearTimeout(undoQueueTimer.current);
+      if (localDeck.current) {
+        const prev = localDeck.current;
+        localDeck.current = null;
+        prev.audio.onerror = null;
+        prev.audio.onplaying = null;
+        prev.audio.onpause = null;
+        prev.audio.onended = null;
+        prev.audio.onloadedmetadata = null;
+        prev.audio.pause();
+        prev.audio.removeAttribute("src");
+        prev.audio.load();
+        prev.player.dispose();
+        URL.revokeObjectURL(prev.url);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!currentTrack || roomId) return;
+    resumeSnapshot.current = { id: currentTrack.id, seconds: currentTime };
+    if (Date.now() - lastResumeSave.current >= 5000) {
+      lastResumeSave.current = Date.now();
+      StorageService.setItemSync("ibrastream_resume_position", resumeSnapshot.current);
+    }
+  }, [currentTrack?.id, currentTime, roomId]);
+
   const [toast, setToast] = useState<{ message: string; type: "info" | "success" | "error" } | null>(null);
 
   // YouTube Dual Players for Simultaneous Seamless Crossfade (web/desktop)
@@ -538,7 +754,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const ytReadyRef = useRef<boolean>(false);
 
   // Helper to get active player
-  const getActivePlayer = () => ytPlayersRef.current[activeDeckRef.current];
+  function finishPlaybackMeasurement(metric: "play" | "play_error") {
+    if (playbackStarted.current === null) return;
+    measure(metric, performance.now() - playbackStarted.current);
+    playbackStarted.current = null;
+  }
+
+  const getActivePlayer = () => localDeck.current?.player ?? ytPlayersRef.current[activeDeckRef.current];
 
   // Silent audio hack to keep Media Session alive (web only)
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -554,6 +776,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const startSeamlessFadeInRef = useRef<() => void>(() => {});
   const finishCrossfadeNowRef = useRef<(() => void) | null>(null);
   const playbackExpectedRef = useRef<boolean>(false);
+  const previewPauseRef = useRef<{ shouldResume: boolean } | null>(null);
 
   useEffect(() => {
     handleTrackEndedRef.current = handleTrackEnded;
@@ -564,7 +787,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     startSeamlessFadeInRef.current = startSeamlessFadeIn;
   });
 
-  // Initialize Dual YouTube IFrame Players (Deck 0 and Deck 1)
+  // Initialize the main deck on demand. The standby deck is created during pre-cue.
   useEffect(() => {
     
 
@@ -574,21 +797,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     silentAudioRef.current = silentAudio;
 
     // Create hidden containers for both YT iframes
-    [0, 1].forEach(deck => {
+    const createContainer = (deck: 0 | 1) => {
       const id = `youtube-player-${deck}`;
       let ytDiv = document.getElementById(id);
       if (!ytDiv) {
         ytDiv = document.createElement("div");
         ytDiv.id = id;
+        ytDiv.setAttribute("aria-hidden", "true");
         ytDiv.setAttribute(
           "style",
           "position: fixed; top: -9999px; left: -9999px; width: 1px; height: 1px; opacity: 0.001; pointer-events: none; z-index: -9999;"
         );
         document.body.appendChild(ytDiv);
       }
-    });
+    };
 
     const createPlayerInstance = (deck: 0 | 1) => {
+      createContainer(deck);
       return new window.YT.Player(`youtube-player-${deck}`, {
         height: "1",
         width: "1",
@@ -605,18 +830,34 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         },
         events: {
           onReady: (event: any) => {
-            const initialVol = isMuted ? 0 : (deck === activeDeckRef.current ? volume * 100 : 0);
+            const initialVol = isMutedRef.current ? 0 : (deck === activeDeckRef.current ? volumeRef.current * 100 : 0);
             event.target.setVolume(initialVol);
+            const frame = event.target.getIframe?.();
+            frame?.setAttribute("tabindex", "-1");
+            frame?.setAttribute("aria-hidden", "true");
           },
           onStateChange: (event: any) => {
             // YT.PlayerState: -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
             const state = event.data;
-            const isThisActiveDeck = deck === activeDeckRef.current;
+            const isThisActiveDeck = deck === activeDeckRef.current && !localDeck.current;
 
             if (state === 1) {
               if (isThisActiveDeck) {
+                const preview = previewPauseRef.current;
+                if (preview) {
+                  preview.shouldResume = true;
+                  event.target.pauseVideo();
+                  setIsPlaying(false);
+                  setIsLoading(false);
+                  return;
+                }
                 setIsPlaying(true);
                 setIsLoading(false);
+                setPlaybackError(null);
+                if (currentTrackRef.current) {
+                  fallbackRetriesRef.current.delete(currentTrackRef.current.id);
+                }
+                finishPlaybackMeasurement("play");
                 startPollingProgress();
                 if (!isTransitioningRef.current) {
                   startSeamlessFadeInRef.current?.();
@@ -655,18 +896,48 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               }
             }
           },
-          onError: (e: any) => {
-            if (deck === activeDeckRef.current) {
-              console.error("YouTube Player error on active deck:", e.data);
-              setIsPlaying(false);
-              setIsLoading(false);
-              playbackExpectedRef.current = false;
-              const msg = e.data === 150 || e.data === 101
-                ? "This track cannot be embedded. Trying next..."
-                : "Playback error. Trying next track...";
-              showToast(msg, "error");
-              setTimeout(() => nextTrackRef.current(), 2000);
+          onAutoplayBlocked: () => {
+            if (deck !== activeDeckRef.current || localDeck.current) return;
+            setIsLoading(false);
+            setIsPlaying(false);
+            setPlaybackError("Pulsa Reproducir para activar el audio en este navegador.");
+          },
+          onError: async (event: { data: number }) => {
+            if (deck !== activeDeckRef.current || localDeck.current) return;
+            const currentTrk = currentTrackRef.current;
+            const currentVid = lastResolvedVideoIdRef.current;
+            console.warn(`[AudioContext] YouTube player error ${event.data} for track: ${currentTrk?.title} (${currentVid})`);
+
+            const preferredVideoId = currentTrk && !roomIdRef.current ? getPreferredTrackVideoId(currentTrk) : undefined;
+            if (currentTrk && currentVid && currentVid !== preferredVideoId) {
+              const retries = fallbackRetriesRef.current.get(currentTrk.id) || 0;
+              if (retries < 2) {
+                fallbackRetriesRef.current.set(currentTrk.id, retries + 1);
+                let failedSet = failedVideoIdsRef.current.get(getResolutionKey(currentTrk));
+                if (!failedSet) {
+                  failedSet = new Set();
+                  failedVideoIdsRef.current.set(getResolutionKey(currentTrk), failedSet);
+                }
+                failedSet.add(currentVid);
+                invalidateTrackResolution(currentTrk.id);
+                console.log(`[AudioContext] Automatically attempting fallback version for ${currentTrk.title} (Attempt ${retries + 1})...`);
+                try {
+                  await playTrackRef.current?.(currentTrk, undefined, undefined, false, currentTimeRef.current);
+                  return;
+                } catch (fallbackErr) {
+                  console.warn("[AudioContext] Fallback attempt failed:", fallbackErr);
+                }
+              }
             }
+
+            setIsPlaying(false);
+            setIsLoading(false);
+            loadedTrackId.current = null;
+            playbackExpectedRef.current = false;
+            setPlaybackError(event.data === 150 || event.data === 101
+              ? "Esta versión tiene restricciones de reproducción. Intenta con otra versión."
+              : "No se pudo reproducir la pista.");
+            finishPlaybackMeasurement("play_error");
           }
         }
       });
@@ -723,6 +994,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const applyHardwareVolume = (effectiveVolume: number, targetDeck?: 0 | 1) => {
     const targetVol = isMuted ? 0 : Math.max(0, Math.min(1, effectiveVolume));
+    localDeck.current?.player.setVolume(targetVol * 100);
     const deck = targetDeck !== undefined ? targetDeck : activeDeckRef.current;
     const player = ytPlayersRef.current[deck];
     if (player && typeof player.setVolume === "function") {
@@ -760,6 +1032,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Pre-cue ref to remember what track is currently preloaded on the standby deck
   const preCuedTrackIdRef = useRef<string | null>(null);
+  const preCuedExplicitRef = useRef<boolean | undefined>(undefined);
   // Track readiness status of the pre-cued deck
   const preCuedReadyRef = useRef<boolean>(false);
 
@@ -767,9 +1040,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Uses cueVideoById which tells YouTube to download & buffer WITHOUT playing,
   // avoiding the mute/play/pause/seek hack that caused audible flashes and re-buffering.
   const preCueStandbyPlayer = async (candidate: { track: Track; source: 'user_queue' | 'playlist'; nextIndex?: number }) => {
-    const nextTrackItem = candidate.track;
-    if (preCuedTrackIdRef.current === nextTrackItem.id) return; // Already pre-cued or pre-cueing
+    const nextTrackItem = withExplicitPreference(candidate.track);
+    if (localDeck.current || downloadService.isTrackDownloaded(nextTrackItem.id)) return;
+    if (preCuedTrackIdRef.current === nextTrackItem.id && preCuedReadyRef.current && preCuedExplicitRef.current === nextTrackItem.isExplicit) return;
     preCuedTrackIdRef.current = nextTrackItem.id;
+    preCuedExplicitRef.current = nextTrackItem.isExplicit;
     preCuedReadyRef.current = false;
     
     const outgoingDeck = activeDeckRef.current;
@@ -778,32 +1053,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!standbyPlayer || typeof standbyPlayer.loadVideoById !== "function") return;
 
     try {
-      let nextVideoId = "";
-      const cached = resolutionCache.get(nextTrackItem.id);
-      if (cached && cached.videoId) {
-        nextVideoId = cached.videoId;
-      } else {
-        nextVideoId = await getYouTubeVideoId(nextTrackItem);
-      }
-      if (!nextVideoId) return;
+      const failed = failedVideoIdsRef.current.get(getResolutionKey(nextTrackItem));
+      const nextVideoId = await resolveTrackVideoId(nextTrackItem, undefined, failed && Array.from(failed), !roomIdRef.current);
+      if (!nextVideoId || preCuedTrackIdRef.current !== nextTrackItem.id || preCuedExplicitRef.current !== nextTrackItem.isExplicit || activeDeckRef.current !== outgoingDeck) return;
 
       // Ensure standby player is silent before cueing
       if (typeof standbyPlayer.setVolume === "function") {
         standbyPlayer.setVolume(0);
       }
+      if (typeof standbyPlayer.unMute === "function") {
+        try { standbyPlayer.unMute(); } catch {}
+      }
 
-      // cueVideoById tells YouTube to download & buffer the stream without playing.
-      // The player transitions to state 5 (CUED) when ready — no audio leak possible.
       if (typeof standbyPlayer.cueVideoById === "function") {
         standbyPlayer.cueVideoById({ videoId: nextVideoId, startSeconds: 0 });
       } else {
-        // Fallback for older API: load + immediately pause
         standbyPlayer.loadVideoById({ videoId: nextVideoId, startSeconds: 0 });
         try { standbyPlayer.pauseVideo?.(); } catch {}
       }
 
-      // Poll until the player reaches CUED (5) or PAUSED (2) — meaning buffer is ready.
-      // Also accept PLAYING (1) as ready in case the browser auto-plays despite cue.
       let checkAttempts = 0;
       const warmupInterval = setInterval(() => {
         checkAttempts++;
@@ -813,19 +1081,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         try {
+          const loadedVid = standbyPlayer.getVideoData?.()?.video_id;
           const state = standbyPlayer.getPlayerState?.();
-
-          // State 5 = CUED (buffered, ready to play instantly)
-          // State 2 = PAUSED (loaded and paused — also good)
-          // State 1 = PLAYING (auto-played despite cue — pause it and mark ready)
-          if (state === 5 || state === 2) {
+          // ONLY mark ready when the player has actually loaded nextVideoId!
+          if (loadedVid === nextVideoId && (state === 5 || state === 2 || state === -1)) {
             clearInterval(warmupInterval);
             standbyPlayer.setVolume?.(0);
             preCuedReadyRef.current = true;
             return;
           }
-          if (state === 1) {
-            // Browser auto-played; pause immediately and mark ready
+          if (loadedVid === nextVideoId && state === 1) {
             clearInterval(warmupInterval);
             standbyPlayer.pauseVideo?.();
             standbyPlayer.setVolume?.(0);
@@ -834,11 +1099,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         } catch {}
 
-        if (checkAttempts > 80) { // 8 seconds max timeout (generous for slow connections)
+        if (checkAttempts > 50) {
           clearInterval(warmupInterval);
-          // Even if not confirmed ready, mark as ready so crossfade doesn't block forever
-          standbyPlayer.setVolume?.(0);
-          preCuedReadyRef.current = true;
+          const loadedVid = standbyPlayer.getVideoData?.()?.video_id;
+          if (loadedVid === nextVideoId) {
+            standbyPlayer.setVolume?.(0);
+            preCuedReadyRef.current = true;
+          } else {
+            preCuedReadyRef.current = false;
+          }
         }
       }, 100);
 
@@ -853,20 +1122,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (isTransitioningRef.current) return;
     isTransitioningRef.current = true;
 
-    const nextTrackItem = candidate.track;
+    const nextTrackItem = withExplicitPreference(candidate.track);
+    const operation = abortControllerRef.current;
 
     try {
-      // Pre-resolve or retrieve next video ID
-      let nextVideoId = "";
-      const cached = resolutionCache.get(nextTrackItem.id);
-      if (cached && cached.videoId) {
-        nextVideoId = cached.videoId;
-      } else {
-        nextVideoId = await getYouTubeVideoId(nextTrackItem);
-      }
-
-      if (!nextVideoId) {
-        throw new Error("Could not resolve video ID for crossfade");
+      // Instant video ID resolution via multi-key cache / shared in-flight promise
+      const failed = failedVideoIdsRef.current.get(getResolutionKey(nextTrackItem));
+      const nextVideoId = await resolveTrackVideoId(nextTrackItem, undefined, failed && Array.from(failed), !roomIdRef.current);
+      if (operation !== abortControllerRef.current || !isTransitioningRef.current) return;
+      if (!nextVideoId || withExplicitPreference(candidate.track).isExplicit !== nextTrackItem.isExplicit) {
+        throw new Error("Could not resolve the selected version for crossfade");
       }
 
       const outgoingDeck = activeDeckRef.current;
@@ -875,54 +1140,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const incomingPlayer = ytPlayersRef.current[incomingDeck];
 
       if (!incomingPlayer || typeof incomingPlayer.loadVideoById !== "function") {
-        // Fallback to instant nextTrack if standby player is unavailable
         nextTrackRef.current();
         isTransitioningRef.current = false;
         return;
       }
 
-      // Ensure incoming player starts muted/silent
+      // Ensure incoming player starts muted/silent before starting
       if (typeof incomingPlayer.setVolume === "function") {
         incomingPlayer.setVolume(0);
       }
       if (typeof incomingPlayer.unMute === "function") {
         try { incomingPlayer.unMute(); } catch {}
       }
-
-      // If pre-cued and already warmed up, just hit play — no seekTo needed since
-      // cueVideoById already positioned at startSeconds:0 and the buffer is intact.
-      // Otherwise, load and wait for it to actually begin playing before fading out outgoing.
-      if (preCuedTrackIdRef.current === nextTrackItem.id && preCuedReadyRef.current) {
-        incomingPlayer.playVideo?.();
-      } else {
-        incomingPlayer.loadVideoById({
-          videoId: nextVideoId,
-          startSeconds: 0
-        });
-        incomingPlayer.playVideo?.();
-
-        // In background tabs (document.hidden), timers are heavily throttled and the iframe may delay reporting state 1.
-        // If hidden, shorten fallback to 600ms so crossfade starts without delay.
-        const maxWaitMs = typeof document !== "undefined" && document.hidden ? 600 : 2500;
-        const pollStart = Date.now();
-        await new Promise<void>((resolve) => {
-          const waitPoll = setInterval(() => {
-            try {
-              const state = incomingPlayer.getPlayerState?.();
-              if (state === 1 || (Date.now() - pollStart) >= maxWaitMs) {
-                clearInterval(waitPoll);
-                resolve();
-              }
-            } catch {
-              clearInterval(waitPoll);
-              resolve();
-            }
-          }, 80);
-        });
-      }
-
-      preCuedTrackIdRef.current = null;
-      preCuedReadyRef.current = false;
 
       const totalCrossfadeMs = Math.max(1000, seamlessDurationRef.current * 1000);
       const startTime = Date.now();
@@ -960,7 +1189,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         // Advance queue state seamlessly
         if (currentTrackRef.current) {
-          setHistory(prev => [...prev.slice(-49), currentTrackRef.current!]);
+          const previous = currentTrackRef.current;
+      if (!privateSession) setHistory(items => [...items.slice(-49), previous]);
         }
 
         if (candidate.source === 'user_queue') {
@@ -978,16 +1208,35 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         currentTrackRef.current = nextTrackItem;
+        loadedTrackId.current = nextTrackItem.id;
+        lastResolvedVideoIdRef.current = nextVideoId;
         setCurrentTrack(nextTrackItem);
         setIsPlaying(true);
         setIsLoading(false);
-        // Keep isTransitioningRef true briefly to ensure any trailing onStateChange(0) from outgoing deck doesn't trigger nextTrack
         setTimeout(() => {
           isTransitioningRef.current = false;
         }, 800);
       };
 
+      // Set finishCrossfadeNowRef IMMEDIATELY so if outgoing track ends while crossfading,
+      // onStateChange(0) finishes the transition smoothly instead of aborting!
       finishCrossfadeNowRef.current = completeCrossfade;
+
+      // Start playback on incoming player
+      const incomingVid = incomingPlayer.getVideoData?.()?.video_id;
+      const isAlreadyCued = preCuedTrackIdRef.current === nextTrackItem.id && preCuedReadyRef.current && incomingVid === nextVideoId;
+      if (isAlreadyCued) {
+        incomingPlayer.playVideo?.();
+      } else {
+        incomingPlayer.loadVideoById({
+          videoId: nextVideoId,
+          startSeconds: 0
+        });
+        incomingPlayer.playVideo?.();
+      }
+
+      preCuedTrackIdRef.current = null;
+      preCuedReadyRef.current = false;
 
       // Ramp outgoing down while ramping incoming up concurrently
       crossfadeIntervalRef.current = setInterval(() => {
@@ -995,14 +1244,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const progress = Math.min(1, Math.max(0, elapsed / totalCrossfadeMs));
 
         // Shallow crossfade:
-        //   Outgoing: sliderVol → sliderVol * (1 - FADE_DEPTH)  (e.g. 100% → 80%)
-        //   Incoming: sliderVol * (1 - FADE_DEPTH) → sliderVol  (e.g. 80% → 100%)
-        // Both tracks stay at high volume — no jarring silence or deep dip.
+        //   Outgoing: sliderVol → sliderVol * (1 - FADE_DEPTH)
+        //   Incoming: sliderVol * (1 - FADE_DEPTH) → sliderVol
         const FADE_DEPTH = 0.2;
-        const outFactor = 1 - FADE_DEPTH * progress;           // 1.0 → 0.8
-        const inFactor  = (1 - FADE_DEPTH) + FADE_DEPTH * progress; // 0.8 → 1.0
+        const outFactor = 1 - FADE_DEPTH * progress;
+        const inFactor  = (1 - FADE_DEPTH) + FADE_DEPTH * progress;
 
-        // Always read the live slider volume from volumeRef (e.g. 0.35, 0.7, etc.)
         const currentSliderVol = volumeRef.current;
         const currentMuted = isMutedRef.current;
 
@@ -1030,7 +1277,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
           if (outgoingPlayer && typeof outgoingPlayer.getPlayerState === "function") {
             const outState = outgoingPlayer.getPlayerState();
-            if (outState === 0) { // YT.PlayerState.ENDED
+            if (outState === 0) {
               outgoingEnded = true;
             }
           }
@@ -1042,6 +1289,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }, 50);
 
     } catch (e) {
+      if (operation !== abortControllerRef.current || !isTransitioningRef.current) return;
       console.warn("Simultaneous crossfade error, falling back to standard advance:", e);
       finishCrossfadeNowRef.current = null;
       if (crossfadeIntervalRef.current) {
@@ -1061,13 +1309,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const ct = activePlayer.getCurrentTime() || 0;
         const dur = activePlayer.getDuration() || 0;
         setCurrentTime(ct);
-        setDuration(dur);
+        if (lastDuration.current !== dur) {
+          lastDuration.current = dur;
+          setDuration(dur);
+        }
 
         // Spotify-style Simultaneous Crossfade & Early Standby Pre-cueing:
-        // When remaining time hits seamlessDuration, start crossfade of outgoing & incoming simultaneously
         if (
-          seamlessTransitionsRef.current &&
-          dur > 15 &&
+          dur > 10 &&
+          !localDeck.current &&
           ct > 0 &&
           !isTransitioningRef.current &&
           !isFadingInRef.current &&
@@ -1076,27 +1326,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         ) {
           const remaining = dur - ct;
           const fadeSecs = seamlessDurationRef.current;
-
-          // Find what track is next up in queue or playlist using fresh refs
           const candidate = getNextUpcomingTrack();
 
-          // Early Pre-cue: 30 seconds before track ends, preload & buffer standby player completely!
-          // Extra margin ensures even first-listen / slow-connection tracks are fully buffered.
-          if (candidate && remaining <= Math.max(30, fadeSecs + 20) && remaining > fadeSecs) {
+          // Early Pre-cue: 25 seconds before track ends, buffer standby player completely!
+          // Runs for BOTH crossfade and standard playback so the next track is ALWAYS ready with 0 delay!
+          if (candidate && remaining <= Math.max(25, fadeSecs + 15) && remaining > fadeSecs) {
             preCueStandbyPlayer(candidate);
           }
 
-          if (candidate && remaining <= fadeSecs && remaining > 0.4) {
-            performSimultaneousCrossfade(candidate);
-          } else if (candidate && remaining <= 0.4) {
-            // Safety net: in background tabs, if progress interval lagged and remaining <= 0.4s
-            performSimultaneousCrossfade(candidate);
-          } else if (!candidate && remaining <= 0.4) {
-            isTransitioningRef.current = true;
-            nextTrackRef.current();
-            setTimeout(() => {
-              isTransitioningRef.current = false;
-            }, 1500);
+          // Trigger crossfade when remaining hits seamlessDuration
+          if (seamlessTransitionsRef.current && candidate && !downloadService.isTrackDownloaded(candidate.track.id)) {
+            if (remaining <= fadeSecs && remaining > 0.3) {
+              performSimultaneousCrossfade(candidate);
+            } else if (remaining <= 0.3) {
+              performSimultaneousCrossfade(candidate);
+            }
           }
         }
 
@@ -1106,7 +1350,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           broadcastState(ct, true, currentTrackRef.current);
         }
       }
-    }, 500);
+    }, 100);
   };
 
   const stopPollingProgress = () => {
@@ -1147,23 +1391,75 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const shuffleArray = (array: Track[]) => {
-    const arr = [...array];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
+  const shuffleArray = (tracks: Track[], precedingTrack?: Track | null, balance = smartShuffle) => {
+    const shuffled = [...tracks];
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
     }
-    return arr;
+    if (!balance) return shuffled;
+
+    const artistKey = (track: Track) => (track.artists?.[0]?.name || getArtistsFromTrack(track)[0].name).trim().toLowerCase();
+    const buckets = new Map<string, Track[]>();
+    for (const track of shuffled) {
+      const artist = artistKey(track);
+      const bucket = buckets.get(artist) ?? [];
+      bucket.push(track);
+      buckets.set(artist, bucket);
+    }
+
+    let last = precedingTrack ? artistKey(precedingTrack) : undefined;
+    const balanced: Track[] = [];
+    while (buckets.size > 0) {
+      let artist: string | undefined;
+      let largest = 0;
+      for (const [candidate, bucket] of buckets) {
+        if (candidate !== last && bucket.length > largest) {
+          artist = candidate;
+          largest = bucket.length;
+        }
+      }
+      artist ??= buckets.keys().next().value!;
+      const bucket = buckets.get(artist)!;
+      balanced.push(bucket.pop()!);
+      if (!bucket.length) buckets.delete(artist);
+      last = artist;
+    }
+    return balanced;
   };
 
-  const playTrack = async (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean) => {
+  const setSmartShuffle = (enabled: boolean) => {
+    setSmartShufflePreference(enabled);
+    if (enabled === smartShuffle || !isShuffle || (roomIdRef.current && !isHostRef.current) || isTransitioningRef.current) return;
+    const queue = playlistQueueRef.current;
+    const start = playlistIndexRef.current + 1;
+    const prefix = queue.slice(0, start);
+    const preceding = userQueueRef.current.at(-1) ?? currentTrackRef.current;
+    const updated = [...prefix, ...shuffleArray(queue.slice(start), preceding, enabled)];
+    playlistQueueRef.current = updated;
+    setPlaylistQueue(updated);
+    preCuedTrackIdRef.current = null;
+    preCuedExplicitRef.current = undefined;
+    preCuedReadyRef.current = false;
+  };
+
+  const playTrack = async (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean, startAt = 0, forceOnline = false, startShuffled = false) => {
     if (roomIdRef.current && !isHostRef.current && !isRemoteSync) {
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
 
-    // Check track limit for guests
-    if (!currentUser && !isRemoteSync) {
+    track = withExplicitPreference(track);
+    const savedVideoId = getPreferredTrackVideoId(track);
+    const preferredVideoId = roomIdRef.current ? undefined : savedVideoId;
+
+    if (track.id.startsWith("local-") && roomIdRef.current) {
+      showToast("Los archivos locales no se pueden reproducir en una sala.", "info");
+      return;
+    }
+
+    // Keep retries and resumes from consuming another guest play.
+    if (!currentUser && !isRemoteSync && currentTrack?.id !== track.id && !track.id.startsWith("local-")) {
       const savedCount = localStorage.getItem("ibrastream_guest_tracks_played");
       const playedCount = savedCount ? parseInt(savedCount, 10) : 0;
       if (playedCount >= 3) {
@@ -1180,6 +1476,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    previewPauseRef.current = null;
+    setPlaybackError(null);
+    playbackStarted.current = performance.now();
+    loadedTrackId.current = null;
+    lastResolvedVideoIdRef.current = null;
+    if (!isRemoteSync) targetSeekTimeRef.current = startAt > 0 ? startAt : null;
+    setCurrentTime(isRemoteSync ? targetSeekTimeRef.current ?? 0 : startAt);
+    setDuration(track.duration || 0);
 
     if (playlistId !== undefined && !isRemoteSync) {
       if (playlistId !== playingPlaylistId) {
@@ -1194,20 +1498,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (newQueue && !isRemoteSync) {
-      setOriginalPlaylistQueue(newQueue);
-      if (isShuffle) {
-        const otherTracks = newQueue.filter(t => t.id !== track.id);
-        const shuffled = [track, ...shuffleArray(otherTracks)];
+      const enrichedQueue = newQueue;
+
+      setOriginalPlaylistQueue(enrichedQueue);
+      if (isShuffle || startShuffled) {
+        if (startShuffled) setIsShuffle(true);
+        const index = enrichedQueue.findIndex(item => item.id === track.id);
+        const otherTracks = enrichedQueue.filter((_, position) => position !== index);
+        const shuffled = [track, ...shuffleArray(otherTracks, userQueueRef.current.at(-1) ?? track)];
         playlistQueueRef.current = shuffled;
         playlistIndexRef.current = 0;
         setPlaylistQueue(shuffled);
         setPlaylistIndex(0);
       } else {
-        playlistQueueRef.current = newQueue;
-        const index = newQueue.findIndex(t => t.id === track.id);
+        playlistQueueRef.current = enrichedQueue;
+        const index = enrichedQueue.findIndex(t => t.id === track.id);
         const targetIdx = index !== -1 ? index : 0;
         playlistIndexRef.current = targetIdx;
-        setPlaylistQueue(newQueue);
+        setPlaylistQueue(enrichedQueue);
         setPlaylistIndex(targetIdx);
       }
       currentTrackSourceRef.current = 'playlist';
@@ -1243,17 +1551,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     playbackExpectedRef.current = true;
+    currentTrackRef.current = track;
     setCurrentTrack(track);
 
-    // Pre-fetch lyrics for the active track in parallel
-    import("../services/musicApi").then(({ getLyricsForTrack }) => {
-      getLyricsForTrack(track).catch(() => {});
-    });
+    activeListenRef.current = null;
+    positionSample.current = null;
 
-    // Add to recently played via StorageService
-    try {
+    // Add to recently played via StorageService.
+    if (!privateSession) try {
       const saved = StorageService.getItemSync<Track[]>("ibrastream_recently_played");
-      let recent: Track[] = Array.isArray(saved) ? saved : [];
+      let recent: Track[] = Array.isArray(saved) ? saved.filter(item => typeof item.title === "string") : [];
       recent = recent.filter(t => t.id !== track.id);
       recent.unshift(track);
       recent = recent.slice(0, 30);
@@ -1270,18 +1577,171 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(crossfadeIntervalRef.current);
       crossfadeIntervalRef.current = null;
     }
+    finishCrossfadeNowRef.current = null;
     isTransitioningRef.current = false;
 
-    // Stop current playing song immediately so user hears silence while loading next song
-      [0, 1].forEach(deck => {
-        const p = ytPlayersRef.current[deck];
-        if (p && typeof p.pauseVideo === "function") {
-          try {
-            p.pauseVideo();
-            if (deck !== activeDeckRef.current) p.setVolume?.(0);
-          } catch {}
+    if (localDeck.current) {
+      const previous = localDeck.current;
+      localDeck.current = null;
+      previous.audio.onerror = null;
+      previous.audio.onplaying = null;
+      previous.audio.onpause = null;
+      previous.audio.onended = null;
+      previous.audio.onloadedmetadata = null;
+      previous.audio.pause();
+      previous.audio.removeAttribute("src");
+      previous.audio.load();
+      previous.player.dispose();
+      URL.revokeObjectURL(previous.url);
+      stopPollingProgress();
+    }
+
+    const useDownload = !forceOnline && !roomIdRef.current && (!navigator.onLine || (!preferredVideoId && readTrackVersionPreference(track.id) === undefined));
+    if (useDownload && downloadService.isTrackDownloaded(track.id)) {
+      const url = await downloadService.getLocalUri(track.id);
+      if (abortController.signal.aborted) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+      if (url) {
+        getActivePlayer()?.pauseVideo?.();
+        const audio = new Audio();
+        const player = createLocalPlayback(audio);
+        localDeck.current = { audio, player, url };
+        const stillActive = () => localDeck.current?.audio === audio;
+        player.setVolume(isMutedRef.current ? 0 : volumeRef.current * 100);
+        audio.onloadedmetadata = () => {
+          if (stillActive() && startAt) player.seekTo(Math.min(startAt, audio.duration || startAt));
+        };
+        audio.onplaying = () => {
+          if (!stillActive()) return;
+          const preview = previewPauseRef.current;
+          if (preview) {
+            preview.shouldResume = true;
+            player.pauseVideo();
+            setIsPlaying(false);
+            setIsLoading(false);
+            return;
+          }
+          setIsPlaying(true);
+          setIsLoading(false);
+          setPlaybackError(null);
+          finishPlaybackMeasurement("play");
+          startPollingProgress();
+        };
+        audio.onpause = () => {
+          if (!stillActive()) return;
+          setIsPlaying(false);
+          stopPollingProgress();
+        };
+        audio.onended = () => { if (stillActive()) handleTrackEndedRef.current(); };
+        audio.onerror = () => {
+          if (!stillActive()) return;
+          console.warn("[AudioContext] Local audio error, removing corrupt download and falling back to online playback...");
+          const previous = localDeck.current;
+          localDeck.current = null;
+          if (previous) {
+            previous.audio.onerror = null;
+            previous.audio.onplaying = null;
+            previous.audio.onpause = null;
+            previous.audio.onended = null;
+            previous.audio.onloadedmetadata = null;
+            previous.audio.pause();
+            previous.audio.removeAttribute("src");
+            previous.audio.load();
+            previous.player.dispose();
+            URL.revokeObjectURL(previous.url);
+          }
+          void downloadService.deleteTrack(track.id);
+          void playTrackRef.current?.(track, undefined, undefined, false, startAt, true);
+        };
+        audio.src = url;
+        loadedTrackId.current = track.id;
+        try {
+          await player.playVideo();
+          if (stillActive() && normalizeLocalAudio) void player.setNormalization(true);
+        } catch {
+          if (stillActive()) {
+            console.warn("[AudioContext] Local deck playVideo rejected, falling back to online streaming...");
+            const previous = localDeck.current;
+            localDeck.current = null;
+            if (previous) {
+              previous.audio.onerror = null;
+              previous.audio.onplaying = null;
+              previous.audio.onpause = null;
+              previous.audio.onended = null;
+              previous.audio.onloadedmetadata = null;
+              previous.audio.pause();
+              previous.audio.removeAttribute("src");
+              previous.audio.load();
+              previous.player.dispose();
+              URL.revokeObjectURL(previous.url);
+            }
+            void downloadService.deleteTrack(track.id);
+            void playTrackRef.current?.(track, undefined, undefined, false, startAt, true);
+          }
         }
-      });
+        return;
+      }
+    }
+
+    if (!navigator.onLine || track.id.startsWith("local-")) {
+      setIsLoading(false);
+      playbackExpectedRef.current = false;
+      setPlaybackError("La pista no está disponible en este dispositivo sin conexión.");
+      return;
+    }
+
+    // Reuse an already buffered standby track when possible.
+    const standbyDeck: 0 | 1 = activeDeckRef.current === 0 ? 1 : 0;
+    const standbyPlayer = ytPlayersRef.current[standbyDeck];
+    const cleanId = track.id.replace(/^yt-/, "");
+    const isPreCuedIdMatch = preCuedTrackIdRef.current === track.id || preCuedTrackIdRef.current === cleanId;
+    const isExplicitMismatch = track.isExplicit !== preCuedExplicitRef.current;
+
+    const standbyLoadedVid = standbyPlayer?.getVideoData?.()?.video_id;
+    const standbyMatchesSource = roomIdRef.current ? !savedVideoId : !preferredVideoId || standbyLoadedVid === preferredVideoId;
+    const standbySourceFailed = failedVideoIdsRef.current.get(getResolutionKey(track))?.has(standbyLoadedVid);
+    if (!startAt && !isRemoteSync && isPreCuedIdMatch && !isExplicitMismatch && preCuedReadyRef.current && standbyPlayer && typeof standbyPlayer.playVideo === "function" && standbyLoadedVid && standbyMatchesSource && !standbySourceFailed) {
+      console.log(`[Zero-Latency Handoff] Playing pre-cued track on standby deck: ${track.title}`);
+      const outgoingPlayer = ytPlayersRef.current[activeDeckRef.current];
+      try {
+        outgoingPlayer?.pauseVideo?.();
+        outgoingPlayer?.setVolume?.(0);
+      } catch {}
+
+      activeDeckRef.current = standbyDeck;
+      if (typeof standbyPlayer.unMute === "function") {
+        try { standbyPlayer.unMute(); } catch {}
+      }
+      if (typeof standbyPlayer.setVolume === "function") {
+        standbyPlayer.setVolume(isMutedRef.current ? 0 : Math.round(volumeRef.current * 100));
+      }
+      loadedTrackId.current = track.id;
+      lastResolvedVideoIdRef.current = standbyLoadedVid;
+      standbyPlayer.playVideo();
+      preCuedTrackIdRef.current = null;
+      preCuedExplicitRef.current = undefined;
+      preCuedReadyRef.current = false;
+      setIsPlaying(true);
+      setIsLoading(false);
+
+      if (roomIdRef.current && isHostRef.current) {
+        broadcastState(0, true, track, true);
+      }
+      return;
+    }
+
+    // Stop current playing song immediately so user hears silence while loading next song
+    [0, 1].forEach(deck => {
+      const p = ytPlayersRef.current[deck];
+      if (p && typeof p.pauseVideo === "function") {
+        try {
+          p.pauseVideo();
+          if (deck !== activeDeckRef.current) p.setVolume?.(0);
+        } catch {}
+      }
+    });
 
     // Broadcast immediately if host
     if (roomIdRef.current && isHostRef.current) {
@@ -1289,27 +1749,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     try {
-      let videoId = "";
-      let streamUrl = "";
-      
-      const cacheKey = getResolutionKey(track);
-      const cached = resolutionCache.get(cacheKey) || resolutionCache.get(track.id);
-      if (cached && cached.videoId) {
-        console.log(`[Cache Hit] Playing pre-resolved track: ${track.title} [key: ${cacheKey}]`);
-        videoId = cached.videoId;
-        
-      } else {
-        videoId = await getYouTubeVideoId(track, abortController.signal);
-        if (abortController.signal.aborted) return;
-        setResolutionCache(cacheKey, { videoId, streamUrl, timestamp: Date.now() });
-      }
+      const failed = failedVideoIdsRef.current.get(getResolutionKey(track));
+      const excluded = failed && failed.size > 0 ? Array.from(failed) : undefined;
+      const videoId = await resolveTrackVideoId(track, abortController.signal, excluded, !roomIdRef.current);
+      if (abortController.signal.aborted) return;
+      lastResolvedVideoIdRef.current = videoId;
+      console.log(`[Playback] Playing track: ${track.title} (${videoId})`);
 
-      // Asynchronously fetch YouTube views count
+      // Asynchronously fetch YouTube views count without noisy console warnings
       import("../services/musicApi").then(async ({ getYoutubeClient }) => {
         try {
           const yt = await getYoutubeClient();
           const info = await yt.getBasicInfo(videoId);
-          const views = info.basic_info.view_count;
+          const views = info?.basic_info?.view_count;
           if (views !== undefined && !abortController.signal.aborted) {
             const formatViewCount = (count: number): string => {
               if (count >= 1e9) return `${(count / 1e9).toFixed(1)}B`;
@@ -1321,16 +1773,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             track.plays = playsFormatted;
             setCurrentTrack(prev => prev && prev.id === track.id ? { ...prev, plays: playsFormatted } : prev);
           }
-        } catch (e) {
-          console.warn("Failed to fetch YouTube views:", e);
+        } catch {
+          // Ignore YouTube info parsing warnings
         }
       });
+
       // Web: Load video via YouTube IFrame API
 
       let activePlayer = getActivePlayer();
       if (!activePlayer || typeof activePlayer.loadVideoById !== "function") {
         for (let attempt = 0; attempt < 10; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 500));
+          if (abortController.signal.aborted) return;
           activePlayer = getActivePlayer();
           if (activePlayer && typeof activePlayer.loadVideoById === "function") {
             break;
@@ -1340,7 +1794,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           throw new Error("YouTube Player not fully initialized.");
         }
       }
-      activePlayer.loadVideoById(videoId);
+      loadedTrackId.current = track.id;
+      const from = targetSeekTimeRef.current ?? 0;
+      if (from > 0) activePlayer.loadVideoById({ videoId, startSeconds: from });
+      else activePlayer.loadVideoById(videoId);
     } catch (err: any) {
       if (err.name === "AbortError") {
         console.log(`Playback aborted for track: ${track.title}`);
@@ -1350,69 +1807,105 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       playbackExpectedRef.current = false;
       setIsPlaying(false);
       setIsLoading(false);
-      showToast(`Cannot play "${track.title}". Skipping to next...`, "error");
-
-      // Auto-advance queue gracefully if upcoming track exists instead of stalling
-      const upcoming = getNextUpcomingTrack();
-      if (upcoming && upcoming.track.id !== track.id) {
-        setTimeout(() => {
-          nextTrackRef.current();
-        }, 1200);
-      }
+      loadedTrackId.current = null;
+      setPlaybackError("No se pudo abrir la fuente de audio. Puedes reintentar o saltar la pista.");
+      finishPlaybackMeasurement("play_error");
     }
   };
 
-  const preResolveTrack = async (track: Track, signal?: AbortSignal) => {
-    if (!track) return;
-    
-    const cacheKey = getResolutionKey(track);
-    const cached = resolutionCache.get(cacheKey) || resolutionCache.get(track.id);
-    if (cached && cached.videoId) {
-      return;
-    }
-
-    try {
-      console.log(`[Pre-Resolve] Pre-resolving track: ${track.title}`);
-      
-      // Fetch lyrics in parallel in background
-      import("../services/musicApi").then(({ getLyricsForTrack }) => {
-        if (signal?.aborted) return;
-        getLyricsForTrack(track).catch(() => {});
-      });
-
-      const videoId = await getYouTubeVideoId(track, signal);
-      if (signal?.aborted) return;
-      let streamUrl: string | undefined;
-      
-      
-      if (signal?.aborted) return;
-      
-      setResolutionCache(cacheKey, {
-        videoId,
-        streamUrl,
-        timestamp: Date.now()
-      });
-      console.log(`[Pre-Resolve] Pre-resolved track: ${track.title}`);
-
-      
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        console.log(`[Pre-Resolve] Aborted pre-resolution for track: ${track.title}`);
-      } else {
-        console.warn(`[Pre-Resolve] Failed to pre-resolve track: ${track.title}`, err);
-      }
-    }
+  const playShuffledPlaylist = (tracks: Track[], playlistId: string) => {
+    const track = tracks[Math.floor(Math.random() * tracks.length)];
+    if (track) void playTrack(track, tracks, playlistId, false, 0, false, true);
   };
+
+  playTrackRef.current = playTrack;
+
+  function retryPlayback() {
+    if (!currentTrack || isLoading || (roomIdRef.current && !isHostRef.current)) return;
+    const rejectedVideoId = lastResolvedVideoIdRef.current;
+    const preferredVideoId = roomIdRef.current ? undefined : getPreferredTrackVideoId(currentTrack);
+    if (rejectedVideoId && rejectedVideoId !== preferredVideoId) {
+      let failedSet = failedVideoIdsRef.current.get(getResolutionKey(currentTrack));
+      if (!failedSet) {
+        failedSet = new Set();
+        failedVideoIdsRef.current.set(getResolutionKey(currentTrack), failedSet);
+      }
+      failedSet.add(rejectedVideoId);
+    }
+    invalidateTrackResolution(currentTrack.id);
+    void playTrack(currentTrack, undefined, undefined, false, currentTime);
+  }
+
+  function chooseTrackSource(track: Track, videoId: string) {
+    if (roomIdRef.current || track.id.startsWith("local-") || !videoIdPattern.test(videoId)) return;
+
+    const sourceKey = trackSourceKey(track);
+    StorageService.setItemSync(sourceKey, { videoId });
+    failedVideoIdsRef.current.get(getResolutionKey(track))?.delete(videoId);
+    fallbackRetriesRef.current.delete(track.id);
+    invalidateTrackResolution(track.id);
+
+    const activeTrack = currentTrackRef.current;
+    if (activeTrack && trackSourceKey(activeTrack) === sourceKey) {
+      void playTrack(activeTrack, undefined, undefined, false, 0, true);
+    }
+  }
+
+  function getTrackSourceVideoId(track: Track): string | undefined {
+    const activeTrack = currentTrackRef.current;
+    if (activeTrack && trackSourceKey(activeTrack) === trackSourceKey(track)) {
+      return localDeck.current ? undefined : lastResolvedVideoIdRef.current ?? undefined;
+    }
+    return getPreferredTrackVideoId(track);
+  }
+
+  function pauseForTrackPreview(): () => void {
+    if (roomIdRef.current || previewPauseRef.current) return () => {};
+    const pause = { shouldResume: isPlayingRef.current };
+    const track = currentTrackRef.current;
+    const operation = abortControllerRef.current;
+    const player = getActivePlayer();
+    previewPauseRef.current = pause;
+
+    if (pause.shouldResume) {
+      if (isTransitioningRef.current) {
+        clearInterval(crossfadeIntervalRef.current);
+        crossfadeIntervalRef.current = null;
+        finishCrossfadeNowRef.current = null;
+        isTransitioningRef.current = false;
+        const standby = ytPlayersRef.current[activeDeckRef.current === 0 ? 1 : 0];
+        standby?.pauseVideo?.();
+        standby?.setVolume?.(0);
+        player?.setVolume?.(isMutedRef.current ? 0 : Math.round(volumeRef.current * 100));
+      }
+      playbackExpectedRef.current = false;
+      player?.pauseVideo?.();
+      stopPollingProgress();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+    }
+
+    return () => {
+      if (previewPauseRef.current !== pause) return;
+      previewPauseRef.current = null;
+      if (!pause.shouldResume || roomIdRef.current || operation !== abortControllerRef.current ||
+          currentTrackRef.current?.id !== track?.id) return;
+      togglePlayRef.current();
+    };
+  }
 
   const togglePlay = () => {
+    if (previewPauseRef.current) return;
     if (roomIdRef.current && !isHostRef.current) {
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
 
-    if (!currentTrack) return;
-
-    
+    if (!currentTrack || isLoading) return;
+    if (loadedTrackId.current !== currentTrack.id) {
+      void playTrack(currentTrack, undefined, undefined, false, currentTime);
+      return;
+    }
 
     const nextState = !isPlaying;
     playbackExpectedRef.current = nextState;
@@ -1420,7 +1913,40 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const active = getActivePlayer();
     if (!active) return;
     if (nextState) {
-      active.playVideo?.();
+      if (localDeck.current) {
+        void localDeck.current.player.playVideo().catch(() => {
+          console.warn("[AudioContext] localDeck playVideo rejected, falling back to online stream...");
+          const prev = localDeck.current;
+          localDeck.current = null;
+          if (prev) {
+            prev.audio.onerror = null;
+            prev.audio.onplaying = null;
+            prev.audio.onpause = null;
+            prev.audio.onended = null;
+            prev.audio.onloadedmetadata = null;
+            prev.audio.pause();
+            prev.audio.removeAttribute("src");
+            prev.audio.load();
+            prev.player.dispose();
+            URL.revokeObjectURL(prev.url);
+          }
+          if (currentTrack) {
+            void downloadService.deleteTrack(currentTrack.id);
+            void playTrack(currentTrack, undefined, undefined, false, currentTime, true);
+          }
+        });
+      } else {
+        try {
+          const res = active.playVideo?.();
+          if (res && typeof res.catch === "function") {
+            res.catch(() => {
+              setPlaybackError("Haz clic en la página para activar el audio en este navegador.");
+            });
+          }
+        } catch {
+          setPlaybackError("Haz clic en la página para activar el audio en este navegador.");
+        }
+      }
     } else {
       active.pauseVideo?.();
     }
@@ -1438,8 +1964,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     
-    if (currentTrackRef.current) {
-      setHistory(prev => [...prev.slice(-49), currentTrackRef.current!]);
+    if (currentTrackRef.current && !privateSession) {
+      const track = currentTrackRef.current;
+      setHistory(prev => [...prev.slice(-49), track]);
     }
 
     const candidate = getNextUpcomingTrack();
@@ -1461,7 +1988,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else {
       playbackExpectedRef.current = false;
       setIsPlaying(false);
-      
+      getActivePlayer()?.pauseVideo?.();
+      if (autoplay && navigator.onLine && currentTrackRef.current && !roomIdRef.current) {
+        const seed = currentTrackRef.current;
+        const operation = abortControllerRef.current;
+        void import("../services/recommendationEngine").then(({ getSearchRecommendations }) => getSearchRecommendations(seed.artist, [seed])).then(tracks => {
+          if (operation !== abortControllerRef.current || roomIdRef.current) return;
+          const explicit = localStorage.getItem("ibrastream_filter_explicit") === "true";
+          const next = tracks.filter(track => track.id !== seed.id && (!explicit || !track.isExplicit));
+          if (next.length) void playTrack(next[0], next, "radio-" + seed.id);
+        }).catch(() => {});
+      }
     }
   };
 
@@ -1547,30 +2084,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (nextShuffle) {
       setOriginalPlaylistQueue(playlistQueue);
+      let shuffled: Track[];
       if (currentTrack && currentTrackSource === 'playlist') {
         const others = playlistQueue.filter(t => t.id !== currentTrack.id);
-        const shuffled = [currentTrack, ...shuffleArray(others)];
+        shuffled = [currentTrack, ...shuffleArray(others, userQueueRef.current.at(-1) ?? currentTrack)];
         setPlaylistQueue(shuffled);
+        playlistQueueRef.current = shuffled;
         setPlaylistIndex(0);
+        playlistIndexRef.current = 0;
       } else {
-        const shuffled = shuffleArray(playlistQueue);
+        shuffled = shuffleArray(playlistQueue, userQueueRef.current.at(-1) ?? currentTrack);
         setPlaylistQueue(shuffled);
+        playlistQueueRef.current = shuffled;
         if (currentTrack && currentTrackSource === 'playlist') {
           const idx = shuffled.findIndex(t => t.id === currentTrack.id);
-          setPlaylistIndex(idx !== -1 ? idx : 0);
+          const targetIdx = idx !== -1 ? idx : 0;
+          setPlaylistIndex(targetIdx);
+          playlistIndexRef.current = targetIdx;
         }
       }
       showToast("Shuffle on", "info");
     } else {
       if (originalPlaylistQueue.length > 0) {
         setPlaylistQueue(originalPlaylistQueue);
+        playlistQueueRef.current = originalPlaylistQueue;
         if (currentTrack && currentTrackSource === 'playlist') {
           const idx = originalPlaylistQueue.findIndex(t => t.id === currentTrack.id);
-          setPlaylistIndex(idx !== -1 ? idx : 0);
+          const targetIdx = idx !== -1 ? idx : 0;
+          setPlaylistIndex(targetIdx);
+          playlistIndexRef.current = targetIdx;
         }
       }
       showToast("Shuffle off", "info");
     }
+    // Invalidate any pre-cued standby track so queue change is strictly respected
+    preCuedTrackIdRef.current = null;
+    preCuedExplicitRef.current = undefined;
+    preCuedReadyRef.current = false;
   };
 
   const toggleRepeat = () => {
@@ -1612,12 +2162,33 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast(`"${track.title}" will play next`, "success");
   };
 
+  function rememberQueue() {
+    const snapshot = { userQueue, playlistQueue, originalPlaylistQueue, playlistIndex, playingPlaylistId, history };
+    const trackId = currentTrack?.id;
+    clearTimeout(undoQueueTimer.current);
+    setUndoQueue(() => () => {
+      if (currentTrackRef.current?.id === trackId && (!roomIdRef.current || isHostRef.current)) {
+        setUserQueue(snapshot.userQueue);
+        setPlaylistQueue(snapshot.playlistQueue);
+        setOriginalPlaylistQueue(snapshot.originalPlaylistQueue);
+        setPlaylistIndex(snapshot.playlistIndex);
+        setPlayingPlaylistId(snapshot.playingPlaylistId);
+        setHistory(snapshot.history);
+        if (snapshot.playingPlaylistId) localStorage.setItem("ibrastream_playing_playlist_id", snapshot.playingPlaylistId);
+      }
+      setUndoQueue(null);
+    });
+    undoQueueTimer.current = window.setTimeout(() => setUndoQueue(null), 8000);
+  }
+
   const removeFromQueue = (trackId: string) => {
     if (roomIdRef.current && !isHostRef.current) {
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
+    rememberQueue();
     setUserQueue(prev => prev.filter(t => t.id !== trackId));
+    setOriginalPlaylistQueue(prev => prev.filter(t => t.id !== trackId));
     setPlaylistQueue(prev => {
       const idx = prev.findIndex(t => t.id === trackId);
       if (idx !== -1 && idx <= playlistIndex && playlistIndex > 0) {
@@ -1634,6 +2205,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast("Controls are disabled for listeners in Listen Together", "error");
       return;
     }
+    rememberQueue();
     setUserQueue([]);
     setPlaylistQueue([]);
     setOriginalPlaylistQueue([]);
@@ -1700,7 +2272,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.getAttribute("contenteditable") === "true")) {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || activeEl?.closest("input, textarea, button, a, select, [contenteditable=true], [role=dialog]")) {
         return;
       }
       if (e.code === "Space" || e.key === " ") {
@@ -1735,6 +2307,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [currentTime, duration, volume]);
+
+  // Reset standby deck pre-cue if a track's resolution is invalidated (e.g. user toggles Explicit)
+  useEffect(() => {
+    const onResolutionInvalidated = (e: any) => {
+      const tid = e.detail?.trackId;
+      if (tid) {
+        const cleanTid = tid.replace(/^yt-/, "");
+        if (
+          preCuedTrackIdRef.current === tid ||
+          preCuedTrackIdRef.current === cleanTid ||
+          preCuedTrackIdRef.current?.replace(/^yt-/, "") === cleanTid
+        ) {
+          preCuedTrackIdRef.current = null;
+          preCuedExplicitRef.current = undefined;
+          preCuedReadyRef.current = false;
+        }
+      }
+    };
+    window.addEventListener("ibrastream_track_resolution_invalidated", onResolutionInvalidated);
+    return () => window.removeEventListener("ibrastream_track_resolution_invalidated", onResolutionInvalidated);
+  }, []);
 
   const syncMediaSession = () => {
     if (!currentTrack || !("mediaSession" in navigator)) return;
@@ -1778,14 +2371,60 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   // Listen Together
+  const [roomRequests, setRoomRequests] = useState<RoomTrackRequest[]>([]);
+  const [directRequests, setDirectRequests] = useState(false);
+  const directRequestsRef = useRef(false);
+  useEffect(() => { directRequestsRef.current = directRequests; }, [directRequests]);
+  const liveQueue = useRef(addToQueue);
+  useEffect(() => { liveQueue.current = addToQueue; });
+
+  function syncRoom() {
+    if (!channelRef.current || isHostRef.current) return;
+    void channelRef.current.send({ type: "broadcast", event: "request_state", payload: { requesterId: clientIdRef.current } });
+    showToast("Sincronizando con el anfitrión…", "info");
+  }
+
+  function proposeRoomTrack(track: Track) {
+    if (!channelRef.current || isHostRef.current || track.id.startsWith("local-")) return;
+    void channelRef.current.send({
+      type: "broadcast",
+      event: "track_request",
+      payload: { id: crypto.randomUUID(), proposer: userNameRef.current.slice(0, 60), track: {
+        id: track.id, title: track.title, artist: track.artist, duration: track.duration,
+        thumbnail: track.thumbnail, youtubeUrl: track.youtubeUrl, isExplicit: track.isExplicit, audioUrl: "",
+      } },
+    }).then((status: string) => showToast(status === "ok" ? "Petición enviada a la sala." : "No se pudo enviar la petición.", status === "ok" ? "success" : "error"));
+  }
+
+  function answerRoomRequest(id: string, add: boolean) {
+    if (!isHostRef.current) return;
+    const item = roomRequests.find(request => request.id === id);
+    if (!item) return;
+    if (add) addToQueue(item.track);
+    setRoomRequests(items => items.filter(request => request.id !== id));
+  }
+
+  function transferRoom(id: string) {
+    const channel = channelRef.current;
+    if (!channel || !isHostRef.current || id === clientIdRef.current || !participants.some(item => item.id === id)) return;
+    void channel.send({ type: "broadcast", event: "host_transfer", payload: { id } });
+    isHostRef.current = false;
+    setIsHost(false);
+    void channel.track({ name: userNameRef.current, pfp: userPfpRef.current, joinedAt: myJoinedAtRef.current, isHost: false });
+  }
+
   const leaveRoom = () => {
     if (channelRef.current) {
       channelRef.current.unsubscribe();
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
+    roomIdRef.current = null;
+    isHostRef.current = false;
     setRoomId(null);
     setIsHost(false);
+    setRoomRequests([]);
+    setDirectRequests(false);
     setIsConnected(false);
     setParticipants([]);
     showToast("Left Listen Together room", "info");
@@ -1814,10 +2453,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     leaveRoom();
-    const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const newRoomId = Array.from(crypto.getRandomValues(new Uint8Array(6)), byte => alphabet[byte % alphabet.length]).join("");
+    roomIdRef.current = newRoomId;
+    isHostRef.current = true;
     setRoomId(newRoomId);
     setIsHost(true);
-    joinChannel(newRoomId, true);
+    joinChannel(newRoomId);
   };
 
   const joinRoom = (targetRoomId: string) => {
@@ -1829,12 +2471,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!targetRoomId.trim()) return;
     leaveRoom();
     const cleanId = targetRoomId.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(cleanId)) {
+      showToast("El código de sala debe tener seis caracteres.", "error");
+      return;
+    }
+    roomIdRef.current = cleanId;
     setRoomId(cleanId);
     setIsHost(false);
-    joinChannel(cleanId, false);
+    joinChannel(cleanId);
   };
 
-  const joinChannel = (roomName: string, hostFlag: boolean) => {
+  const joinChannel = (roomName: string) => {
+    myJoinedAtRef.current = Date.now();
     const channel = supabase.channel(roomName, {
       config: {
         broadcast: { self: false },
@@ -1849,6 +2497,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       })
       .on("broadcast", { event: "request_state" }, (_msg: any) => {
         if (!isHostRef.current) return;
+        broadcastState(undefined, undefined, currentTrackRef.current, true);
+      })
+      .on("broadcast", { event: "track_request" }, ({ payload }) => {
+        if (!isHostRef.current || roomIdRef.current !== roomName) return;
+        const request = payload as RoomTrackRequest;
+        const track = request?.track;
+        if (!track || typeof request.id !== "string" || typeof request.proposer !== "string" ||
+          typeof track.id !== "string" || track.id.length > 150 || track.id.startsWith("local-") ||
+          typeof track.title !== "string" || track.title.length > 200 ||
+          typeof track.artist !== "string" || track.artist.length > 200) return;
+        if (localStorage.getItem("ibrastream_filter_explicit") === "true" && track.isExplicit) return;
+        if (directRequestsRef.current) liveQueue.current(track);
+        else setRoomRequests(items => [...items.filter(item => item.id !== request.id).slice(-19), request]);
+      })
+      .on("broadcast", { event: "host_transfer" }, ({ payload }) => {
+        if (roomIdRef.current !== roomName || payload.id !== clientIdRef.current) return;
+        isHostRef.current = true;
+        setIsHost(true);
+        void channel.track({ name: userNameRef.current, pfp: userPfpRef.current, joinedAt: myJoinedAtRef.current, isHost: true });
         broadcastState(undefined, undefined, currentTrackRef.current, true);
       })
       .on("broadcast", { event: "room_closed" }, () => {
@@ -1886,6 +2553,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         
         if (oldest.id === clientIdRef.current && !isHostRef.current) {
           showToast("Host left. You are now the host of the room!", "success");
+          isHostRef.current = true;
           setIsHost(true);
           // Re-track our presence info indicating we are now the host
           channel.track({
@@ -1902,18 +2570,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     channel.subscribe((status: string) => {
+      if (roomIdRef.current !== roomName) return;
       if (status === "SUBSCRIBED") {
         setIsConnected(true);
-        const joinTime = Date.now();
-        myJoinedAtRef.current = joinTime;
+        const joinTime = myJoinedAtRef.current;
         channel.track({
           name: userNameRef.current,
           pfp: userPfpRef.current,
           joinedAt: joinTime,
-          isHost: hostFlag
+          isHost: isHostRef.current
         }).catch(() => {});
         showToast(`Connected to room ${roomName}`, "success");
-        if (!hostFlag) {
+        if (!isHostRef.current) {
           channel.send({ type: "broadcast", event: "request_state", payload: { requesterId: clientIdRef.current } });
         }
       } else {
@@ -1940,8 +2608,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      const latency = (Date.now() - timestamp) / 1000;
-      const targetPosition = position + Math.max(0, latency);
+      if (!Number.isFinite(position) || !Number.isFinite(timestamp)) return;
+      const latency = remoteIsPlaying ? Math.max(0, Math.min(5, (Date.now() - timestamp) / 1000)) : 0;
+      const targetPosition = Math.max(0, Math.min(track.duration || Infinity, position + latency));
 
       if (!currentTrackRef.current || currentTrackRef.current.id !== track.id) {
         if (remoteIsPlaying) {
@@ -1951,11 +2620,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         await playTrack(track, undefined, undefined, true);
       } else {
-        const drift = Math.abs(currentTime - targetPosition);
+        const observed = getActivePlayer()?.getCurrentTime?.() ?? 0;
+        const drift = Math.abs(observed - targetPosition);
         const playPauseChanged = remoteIsPlaying !== isPlayingRef.current;
         const isFirstSixSeconds = targetPosition <= 6;
 
-        if (isManual || playPauseChanged || isFirstSixSeconds) {
+        if (isManual || playPauseChanged || isFirstSixSeconds || drift > 4) {
           if (drift > 2) {
             seek(targetPosition, true);
           }
@@ -1988,7 +2658,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       payload: {
         track: trackToBroadcast,
         isPlaying: forceIsPlaying !== undefined ? forceIsPlaying : isPlayingRef.current,
-        position: customPosition !== undefined ? customPosition : currentTime,
+        position: customPosition ?? getActivePlayer()?.getCurrentTime?.() ?? currentTime,
         queue: queueRef.current,
         currentIndex: currentIndexRef.current,
         timestamp: Date.now(),
@@ -2024,6 +2694,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playingPlaylistId,
     setPlayingPlaylistId,
     playTrack,
+    playShuffledPlaylist,
     togglePlay,
     nextTrack,
     prevTrack,
@@ -2036,6 +2707,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playNext,
     removeFromQueue,
     clearQueue,
+    playbackError,
+    setPlaybackError,
+    retryPlayback,
+    chooseTrackSource,
+    getTrackSourceVideoId,
+    pauseForTrackPreview,
+    privateSession,
+    setPrivateSession,
+    autoplay,
+    setAutoplay,
+    normalizeLocalAudio,
+    setNormalizeLocalAudio,
+    smartShuffle,
+    setSmartShuffle,
+    listeningEntries,
+    clearListeningHistory,
+    undoQueue,
     reorderQueue,
     toast,
     showToast,
@@ -2054,6 +2742,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     joinRoom,
     leaveRoom,
     closeRoom,
+    syncRoom,
+    proposeRoomTrack,
+    roomRequests,
+    answerRoomRequest,
+    transferRoom,
+    directRequests,
+    setDirectRequests,
     updateUserIdentity,
     ambientGlowEnabled,
     setAmbientGlowEnabled,
@@ -2061,13 +2756,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSeamlessTransitions,
     seamlessDuration,
     setSeamlessDuration,
-    eqPreset,
-    setEqPreset,
     sleepTimerRemaining,
     startSleepTimer,
     cancelSleepTimer,
-    onlyDownloaded,
-    setOnlyDownloaded,
+    lyricsProvider,
+    setLyricsProvider,
+    lyricsWordByWord,
+    setLyricsWordByWord,
     currentUser,
   }), [
     currentTrack,
@@ -2081,6 +2776,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isRepeat,
     playingPlaylistId,
     playTrack,
+    playShuffledPlaylist,
     togglePlay,
     nextTrack,
     prevTrack,
@@ -2093,6 +2789,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playNext,
     removeFromQueue,
     clearQueue,
+    playbackError,
+    setPlaybackError,
+    retryPlayback,
+    chooseTrackSource,
+    getTrackSourceVideoId,
+    pauseForTrackPreview,
+    privateSession,
+    setPrivateSession,
+    autoplay,
+    setAutoplay,
+    normalizeLocalAudio,
+    setNormalizeLocalAudio,
+    smartShuffle,
+    setSmartShuffle,
+    listeningEntries,
+    clearListeningHistory,
+    undoQueue,
     reorderQueue,
     toast,
     showToast,
@@ -2111,15 +2824,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     joinRoom,
     leaveRoom,
     closeRoom,
+    syncRoom,
+    proposeRoomTrack,
+    roomRequests,
+    answerRoomRequest,
+    transferRoom,
+    directRequests,
+    setDirectRequests,
     updateUserIdentity,
     ambientGlowEnabled,
     seamlessTransitions,
     seamlessDuration,
-    eqPreset,
     sleepTimerRemaining,
     startSleepTimer,
     cancelSleepTimer,
-    onlyDownloaded,
+    lyricsProvider,
+    lyricsWordByWord,
     currentUser,
   ]);
 

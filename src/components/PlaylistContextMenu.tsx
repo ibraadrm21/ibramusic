@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Plus,
   ListMusic,
-  Download,
   Pin,
   PinOff
 } from "lucide-react";
@@ -31,12 +30,10 @@ interface PlaylistContextMenuProps {
   isOwnPlaylist: boolean;
   isHidden: boolean;
   isAllExplicit: boolean;
-  isDownloading?: boolean;
   isPinned?: boolean;
   onTogglePin?: () => void;
   onClose: () => void;
   onPlay: () => void;
-  onDownload?: () => void;
   onAddToQueue: () => void;
   onAddPlaylistToPlaylist: (targetPlaylistId: string) => void;
   onToggleHide: () => void;
@@ -53,12 +50,10 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
   isOwnPlaylist,
   isHidden,
   isAllExplicit,
-  isDownloading = false,
   isPinned = false,
   onTogglePin,
   onClose,
   onPlay,
-  onDownload,
   onAddToQueue,
   onAddPlaylistToPlaylist,
   onToggleHide,
@@ -165,25 +160,6 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
         <Play className="w-4 h-4 text-gray-400 shrink-0" />
         <span>Play playlist</span>
       </button>
-
-      {/* Download playlist */}
-      {onDownload && (
-        <button
-          onClick={() => {
-            onDownload();
-            onClose();
-          }}
-          disabled={isDownloading}
-          className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
-        >
-          {isDownloading ? (
-            <div className="w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin shrink-0" />
-          ) : (
-            <Download className="w-4 h-4 text-gray-400 shrink-0" />
-          )}
-          <span>{isDownloading ? "Downloading playlist..." : "Download playlist"}</span>
-        </button>
-      )}
 
       {/* Add to another playlist */}
       <div

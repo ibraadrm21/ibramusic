@@ -1,4 +1,4 @@
-import { searchTracks, type Track } from "./musicApi";
+import { searchTracks, type Track, getArtistsFromTrack } from "./musicApi";
 
 /**
  * Searches the internal Tidal proxy search engine for a close match by track and artist.
@@ -14,15 +14,19 @@ async function findBestEngineMatch(title: string, artist: string): Promise<Track
     const query = `${artist} ${cleanTitle}`;
     const results = await searchTracks(query);
     if (results && results.length > 0) {
-      // Find the first result where artist or title matches closely
+      // Find a match where BOTH artist AND title match closely
+      const norm = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const cleanTNorm = norm(cleanTitle);
+      const cleanANorm = norm(artist);
+
       const best = results.find(r => {
-        const titleMatch = r.title.toLowerCase().includes(cleanTitle.toLowerCase()) || 
-                           cleanTitle.toLowerCase().includes(r.title.toLowerCase());
-        const artistMatch = r.artist.toLowerCase().includes(artist.toLowerCase()) || 
-                            artist.toLowerCase().includes(r.artist.toLowerCase());
+        const rTNorm = norm(r.title);
+        const rANorm = norm(r.artist);
+        const titleMatch = rTNorm === cleanTNorm || rTNorm.includes(cleanTNorm) || cleanTNorm.includes(rTNorm);
+        const artistMatch = rANorm === cleanANorm || rANorm.includes(cleanANorm) || cleanANorm.includes(rANorm);
         return titleMatch && artistMatch;
       });
-      return best || results[0];
+      return best || null;
     }
   } catch (e) {
     console.warn("Failed to find engine match for:", title, e);
@@ -130,26 +134,12 @@ export async function importSpotifyPlaylist(playlistUrl: string): Promise<{ name
     throw new Error(e.message || "Failed to fetch Spotify playlist. Please ensure the playlist is public.");
   }
 
-  // Resolve engine matches to get matching pictures, artists, albums, and likes in parallel (concurrency of 5)
-  const matchedTracks: Track[] = [];
-  const concurrencyLimit = 5;
-  for (let i = 0; i < parsed.tracks.length; i += concurrencyLimit) {
-    const chunk = parsed.tracks.slice(i, i + concurrencyLimit);
-    const resolvedChunk = await Promise.all(chunk.map(async (track) => {
-      const match = await findBestEngineMatch(track.title, track.artist);
-      if (match) {
-        return {
-          ...match,
-          id: track.id, // Preserve original Spotify ID
-          // Keep Spotify preview audioUrl as fallback if the matched engine track lacks it
-          audioUrl: match.audioUrl || track.audioUrl || "",
-          dateAdded: track.dateAdded || new Date().toISOString()
-        };
-      }
-      return track;
-    }));
-    matchedTracks.push(...resolvedChunk);
-  }
+  // Return parsed tracks directly with 100% authentic Spotify metadata preserved
+  const matchedTracks: Track[] = parsed.tracks.map(track => ({
+    ...track,
+    youtubeUrl: undefined, // Ensure fresh authentic YouTube Music studio resolution
+    dateAdded: track.dateAdded || new Date().toISOString()
+  }));
 
   return { name: parsed.name, tracks: matchedTracks };
 }
@@ -252,16 +242,22 @@ function parseSpotifyJson(obj: any): { name: string; tracks: Track[] } {
     // Get preview audio URL if available
     const audioUrl = t.audioPreview?.url || t.preview_url || "";
 
+    const artistsList = Array.isArray(t.artists) && t.artists.length > 0
+      ? t.artists.map((a: any) => ({ id: String(a.id || ""), name: String(a.name || "") }))
+      : getArtistsFromTrack({ artist: artistName, artistId });
+
     return {
       id,
       title,
       artist: artistName,
       artistId,
+      artists: artistsList,
       albumName,
       albumId,
       duration: durationSec,
       thumbnail: coverUrl,
       audioUrl: audioUrl,
+      isExplicit: Boolean(t.is_explicit || t.explicit || t.contentRating?.label === 'EXPLICIT'),
       dateAdded: new Date().toISOString()
     };
   });
@@ -336,39 +332,32 @@ export async function importSpotifyPlaylistWithToken(playlistUrl: string, token:
       const durationSec = Math.floor((t.duration_ms || 180000) / 1000);
       const audioUrl = t.preview_url || "";
       
+      const artistsList = Array.isArray(t.artists) && t.artists.length > 0
+        ? t.artists.map((a: any) => ({ id: String(a.id || ""), name: String(a.name || "") }))
+        : getArtistsFromTrack({ artist: artistName, artistId });
+
       return {
         id,
         title,
         artist: artistName,
         artistId,
+        artists: artistsList,
         albumName,
         albumId,
         duration: durationSec,
         thumbnail: coverUrl,
         audioUrl: audioUrl,
+        isExplicit: Boolean(t.explicit),
         dateAdded: item.added_at || new Date().toISOString()
       };
     });
   
-  // Resolve engine matches to get matching pictures, artists, albums, and likes in parallel (concurrency of 5)
-  const matchedTracks: Track[] = [];
-  const concurrencyLimit = 5;
-  for (let i = 0; i < parsedTracks.length; i += concurrencyLimit) {
-    const chunk = parsedTracks.slice(i, i + concurrencyLimit);
-    const resolvedChunk = await Promise.all(chunk.map(async (track) => {
-      const match = await findBestEngineMatch(track.title, track.artist);
-      if (match) {
-        return {
-          ...match,
-          id: track.id, // Preserve original Spotify ID
-          audioUrl: match.audioUrl || track.audioUrl || "",
-          dateAdded: track.dateAdded
-        };
-      }
-      return track;
-    }));
-    matchedTracks.push(...resolvedChunk);
-  }
+  // Return parsed tracks directly with 100% authentic Spotify metadata preserved
+  const matchedTracks: Track[] = parsedTracks.map(track => ({
+    ...track,
+    youtubeUrl: undefined, // Ensure fresh authentic YouTube Music studio resolution
+    dateAdded: track.dateAdded || new Date().toISOString()
+  }));
 
   return { name: playlistName, tracks: matchedTracks };
 }
@@ -532,7 +521,7 @@ export function parseCSV(content: string): { title: string; artist: string }[] {
 /**
  * Resolves tracks from an M3U or CSV content block against our engine and returns a playlist.
  */
-export async function importM3UPlaylist(name: string, m3uContent: string): Promise<{ name: string; tracks: Track[] }> {
+export async function importM3UPlaylist(name: string, m3uContent: string, options: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}): Promise<{ name: string; tracks: Track[] }> {
   // Try CSV parsing first
   let parsedItems = parseCSV(m3uContent);
   
@@ -543,8 +532,10 @@ export async function importM3UPlaylist(name: string, m3uContent: string): Promi
   
   const tracks: Track[] = [];
   
+  options.onProgress?.(0, parsedItems.length);
   const concurrencyLimit = 5;
   for (let i = 0; i < parsedItems.length; i += concurrencyLimit) {
+    options.signal?.throwIfAborted();
     const chunk = parsedItems.slice(i, i + concurrencyLimit);
     const resolvedChunk = await Promise.all(chunk.map(async (item, idx) => {
       const match = await findBestEngineMatch(item.title, item.artist);
@@ -564,7 +555,9 @@ export async function importM3UPlaylist(name: string, m3uContent: string): Promi
         dateAdded: new Date().toISOString()
       };
     }));
+    options.signal?.throwIfAborted();
     tracks.push(...resolvedChunk);
+    options.onProgress?.(tracks.length, parsedItems.length);
   }
   
   return { name: name || "Imported Playlist", tracks };

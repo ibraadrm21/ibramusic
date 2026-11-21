@@ -1,4 +1,5 @@
 import React from "react";
+import { useLanguage } from "../context/LanguageContext";
 import {
   Home,
   Search,
@@ -27,9 +28,9 @@ const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   >
     <defs>
       <linearGradient id="logo_grad" x1="50" y1="100" x2="462" y2="412" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stopColor="#D1D1D1"/>
-        <stop offset="0.5" stopColor="#FFFFFF"/>
-        <stop offset="1" stopColor="#A1A1A1"/>
+        <stop offset="0" stopColor="var(--app-cover-accent-dim, #D1D1D1)"/>
+        <stop offset="0.5" stopColor="var(--app-cover-accent, #FFFFFF)"/>
+        <stop offset="1" stopColor="var(--app-cover-accent-dim, #A1A1A1)"/>
       </linearGradient>
     </defs>
     <path
@@ -43,7 +44,7 @@ const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
       d="M260 50C285 30 305 50 285 80C265 110 245 90 260 50Z"
       fill="url(#logo_grad)"
     />
-    <path d="M245 235L295 265L245 295V235Z" fill="white" />
+    <path d="M245 235L295 265L245 295V235Z" fill="var(--app-cover-accent, white)" />
   </svg>
 );
 
@@ -73,7 +74,7 @@ interface SidebarProps {
   onCreatePlaylist?: () => void;
   pinnedPlaylistIds?: Set<string>;
   onTogglePinPlaylist?: (playlistId: string) => void;
-  userEmail?: string | null;
+  isAdmin?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -88,20 +89,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onPlaylistContextMenu,
   onCreatePlaylist,
   pinnedPlaylistIds = new Set(),
-  userEmail,
+  isAdmin,
   collapsed = false,
   onToggleCollapse,
 }) => {
   const isDecember = new Date().getMonth() === 11;
+  const { labels } = useLanguage();
   const menuItems = [
-    { id: "home", label: "Home", icon: Home },
-    { id: "search", label: "Search", icon: Search },
-    { id: "favorites", label: "Favorites", icon: Heart },
-    { id: "playlists", label: "Playlists", icon: ListMusic },
-    { id: "stats", label: "Stats", icon: Award },
+    { id: "home", label: labels.home, icon: Home },
+    { id: "search", label: labels.search, icon: Search },
+    { id: "favorites", label: labels.favorites, icon: Heart },
+    { id: "playlists", label: labels.playlists, icon: ListMusic },
+    { id: "stats", label: labels.stats, icon: Award },
     ...(isDecember ? [{ id: "wrapped", label: "Wrapped", icon: Gift }] : []),
-    { id: "settings", label: "Settings", icon: Settings },
-    ...(userEmail === "ibradramee123@gmail.com" ? [{ id: "admin", label: "Dashboard", icon: Sparkles }] : []),
+    { id: "settings", label: labels.settings, icon: Settings },
+    ...(isAdmin ? [{ id: "admin", label: labels.admin, icon: Sparkles }] : []),
     { id: "github", label: "GitHub", icon: Github, url: "https://github.com/ibraadrm21" }
   ];
 
@@ -307,7 +309,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {!collapsed && (
                 <div>
                   <span className="text-base font-semibold tracking-tight text-white group-hover:text-brand-accent transition-colors">
-                    ibrastream
+                    IbraMusic
                   </span>
                   <span className="block text-[9px] text-gray-500 font-medium tracking-widest uppercase">
                     Music Player
@@ -374,7 +376,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     />
                   )}
                   <div className={`flex items-center ${collapsed ? "justify-center" : "gap-3.5"} z-10 w-full`}>
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? "text-white" : ""}`} />
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? "aura-active-icon text-white" : ""}`} />
                     {!collapsed && <span>{item.label}</span>}
                   </div>
                 </button>
@@ -621,7 +623,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Branding Footer */}
         <div className="border-t border-white/5 pt-4 mt-auto shrink-0 flex items-center justify-center">
-          <span className="text-[10px] text-gray-600 font-medium tracking-wider uppercase">ibrastream v1.0</span>
+          <span className="text-[10px] text-gray-600 font-medium tracking-wider uppercase">IbraMusic {__APP_VERSION__}</span>
         </div>
       </aside>
 
@@ -634,15 +636,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }}
       >
         {[
-          { id: "home",      icon: Home,      label: "Home" },
-          { id: "search",    icon: Search,    label: "Search" },
-          { id: "favorites", icon: Heart,     label: "Liked" },
-          { id: "playlists", icon: ListMusic, label: "Library" },
-          { id: "stats",     icon: Award,     label: "Stats" },
+          { id: "home",      icon: Home,      label: labels.home },
+          { id: "search",    icon: Search,    label: labels.search },
+          { id: "favorites", icon: Heart,     label: labels.favorites },
+          { id: "playlists", icon: ListMusic, label: labels.playlists },
+          { id: "stats",     icon: Award,     label: labels.stats },
           ...(isDecember ? [{ id: "wrapped", icon: Gift, label: "Wrapped" }] : []),
-          { id: "settings",  icon: Settings,  label: "Settings" },
-          ...(userEmail === "ibradramee123@gmail.com"
-            ? [{ id: "admin", icon: Sparkles, label: "Dashboard" }]
+          { id: "settings",  icon: Settings,  label: labels.settings },
+          ...(isAdmin
+            ? [{ id: "admin", icon: Sparkles, label: labels.admin }]
             : [{ id: "github", icon: Github, label: "GitHub", url: "https://github.com/ibraadrm21" }])
         ].map(({ id, icon: Icon, label, url }) => {
           const isActive = activeTab === id;
