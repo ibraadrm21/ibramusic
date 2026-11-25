@@ -1,11 +1,14 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Compass, ListPlus, CircleHelp } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Play, Heart, Plus, Music, User, Copy, Trash2, ChevronRight, Disc, CheckSquare, Compass, ListPlus, CircleHelp, Clock } from "lucide-react";
 import type { Track, Artist } from "../services/musicApi";
 import { getArtistsFromTrack } from "../services/musicApi";
+import { localized, useLanguage } from "../context/LanguageContext";
 
 interface TrackContextMenuProps {
   x: number;
   y: number;
+  anchor?: HTMLElement;
   track: Track;
   isFavorite: boolean;
   isExplicit: boolean;
@@ -13,12 +16,15 @@ interface TrackContextMenuProps {
   currentPlaylistId?: string | null;
   onClose: () => void;
   onToggleFavorite: () => void;
+  isSavedForLater: boolean;
+  listenLaterBlocked: boolean;
+  onToggleListenLater: () => void;
   onToggleExplicit: () => void;
   onAddToQueue: () => void;
   queueActionLabel?: string;
   onGoToArtist?: (artist?: Artist) => void;
   onGoToAlbum?: () => void;
-  onShare: () => void;
+  onShare?: () => void;
   onStartRadio?: () => void;
   onStartArtistRadio?: () => void;
   onDiscoveryAction?: (action: "more" | "hide" | "mute") => void;
@@ -32,6 +38,7 @@ interface TrackContextMenuProps {
 export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   x,
   y,
+  anchor,
   track,
   isFavorite,
   isExplicit,
@@ -39,6 +46,9 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   currentPlaylistId,
   onClose,
   onToggleFavorite,
+  isSavedForLater,
+  listenLaterBlocked,
+  onToggleListenLater,
   onToggleExplicit,
   onAddToQueue,
   queueActionLabel,
@@ -54,6 +64,8 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   onWrongSong,
   onSelect
 }) => {
+  const { language } = useLanguage();
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
   const menuRef = useRef<HTMLDivElement>(null);
   const [adjustedCoords, setAdjustedCoords] = useState({ left: x, top: y });
   const [submenu, setSubmenu] = useState<"playlist" | "discovery" | null>(null);
@@ -85,46 +97,69 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         onClose();
       }
     };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
     document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("keydown", escape, true);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("keydown", escape, true);
     };
   }, [onClose]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const menu = menuRef.current;
     if (!menu) return;
+    const origin = anchor?.getBoundingClientRect();
 
     const positionMenu = () => {
-      const left = Math.max(10, Math.min(x, window.innerWidth - menu.offsetWidth - 15));
-      const top = Math.max(10, Math.min(y, window.innerHeight - menu.offsetHeight - 15));
-      setAdjustedCoords({ left, top });
+      const row = anchor?.isConnected ? anchor.getBoundingClientRect() : origin;
+      const cursorX = x + ((row?.left ?? 0) - (origin?.left ?? 0));
+      const cursorY = y + ((row?.top ?? 0) - (origin?.top ?? 0));
+      const left = Math.max(10, Math.min(cursorX, window.innerWidth - menu.offsetWidth - 10));
+      const top = Math.max(10, Math.min(cursorY, window.innerHeight - menu.offsetHeight - 10));
+      setAdjustedCoords(previous => previous.left === left && previous.top === top ? previous : { left, top });
     };
 
     positionMenu();
     const observer = new ResizeObserver(positionMenu);
     observer.observe(menu);
     window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
     };
-  }, [x, y]);
+  }, [x, y, anchor]);
 
   useLayoutEffect(() => {
     const panel = submenuRef.current;
     const anchor = panel?.parentElement;
     if (!panel || !anchor) return;
 
-    const margin = 10;
-    const row = anchor.getBoundingClientRect();
-    const width = panel.offsetWidth;
-    const height = panel.offsetHeight;
-    const preferredLeft = row.right + width <= window.innerWidth - margin ? row.right : row.left - width;
-    const left = Math.max(margin, Math.min(preferredLeft, window.innerWidth - width - margin));
-    const top = Math.max(margin, Math.min(row.top, window.innerHeight - height - margin));
-    panel.style.left = (left - row.left) + "px";
-    panel.style.top = (top - row.top) + "px";
+    const place = () => {
+      const margin = 10;
+      const row = anchor.getBoundingClientRect();
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const preferredLeft = row.right + width <= window.innerWidth - margin ? row.right : row.left - width;
+      const left = Math.max(margin, Math.min(preferredLeft, window.innerWidth - width - margin));
+      const top = Math.max(margin, Math.min(row.top, window.innerHeight - height - margin));
+      panel.style.left = left + "px";
+      panel.style.top = top + "px";
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
   }, [submenu, adjustedCoords, playlists.length]);
 
   useEffect(() => () => {
@@ -153,7 +188,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           <ChevronRight className="ml-auto size-3.5 text-gray-500" aria-hidden="true" />
         </button>
         {open && (
-          <div ref={submenuRef} className="absolute left-full top-0 z-10 max-h-[min(15rem,calc(100dvh-20px))] w-56 max-w-[calc(100vw-20px)] overflow-y-auto rounded-2xl border border-white/10 bg-brand-darkBg glass-panel py-1.5 shadow-xl shadow-black/80">
+          <div ref={submenuRef} className="fixed z-10 max-h-[min(15rem,calc(100dvh-20px))] w-56 max-w-[calc(100vw-20px)] overflow-y-auto rounded-2xl border border-white/10 bg-brand-darkBg glass-panel py-1.5 shadow-xl shadow-black/80">
             {content}
           </div>
         )}
@@ -161,7 +196,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
     );
   };
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
       style={{
@@ -169,8 +204,9 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         top: `${adjustedCoords.top}px`,
         position: "fixed",
       }}
-      className="z-50 w-60 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 animate-[fadeIn_0.15s_ease-out] select-none text-xs text-gray-300 font-sans"
+      className="z-[120] max-h-[calc(100dvh-20px)] w-60 max-w-[calc(100vw-20px)] overflow-y-auto rounded-2xl border border-white/10 bg-brand-darkBg py-1.5 text-xs text-gray-300 shadow-2xl shadow-black/80 motion-safe:animate-[fadeIn_0.15s_ease-out] select-none font-sans"
       onClick={(e) => e.stopPropagation()}
+      onContextMenu={event => event.preventDefault()}
     >
       {/* Track info header */}
       <div className="px-4 py-2 border-b border-white/5 mb-1 flex items-center gap-2.5">
@@ -202,12 +238,12 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <CheckSquare className="w-4 h-4 text-brand-accent" />
-          <span className="text-brand-accent font-medium">Select</span>
+          <span className="text-brand-accent font-medium">{copy("Seleccionar", "Select", "Hautatu")}</span>
         </button>
       )}
 
-      {submenuRow("playlist", "Add to playlist", Plus, playlists.length === 0 ? (
-        <div className="px-4 py-2 text-center italic text-gray-500">No playlists created</div>
+      {submenuRow("playlist", copy("Añadir a playlist", "Add to playlist", "Gehitu zerrendara"), Plus, playlists.length === 0 ? (
+        <div className="px-4 py-2 text-center italic text-gray-500">{copy("Todavía no hay playlists", "No playlists yet", "Ez dago zerrendarik oraindik")}</div>
       ) : playlists.map(playlist => (
         <button type="button" key={playlist.id} onClick={() => {
           onAddToPlaylist(playlist.id);
@@ -228,7 +264,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 text-red-400 hover:text-red-300 transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <Trash2 className="w-4 h-4" />
-          Remove from this playlist
+          {copy("Quitar de esta playlist", "Remove from this playlist", "Kendu zerrenda honetatik")}
         </button>
       )}
 
@@ -241,7 +277,19 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
       >
         <Heart className={`w-4 h-4 ${isFavorite ? "text-red-500 fill-red-500" : "text-gray-400"}`} />
-        {isFavorite ? "Remove from Liked Songs" : "Add to Liked Songs"}
+        {isFavorite ? copy("Quitar de favoritos", "Remove from Liked Songs", "Kendu gogokoetatik") : copy("Añadir a favoritos", "Add to Liked Songs", "Gehitu gogokoetara")}
+      </button>
+
+      <button disabled={listenLaterBlocked && !isSavedForLater} onClick={() => { onToggleListenLater(); onClose(); }}
+        className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 enabled:hover:bg-white/5 enabled:hover:text-white disabled:text-gray-400 disabled:cursor-not-allowed transition-all">
+        <Clock className={`size-4 ${isSavedForLater ? "text-brand-accent" : "text-gray-400"}`} />
+        <span>{isSavedForLater
+          ? copy("Quitar de Escuchar más tarde", "Remove from Listen Later", "Kendu Gero entzutetik")
+          : copy("Escuchar más tarde", "Listen Later", "Gero entzun")}
+          {listenLaterBlocked && !isSavedForLater && <span className="block text-[11px]">
+            {copy("Esta canción ya está en tu biblioteca", "This song is already in your library", "Abesti hau liburutegian dago jada")}
+          </span>}
+        </span>
       </button>
 
       {/* Toggle Explicit/Clean */}
@@ -294,7 +342,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-b border-white/5 pb-2.5 mb-1"
         >
           <Play className="w-4 h-4 text-gray-400" />
-          Play next
+          {copy("Reproducir a continuación", "Play next", "Erreproduzitu hurrengo")}
         </button>
       )}
 
@@ -336,7 +384,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
               className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
             >
               <User className="w-4 h-4 text-gray-400" />
-              Go to artist
+              {copy("Ir al artista", "Go to artist", "Joan artistarengana")}
             </button>
           );
         }
@@ -353,11 +401,12 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
         >
           <Disc className="w-4 h-4 text-gray-400" />
-          Go to album
+          {copy("Ir al álbum", "Go to album", "Joan albumera")}
         </button>
       )}
 
-      {onStartRadio && submenuRow("discovery", "Descubrir", Compass, <>
+      {onStartRadio && submenuRow("discovery", copy("Descubrir", "Discover", "Aurkitu"), Compass, <>
+        {track.recommendationReason && <p className="border-b border-white/5 px-4 py-2 text-gray-400">{track.recommendationReason}</p>}
         <button type="button" className="w-full px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white" onClick={() => { onStartRadio(); onClose(); }}>Radio de esta canción</button>
         {onStartArtistRadio && <button type="button" className="w-full px-4 py-2 text-left transition-all hover:bg-white/5 hover:text-white" onClick={() => { onStartArtistRadio(); onClose(); }}>Radio de este artista</button>}
         {onDiscoveryAction && (["more", "hide", "mute"] as const).map(action => (
@@ -377,10 +426,10 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
           className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all"
         >
           <CircleHelp aria-hidden="true" className="w-4 h-4 text-gray-400" />
-          ¿Wrong song?
+          {copy("¿Canción incorrecta?", "Wrong song?", "Abesti okerra?")}
         </button>
       )}
-      <button
+      {onShare && <button
         onClick={() => {
           onShare();
           onClose();
@@ -388,9 +437,10 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
         className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 hover:text-white transition-all border-t border-white/5 mt-1 pt-2.5"
       >
         <Copy className="w-4 h-4 text-gray-400" />
-        Share
-      </button>
-    </div>
+        {copy("Compartir", "Share", "Partekatu")}
+      </button>}
+    </div>,
+    anchor?.closest("dialog[open]") ?? document.body,
   );
 };
 

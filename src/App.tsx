@@ -1,12 +1,14 @@
-import { readCoverColor } from "./services/coverArt";
+import { LoadingSkeleton } from "./components/LoadingSkeleton";
+import { ActionMenu, menuAction } from "./components/ActionMenu";
+import { desktopAmbientBackground, getCachedCoverColor, readCoverColor, readableCoverColors, rememberCoverColor, type AmbientMode } from "./services/coverArt";
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
-  Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, X, Plus, Home,
+  Search, Heart, Sparkles, Play, Pause, Trash2, ListMusic, ListPlus, X, Plus, Home,
   SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, Clock,
   ChevronUp, ChevronDown, MoreVertical, Radio, AlertCircle, Settings, Gift,
   User, Globe, Lock, Link, Music2, Mic2, Waves, Zap, CloudRain, Flame, Moon, Star,
-  CheckCircle2, RotateCw, Disc, Folder
+  CheckCircle2, RotateCw, Disc, Folder, PanelRight, Maximize2, Pin, PinOff, Pencil, Image, FileDown
 } from "lucide-react";
 import { AudioProvider, useAudio, useAudioProgress, invalidateTrackResolution } from "./context/AudioContext";
 import { readTrackVersionPreference, readTrackVersionPreferences, saveTrackVersionPreferences, trackVersionId } from "./services/explicitPreferences";
@@ -15,12 +17,12 @@ import Sidebar from "./components/Sidebar";
 import { buildShareLink, readMediaRoute, resolveSharedTrack } from "./services/links";
 import { localDate, statsFor } from "./services/listeningHistory";
 import { downloadFile, exportPlaylist, parsePlaylistBackup } from "./services/libraryFiles";
-import { useLanguage } from "./context/LanguageContext";
+import { localized, useLanguage } from "./context/LanguageContext";
 import { measure } from "./services/metrics";
 import { Modal } from "./components/Modal";
 import { shareableTracks } from "./services/playlistSharing";
 import { SearchField } from "./components/SearchField";
-import { normalizeSearch, rankTracks, starterTracks, trackTitleArtistKey } from "./services/catalog";
+import { normalizeSearch, profileReleases, profileTracks, rankTracks, starterTracks, trackTitleArtistKey } from "./services/catalog";
 
 
 const Logo: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
@@ -72,8 +74,8 @@ import { getHomeRecommendations, getSearchRecommendations, getTrendingRecommenda
 import {
   searchTracks,
   searchAlbums, searchArtists,
-  getAlbumTracks, getArtistTracks,
-  getSpotifyArtistStats, getSpotifyAlbumStats,
+  getAlbumTracks, resolveArtistIdentity, artistProfilePortrait,
+  getArtistProfileTracks, getArtistReleasePage, getSpotifyAlbumStats,
   searchPublicPlaylists, getPublicPlaylistTracks,
   getArtistsFromTrack
 } from "./services/musicApi";
@@ -83,7 +85,7 @@ import ArtistCard from "./components/ArtistCard";
 import { checkForUpdates, redirectToUpdate, startAutoUpdatePolling } from "./services/updateChecker";
 import type { UpdateInfo } from "./services/updateChecker";
 import { signUp, signIn, signOut, syncLibrary, sendPasswordReset, updatePassword, resendConfirmation } from "./services/authSync";
-import { equalLibraryData, mergeLibrary, type Library, type Playlist, type ThemeSettings } from "./services/librarySync";
+import { equalLibraryData, indexLibraryTracks, mergeLibrary, pruneListenLater, type Library, type ListenLaterEntry, type Playlist, type PlaylistCoverFit, type ThemeSettings } from "./services/librarySync";
 import { supabase } from "./services/supabaseClient";
 import { StorageService } from "./services/storageService";
 
@@ -210,8 +212,8 @@ const MainLayout: React.FC = () => {
   const {
     currentTrack, playTrack,
     ambientGlowEnabled, setAmbientGlowEnabled,
-    queue, currentIndex, removeFromQueue, clearQueue, reorderQueue,
-    toast, showToast, playShuffledPlaylist,
+    queue, currentIndex, removeFromQueue, clearQueue, clearManualQueue, reorderQueue,
+    toast, showToast, playShuffledPlaylist, restoreQueue,
     playNext,
     addToQueue,
     playbackError, setPlaybackError,
@@ -219,7 +221,7 @@ const MainLayout: React.FC = () => {
     privateSession,
     listeningEntries,
     clearListeningHistory,
-    nextTrack,
+    nextTrack, prevTrack, togglePlay, toggleMute, changeVolume, volume,
     undoQueue,
     playingPlaylistId,
     roomId,
@@ -322,7 +324,7 @@ const MainLayout: React.FC = () => {
 
   // Tab order for directional transition detection
   const TAB_ORDER = ["home", "search", "favorites", "playlists", "stats", "wrapped", "settings", "dashboard", "github"];
-  const [syncState, setSyncState] = useState<"pending" | "saved" | "error">("pending");
+  const [syncState, setSyncState] = useState<"pending" | "syncing" | "saved" | "offline" | "error">("pending");
   const [syncError, setSyncError] = useState("");
   const [syncAttempt, setSyncAttempt] = useState(0);
   const prevTabRef = React.useRef<string>(activeTab);
@@ -334,21 +336,45 @@ const MainLayout: React.FC = () => {
     try { return saved ? { ...defaults, ...JSON.parse(saved) } : defaults; } catch { return defaults; }
   });
 
-  const auraActive = ambientGlowEnabled && themeSettings.theme !== "noir";
+  const [ambientMode, setAmbientMode] = useState<AmbientMode>(() => {
+    const mode = localStorage.getItem("ibrastream_ambient_mode");
+    return mode === "cover" || mode === "secondary" ? mode : "classic";
+  });
+  useEffect(() => {
+    localStorage.setItem("ibrastream_ambient_mode", ambientMode);
+  }, [ambientMode]);
+  const advancedAmbient = ambientMode !== "classic";
+  const [desktopTheme, setDesktopTheme] = useState(() => matchMedia("(min-width: 768px)").matches);
+  useEffect(() => {
+    const viewport = matchMedia("(min-width: 768px)");
+    const update = () => setDesktopTheme(viewport.matches);
+    viewport.addEventListener("change", update);
+    update();
+    return () => viewport.removeEventListener("change", update);
+  }, []);
+  const auraActive = ambientGlowEnabled;
   const coverUrl = currentTrack?.thumbnail;
   const coverTitle = currentTrack?.title;
   const coverArtist = currentTrack?.artist;
+  const nextCoverUrl = queue[currentIndex + 1]?.thumbnail;
   const [coverPalette, setCoverPalette] = useState<({ url: string } & Awaited<ReturnType<typeof readCoverColor>>) | null>(null);
-  const palette = auraActive && coverPalette?.url === coverUrl ? coverPalette : null;
+  const cachedPalette = React.useMemo(() => auraActive && coverUrl ? getCachedCoverColor(coverUrl) : undefined, [auraActive, coverUrl]);
+  const palette = auraActive ? (coverPalette?.url === coverUrl ? coverPalette : cachedPalette) : null;
+
+  useEffect(() => {
+    if (auraActive && nextCoverUrl && nextCoverUrl !== coverUrl) {
+      void readCoverColor(nextCoverUrl, advancedAmbient).catch(() => {});
+    }
+  }, [auraActive, advancedAmbient, coverUrl, nextCoverUrl]);
 
   useEffect(() => {
     if (!auraActive || !coverUrl) return;
     let cancelled = false;
     const loadPalette = async () => {
       try {
-        return await readCoverColor(coverUrl);
+        return await readCoverColor(coverUrl, advancedAmbient);
       } catch (error) {
-        if (cancelled || !coverTitle || !coverArtist) throw error;
+        if (cancelled || advancedAmbient || !coverTitle || !coverArtist) throw error;
         const artists = getArtistsFromTrack({ artist: coverArtist });
         const names = artists.map(artist => normalizeSearch(artist.name));
         const matches = await searchTracks(coverTitle + " " + artists[0].name);
@@ -357,7 +383,9 @@ const MainLayout: React.FC = () => {
           && normalizeSearch(track.title) === normalizeSearch(coverTitle)
           && getArtistsFromTrack(track).some(artist => names.includes(normalizeSearch(artist.name))));
         if (!alternate) throw error;
-        return readCoverColor(alternate.thumbnail);
+        const { ambient: _ambient, auraImage: _auraImage, ...color } = await readCoverColor(alternate.thumbnail);
+        if (!cancelled) rememberCoverColor(coverUrl, color);
+        return color;
       }
     };
     void loadPalette().then(color => {
@@ -366,7 +394,7 @@ const MainLayout: React.FC = () => {
       if (!cancelled) setCoverPalette(null);
     });
     return () => { cancelled = true; };
-  }, [auraActive, coverUrl, coverTitle, coverArtist]);
+  }, [auraActive, advancedAmbient, coverUrl, coverTitle, coverArtist]);
 
   useEffect(() => {
     localStorage.setItem("ibrastream_theme_settings", JSON.stringify(themeSettings));
@@ -380,31 +408,90 @@ const MainLayout: React.FC = () => {
     }
   }, [themeSettings]);
 
-  useEffect(() => {
+  React.useLayoutEffect(() => {
     const root = document.documentElement;
     const r = root.style;
-    root.setAttribute("data-theme", palette?.mostlyBlack ? "dark" : themeSettings.theme);
-    root.toggleAttribute("data-cover-black", !!palette?.mostlyBlack);
+    const classicPalette = advancedAmbient ? null : palette;
+    const useDesktopComposition = desktopTheme && advancedAmbient;
+    const ambientBackground = useDesktopComposition && auraActive
+      ? desktopAmbientBackground(ambientMode, themeSettings.theme, palette)
+      : ambientMode === "secondary" ? palette?.ambient?.secondaryDark : palette?.background?.color;
+    const contrast = ambientBackground && readableCoverColors(ambientBackground,
+      ambientMode === "cover" ? palette?.ambient?.detail : palette?.ambient?.dominant,
+      ambientMode === "cover" && Boolean(palette?.auraImage));
+    const bright = useDesktopComposition ? themeSettings.theme === "bright"
+      : contrast ? contrast.light : classicPalette?.mostlyWhite || (!classicPalette?.mostlyBlack && themeSettings.theme === "bright");
+    root.setAttribute("data-theme", palette && !useDesktopComposition ? (bright ? "bright" : "dark") : themeSettings.theme);
+    root.toggleAttribute("data-cover-black", !!classicPalette?.mostlyBlack);
+    root.toggleAttribute("data-cover-white", !!classicPalette?.mostlyWhite);
     root.toggleAttribute("data-cover-aura", auraActive);
+    root.toggleAttribute("data-cover-background", Boolean(contrast));
+    if (auraActive && advancedAmbient) root.setAttribute("data-ambient-mode", ambientMode);
+    else root.removeAttribute("data-ambient-mode");
+    r.removeProperty("--ambient-secondary");
+    r.removeProperty("--ambient-deepest");
+    r.removeProperty("--ambient-detail");
+    r.removeProperty("--ambient-artwork");
+    r.removeProperty("--ambient-artwork-opacity");
+    r.removeProperty("--ambient-accent");
     r.removeProperty("--app-cover-accent");
     r.removeProperty("--app-cover-accent-dim");
     r.removeProperty("--app-cover-detail");
-    if (auraActive) {
+    r.removeProperty("--app-cover-detail-secondary");
+    r.removeProperty("--app-cover-muted");
+    if (auraActive && advancedAmbient) {
       r.removeProperty("--app-bg-image-val");
-      const bright = themeSettings.theme === "bright";
-      const saturation = palette ? Math.min(74, palette.saturation) : 0;
+      r.removeProperty("--app-bg-color-val");
+      if (ambientBackground && contrast) {
+        r.setProperty("--app-bg-color-val", ambientBackground);
+        r.setProperty("--app-cover-muted", contrast.muted);
+        r.setProperty("--ambient-accent", contrast.accent);
+        r.setProperty("--ambient-artwork-opacity", String(contrast.imageOpacity));
+      }
+      if (palette?.ambient) {
+        r.setProperty("--ambient-secondary", palette.ambient.secondaryDark);
+        r.setProperty("--ambient-deepest", palette.ambient.deepest);
+        if (ambientBackground) r.setProperty("--ambient-detail",
+          readableCoverColors(ambientBackground, palette.ambient.detail, ambientMode === "cover").accent);
+      }
+      if (ambientMode === "cover" && palette?.auraImage) {
+        r.setProperty("--ambient-artwork", `url("${palette.auraImage}")`);
+      }
+    } else if (auraActive) {
+      r.removeProperty("--app-bg-image-val");
+      const saturation = palette?.saturation ? Math.min(94, 28 + palette.saturation * 0.9) : 0;
       const hue = palette?.hue ?? 0;
-      if (palette?.mostlyBlack) {
+      if (palette?.mostlyBlack && !bright) {
         r.setProperty("--app-bg-color-val", "#000000");
         r.setProperty("--app-cover-accent", "#ffffff");
         r.setProperty("--app-cover-accent-dim", "#d1d1d1");
         if (saturation) r.setProperty("--app-cover-detail", "hsl(" + hue + " " + saturation + "% 58%)");
+        if (palette.secondaryHue !== undefined) {
+          r.setProperty("--app-cover-detail-secondary", "hsl(" + palette.secondaryHue + " 72% 67%)");
+        }
+      } else if (palette?.mostlyWhite && bright) {
+        r.setProperty("--app-bg-color-val", "#ffffff");
+        r.setProperty("--app-cover-accent", saturation ? "hsl(" + hue + " 82% 39%)" : "#18181b");
+        r.setProperty("--app-cover-accent-dim", "#27272a");
+        if (palette.secondaryHue !== undefined) {
+          const warmMetal = palette.secondaryHue >= 18 && palette.secondaryHue <= 55;
+          r.setProperty("--app-cover-detail", `hsl(${palette.secondaryHue} ${warmMetal ? "65% 33%" : "85% 42%"})`);
+        }
       } else if (palette) {
-        r.setProperty("--app-bg-color-val", "hsl(" + hue + " " + saturation * 0.40 + "% " + (bright ? 95 : 12) + "%)");
-        r.setProperty("--app-cover-accent", "hsl(" + hue + " " + saturation + "% " + (bright ? 26 : 74) + "%)");
+        r.setProperty("--app-bg-color-val", "hsl(" + hue + " " + saturation * 0.74 + "% " + (bright ? 93 : saturation ? 17 : 12) + "%)");
+        r.setProperty("--app-cover-accent", "hsl(" + hue + " " + saturation + "% " + (bright ? 26 : saturation ? 69 : 74) + "%)");
         r.setProperty("--app-cover-accent-dim", "hsl(" + hue + " " + saturation * 0.65 + "% " + (bright ? 37 : 58) + "%)");
+        if (palette.secondaryHue !== undefined) r.setProperty("--app-cover-detail", "hsl(" + palette.secondaryHue + " 78% " + (bright ? 38 : 69) + "%)");
       } else {
         r.setProperty("--app-bg-color-val", bright ? "#f2f2f2" : "#1f1f1f");
+      }
+      if (ambientBackground && contrast) {
+        r.setProperty("--app-bg-color-val", ambientBackground);
+        r.setProperty("--app-cover-muted", contrast.muted);
+        for (const token of ["--app-cover-accent", "--app-cover-accent-dim", "--app-cover-detail", "--app-cover-detail-secondary"]) {
+          const value = r.getPropertyValue(token);
+          if (value) r.setProperty(token, readableCoverColors(ambientBackground, value).accent);
+        }
       }
     } else if (themeSettings.bgImage) {
       r.setProperty("--app-bg-image-val", `url(${themeSettings.bgImage})`);
@@ -415,7 +502,7 @@ const MainLayout: React.FC = () => {
     } else {
       r.removeProperty("--app-bg-image-val"); r.removeProperty("--app-bg-color-val");
     }
-  }, [auraActive, palette, themeSettings.bgColor, themeSettings.bgImage, themeSettings.theme]);
+  }, [auraActive, advancedAmbient, ambientMode, desktopTheme, palette, themeSettings.bgColor, themeSettings.bgImage, themeSettings.theme]);
   const [user, setUser] = useState<any>(null);
   const detailRequest = useRef(0);
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -453,6 +540,7 @@ const MainLayout: React.FC = () => {
     x: number;
     y: number;
     track: Track;
+    anchor?: HTMLElement;
     currentPlaylistId?: string | null;
   } | null>(null);
   const [sourceMenuTrack, setSourceMenuTrack] = useState<Track | null>(null);
@@ -545,6 +633,7 @@ const MainLayout: React.FC = () => {
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [searchError, setSearchError] = useState(false);
   const searchRequest = useRef(0);
+  const searchPending = useRef<{ key: string; id: number } | null>(null);
   const [searchSort, setSearchSort] = useState("relevance");
   const [releaseYear, setReleaseYear] = useState("");
   const [searchVersion, setSearchVersion] = useState("all");
@@ -588,9 +677,18 @@ const MainLayout: React.FC = () => {
   });
 
   const [showMobilePlayer, setShowMobilePlayer] = useState<boolean>(false);
+  const [storedListenLater, setListenLater] = useState<ListenLaterEntry[]>(() => {
+    const stored = StorageService.getItemSync<ListenLaterEntry[]>("ibrastream_listen_later");
+    return Array.isArray(stored) ? stored : [];
+  });
+  const [showListenLater, setShowListenLater] = useState(false);
 
   // Detail overlays state
   const [shareToken, setShareToken] = useState(() => new URLSearchParams(location.search).get("share"));
+  const [isOpeningPublicPlaylist, setIsOpeningPublicPlaylist] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return Boolean(params.get("playlistId") || params.get("playlist"));
+  });
   const [manageShare, setManageShare] = useState<Playlist | null>(null);
   const [deleteAccount, setDeleteAccount] = useState(false);
   const [deleteWord, setDeleteWord] = useState("");
@@ -603,6 +701,14 @@ const MainLayout: React.FC = () => {
   const [previousArtist, setPreviousArtist] = useState<Artist | null>(null);
   const [artistTracks, setArtistTracks] = useState<Track[]>([]);
   const [isLoadingArtist, setIsLoadingArtist] = useState<boolean>(false);
+  const [artistTracksSource, setArtistTracksSource] = useState<"top" | "catalog" | "local">("top");
+  const [artistTracksError, setArtistTracksError] = useState(false);
+  const [artistReleasesError, setArtistReleasesError] = useState(false);
+  const [artistReleasePage, setArtistReleasePage] = useState<{ artist: Artist; index: number }>();
+  const [artistCatalogIdentity, setArtistCatalogIdentity] = useState<Artist>();
+  const [isLoadingMoreArtistReleases, setIsLoadingMoreArtistReleases] = useState(false);
+  const [isLoadingArtistAbout, setIsLoadingArtistAbout] = useState(false);
+  const visibleArtistTracks = React.useMemo(() => filterTracks(artistTracks), [artistTracks, filterTracks]);
   const [artistTab, setArtistTab] = useState<"popular" | "albums" | "about">("popular");
   const [artistAlbums, setArtistAlbums] = useState<Album[]>([]);
   const [isLoadingArtistAlbums, setIsLoadingArtistAlbums] = useState<boolean>(false);
@@ -611,6 +717,15 @@ const MainLayout: React.FC = () => {
   const [visibleFavoritesCount, setVisibleFavoritesCount] = useState<number>(30);
 
   const [showQueueOverlay, setShowQueueOverlay] = useState<boolean>(false);
+  const [savedPlaybackQueue, setSavedPlaybackQueue] = useState(() => StorageService.getItemSync<SavedPlaybackQueue>(savedQueueKey));
+  const [duplicateSelection, setDuplicateSelection] = useState<Set<number> | null>(null);
+  const [cleanDestination, setCleanDestination] = useState("");
+  const [playlistUndo, setPlaylistUndo] = useState<{ before: Playlist[]; after: Playlist[] } | null>(null);
+  useEffect(() => {
+    if (!playlistUndo) return;
+    const timer = window.setTimeout(() => setPlaylistUndo(null), 12000);
+    return () => window.clearTimeout(timer);
+  }, [playlistUndo]);
   const [showListenTogetherOverlay, setShowListenTogetherOverlay] = useState<boolean>(false);
   const [showListenTogetherDropdown, setShowListenTogetherDropdown] = useState<boolean>(false);
   const playlistSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -622,16 +737,6 @@ const MainLayout: React.FC = () => {
   const accountDropdownRef = React.useRef<HTMLDivElement>(null);
   const mobileAccountOverlayRef = React.useRef<HTMLDivElement>(null);
   const [isHeaderScrolled, setIsHeaderScrolled] = useState(false);
-
-  useEffect(() => {
-    const mainEl = mainContentRef.current;
-    if (!mainEl) return;
-    const handleScroll = () => {
-      setIsHeaderScrolled(mainEl.scrollTop > 20);
-    };
-    mainEl.addEventListener("scroll", handleScroll);
-    return () => mainEl.removeEventListener("scroll", handleScroll);
-  }, []);
 
   const [username, setUsername] = useState<string>(() => {
     return localStorage.getItem("ibrastream_username") || "Guest";
@@ -704,18 +809,32 @@ const MainLayout: React.FC = () => {
     }
   });
 
+  const isInPersonalLibrary = React.useMemo(() =>
+    indexLibraryTracks([...favorites, ...playlists.flatMap(playlist => playlist.tracks)]), [favorites, playlists]);
+  const listenLater = React.useMemo(() => pruneListenLater(storedListenLater, isInPersonalLibrary), [storedListenLater, isInPersonalLibrary]);
+  const isSavedForLater = React.useMemo(() => indexLibraryTracks(listenLater.map(entry => entry.track)), [listenLater]);
+  useLayoutEffect(() => {
+    if (listenLater !== storedListenLater) setListenLater(listenLater);
+  }, [listenLater, storedListenLater]);
+  useEffect(() => {
+    StorageService.setItemSync("ibrastream_listen_later", listenLater);
+  }, [listenLater]);
+
+  const [isHydratingPlaylists, setIsHydratingPlaylists] = useState(true);
+  const [isHydratingFavorites, setIsHydratingFavorites] = useState(true);
+
   // Hydrate playlists and favorites from IndexedDB if available
   useEffect(() => {
     StorageService.getItem<Playlist[]>("ibrastream_playlists").then(idbPlaylists => {
       if (idbPlaylists && Array.isArray(idbPlaylists) && idbPlaylists.length > 0) {
         setPlaylists(idbPlaylists);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setIsHydratingPlaylists(false));
     StorageService.getItem<Track[]>("ibrastream_favorites").then(idbFavs => {
       if (idbFavs && Array.isArray(idbFavs) && idbFavs.length > 0) {
         setFavorites(idbFavs);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setIsHydratingFavorites(false));
     StorageService.getItem<string[]>("ibrastream_explicit_tracks").then(idbExplicit => {
       if (idbExplicit && Array.isArray(idbExplicit) && idbExplicit.length > 0) {
         setExplicitTrackIds(prev => {
@@ -736,6 +855,7 @@ const MainLayout: React.FC = () => {
       ?? (selectedPlaylist?.id === playingPlaylistId ? selectedPlaylist : null);
     if (playlist?.name) return playlist.name;
     if (playingPlaylistId === "liked-songs" || playingPlaylistId === "favorites") return "Liked Songs";
+    if (playingPlaylistId === "listen-later") return localized(language, "Escuchar más tarde", "Listen Later", "Gero entzun");
     if (playingPlaylistId.startsWith("album-")) return "Album";
     if (playingPlaylistId.startsWith("artist-")) return "Artist Radio";
     if (playingPlaylistId.startsWith("radio-")) return "Radio";
@@ -757,6 +877,7 @@ const MainLayout: React.FC = () => {
     setSelectedPlaylist(null);
     setSelectedArtist(null);
     setSelectedAlbum(null);
+    setShowListenLater(false);
     setActiveTab(tab);
   }, []);
 
@@ -976,6 +1097,8 @@ const MainLayout: React.FC = () => {
   })();
 
   // Spotify import states
+  const [immersivePlayer, setImmersivePlayer] = useState(false);
+  const mainSearchRef = useRef<HTMLDivElement>(null);
   const [showSpotifyImportModal, setShowSpotifyImportModal] = useState<boolean>(false);
   const [spotifyLink, setSpotifyLink] = useState<string>("");
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -984,47 +1107,62 @@ const MainLayout: React.FC = () => {
   const [savedAlbums, setSavedAlbums] = useState<Album[]>(() => StorageService.getItemSync<Album[]>("ibrastream_saved_albums") ?? []);
   const [deletedPlaylists, setDeletedPlaylists] = useState<Playlist[]>(() => StorageService.getItemSync<Playlist[]>("ibrastream_playlist_trash") ?? []);
   const [playlistFolder, setPlaylistFolder] = useState("");
+  const [desktopLibraryLayout, setDesktopLibraryLayout] = useState(() => localStorage.getItem("ibrastream_desktop_library_layout") === "list" ? "list" : "grid");
+  const [desktopLibrarySort, setDesktopLibrarySort] = useState("default");
+  const [desktopPanelVisible, setDesktopPanelVisible] = useState(() => localStorage.getItem("ibrastream_desktop_panel") !== "hidden");
+  const [desktopLyricsRequest, setDesktopLyricsRequest] = useState<{ show: boolean }>();
+  const [desktopPanelWidth, setDesktopPanelWidth] = useState(() => Math.max(300, Math.min(640, Number(localStorage.getItem("ibrastream_desktop_panel_width")) || 380)));
+  const playlistDrag = useRef<number | null>(null);
+  const desktopPanelRef = useRef<HTMLElement>(null);
+  const panelDrag = useRef<{ x: number; width: number } | null>(null);
+  function resizeDesktopPanel(width: number) {
+    setDesktopPanelWidth(Math.round(Math.max(300, Math.min(640, window.innerWidth - 460, width))));
+  }
+  useEffect(() => {
+    localStorage.setItem("ibrastream_desktop_panel_width", String(desktopPanelWidth));
+    localStorage.setItem("ibrastream_desktop_panel", desktopPanelVisible ? "visible" : "hidden");
+  }, [desktopPanelWidth, desktopPanelVisible]);
+
   const [isImportingSpotify, setIsImportingSpotify] = useState<boolean>(false);
   const [spotifyToken, setSpotifyTokenState] = useState<string | null>(() => localStorage.getItem("ibrastream_spotify_token"));
   const [spotifyClientId, setSpotifyClientId] = useState<string>(() => localStorage.getItem("ibrastream_spotify_client_id") || "4af2775b763e4e2e80bd63dcf5ea3c23");
   const [importTab, setImportTab] = useState<"spotify" | "m3u">("spotify");
   const [importFileError, setImportFileError] = useState<string | null>(null);
   const [subSearchQuery, setSubSearchQuery] = useState<string>("");
-  const playlistSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const playlistTracksSearchInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Ctrl+F (or Cmd+F on Mac) shortcut for playlist search
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-        // If inside an open playlist with tracks, focus the search inside this playlist
-        if (activeTab === "playlists" && selectedPlaylist && selectedPlaylist.tracks.length > 0) {
-          e.preventDefault();
-          playlistTracksSearchInputRef.current?.focus();
-          playlistTracksSearchInputRef.current?.select();
-          return;
-        }
-
-        // If in playlists tab (all playlists overview), focus the playlist search
-        if (activeTab === "playlists" && !selectedPlaylist && playlists.length > 0) {
-          e.preventDefault();
-          playlistSearchInputRef.current?.focus();
-          playlistSearchInputRef.current?.select();
-          return;
-        }
-
-        // If in another tab or sidebar library search is preferred
-        if (activeTab !== "playlists") {
-          e.preventDefault();
-          window.dispatchEvent(new Event("ibrastream_open_library_search"));
-          return;
-        }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!matchMedia("(min-width: 1024px)").matches || event.defaultPrevented || event.isComposing) return;
+      const origin = event.target;
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+        setContextMenu(null); setPlaylistContextMenu(null); setShowQueueOverlay(false);
+        return;
       }
+      if (origin instanceof HTMLElement && origin.closest("input, textarea, select, [contenteditable], [role=separator]")) return;
+      if (document.querySelector("dialog[open]")) return;
+      const modifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      const roomControls = !roomId || isHost;
+      let action: (() => void) | undefined;
+      if ((modifier && !event.altKey && key === "k") || (!modifier && !event.altKey && key === "/")) action = () => mainSearchRef.current?.querySelector("input")?.focus();
+      if ((modifier || event.altKey) && key === "l") action = () => {
+        setDesktopLyricsRequest({ show: !desktopPanelVisible || showQueueOverlay });
+        if (!desktopPanelVisible || showQueueOverlay) {
+          setDesktopPanelVisible(true); setShowQueueOverlay(false);
+        }
+      };
+      if (event.altKey && key !== "l") return;
+      if (modifier && roomControls && key === "arrowright") action = nextTrack;
+      if (modifier && roomControls && key === "arrowleft") action = prevTrack;
+      if (!modifier && roomControls && key === " " && !(origin instanceof HTMLElement && origin.closest("button, a, summary"))) action = togglePlay;
+      if (!modifier && key === "m") action = toggleMute;
+      if (!modifier && key === "arrowup") action = () => changeVolume(volume + .05);
+      if (!modifier && key === "arrowdown") action = () => changeVolume(volume - .05);
+      if (action) { event.preventDefault(); action(); }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTab, selectedPlaylist, playlists]);
+  }, [desktopPanelVisible, showQueueOverlay, roomId, isHost, volume, togglePlay, toggleMute, changeVolume, nextTrack, prevTrack]);
   const [sortField, setSortField] = useState<"title" | "album" | "dateAdded" | "duration" | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
@@ -1050,9 +1188,11 @@ const MainLayout: React.FC = () => {
   const [heroBgGradient, setHeroBgGradient] = useState<string>("from-brand-accent/20 via-pink-500/10 to-transparent");
   const [heroTextColor, setHeroTextColor] = useState<string>("text-white");
 
+  const [isLoadingFeatured, setIsLoadingFeatured] = useState(true);
+  const [liquidGlassEnabled, setLiquidGlassEnabled] = useState(() => localStorage.getItem("ibrastream_desktop_hero_glass") !== "off");
   const fetchFeaturedContent = async () => {
     try {
-      const { data, error } = await supabase.from("featured_content").select("*");
+      const { data, error } = await supabase.from("featured_content").select("*").abortSignal(AbortSignal.timeout(10_000));
       if (error) throw error;
       if (data) {
         const songsEntry = data.find((item: any) => item.type === "songs");
@@ -1080,8 +1220,12 @@ const MainLayout: React.FC = () => {
       }
     } catch (err) {
       console.error("Failed to fetch featured content:", err);
+    } finally {
+      setIsLoadingFeatured(false);
     }
   };
+
+  useEffect(() => { void fetchFeaturedContent(); }, []);
 
   const handleSaveFeaturedSongs = async (tracks: Track[]) => {
     try {
@@ -1194,6 +1338,8 @@ const MainLayout: React.FC = () => {
     void StorageService.removeItem("ibrastream_saved_albums");
     void StorageService.removeItem("ibrastream_playlist_trash");
     setFavorites([]);
+    setListenLater([]);
+    setShowListenLater(false);
     setFollowedArtists([]);
     setRecentlyPlayed([]);
     setUsername("Guest");
@@ -1393,8 +1539,15 @@ const MainLayout: React.FC = () => {
   }, [spotifyClientId]);
 
   const savePlaylists = (updated: Playlist[]) => {
-    setPlaylists(updated);
-    StorageService.setItemSync("ibrastream_playlists", updated);
+    const previous = new Map(playlists.map(list => [list.id, list]));
+    const now = new Date().toISOString();
+    const dated = updated.map(list => {
+      const before = previous.get(list.id);
+      return before ? equalLibraryData(before, list) ? before : { ...list, modifiedAt: now }
+        : { ...list, createdAt: list.createdAt ?? now, modifiedAt: now };
+    });
+    setPlaylists(dated);
+    StorageService.setItemSync("ibrastream_playlists", dated);
   };
 
   const handleCreatePlaylist = (name: string) => {
@@ -1426,6 +1579,7 @@ const MainLayout: React.FC = () => {
       name: playlistToAdd.name,
       tracks: playlistToAdd.tracks || [],
       coverUrl: playlistToAdd.coverUrl,
+      coverFit: playlistToAdd.coverFit,
       isPublic: false
     };
     const updated = [...playlists, newPlaylist];
@@ -1561,11 +1715,18 @@ const MainLayout: React.FC = () => {
     showToast("Playlist cover updated", "success");
   };
 
+  const openPlaylistCoverPicker = () => document.getElementById("playlist-cover-upload")?.click();
+
+  const handlePlaylistCoverFit = (id: string, coverFit: PlaylistCoverFit) => {
+    savePlaylists(playlists.map(playlist => playlist.id === id ? { ...playlist, coverFit } : playlist));
+    setSelectedPlaylist(playlist => playlist?.id === id ? { ...playlist, coverFit } : playlist);
+  };
+
   const handleSaveAlbumAsPlaylist = async (album: Album, tracks: Track[]) => {
     let tracksToSave = tracks;
     if (!tracksToSave || tracksToSave.length === 0) {
       try {
-        tracksToSave = await getAlbumTracks(album.id);
+        tracksToSave = await getAlbumTracks(album.id, album.provider);
         if (tracksToSave.length > 0) setAlbumTracks(tracksToSave);
       } catch (e) {
         console.warn("Failed to fetch album tracks:", e);
@@ -1590,7 +1751,7 @@ const MainLayout: React.FC = () => {
     let tracksToAdd = tracks;
     if (!tracksToAdd || tracksToAdd.length === 0) {
       try {
-        tracksToAdd = await getAlbumTracks(album.id);
+        tracksToAdd = await getAlbumTracks(album.id, album.provider);
         if (tracksToAdd.length > 0) setAlbumTracks(tracksToAdd);
       } catch (e) {
         console.warn("Failed to fetch album tracks:", e);
@@ -1666,6 +1827,16 @@ const MainLayout: React.FC = () => {
     }
   };
 
+  function reorderPlaylistTracks(source: Playlist, from: number, to: number) {
+    if (from === to || !source.tracks[from] || !source.tracks[to]) return;
+    const tracks = [...source.tracks];
+    const [track] = tracks.splice(from, 1);
+    tracks.splice(to, 0, track);
+    const updated = { ...source, tracks };
+    savePlaylists(playlists.map(list => list.id === source.id ? updated : list));
+    setSelectedPlaylist(updated);
+  }
+
   const handleSort = (field: "title" | "album" | "dateAdded" | "duration") => {
     if (sortField === field) {
       setSortDirection(prev => prev === "asc" ? "desc" : "asc");
@@ -1685,14 +1856,14 @@ const MainLayout: React.FC = () => {
     savePlaylists(updated);
     const updatedSel = updated.find(p => p.id === playlistId) || null;
     setSelectedPlaylist(updatedSel);
-    showToast("Removed track from playlist", "info");
+    showToast(localized(language, "Canción quitada de la playlist", "Removed track from playlist", "Abestia zerrendatik kendu da"), "info");
   };
 
   // Bulk action handlers
   const handleBulkAddToFavorites = (tracks: Track[]) => {
     const toAdd = tracks.filter(t => !favorites.some(f => f.id === t.id));
     if (toAdd.length === 0) {
-      showToast("All selected tracks are already in favorites", "info");
+      showToast(localized(language, "Las canciones seleccionadas ya están en favoritos", "All selected tracks are already in favorites", "Hautatutako abestiak gogokoetan daude dagoeneko"), "info");
     } else {
       const updated = [...favorites, ...toAdd];
       setFavorites(updated);
@@ -1710,7 +1881,7 @@ const MainLayout: React.FC = () => {
         .filter(t => !existing.has(t.id))
         .map(t => ({ ...t, dateAdded: new Date().toISOString() }));
       if (newTracks.length === 0) {
-        showToast("All selected tracks are already in this playlist", "info");
+        showToast(localized(language, "Las canciones seleccionadas ya están en esta playlist", "All selected tracks are already in this playlist", "Hautatutako abestiak zerrenda honetan daude dagoeneko"), "info");
         return p;
       }
       showToast(`Added ${newTracks.length} track${newTracks.length > 1 ? "s" : ""} to "${p.name}"`, "success");
@@ -1721,18 +1892,57 @@ const MainLayout: React.FC = () => {
     setShowBulkPlaylistPicker(false);
   };
 
-  const handleBulkRemoveFromPlaylist = (playlistId: string, trackIds: string[]) => {
-    const idSet = new Set(trackIds);
-    const updated = playlists.map(p => {
-      if (p.id !== playlistId) return p;
-      return { ...p, tracks: p.tracks.filter(t => !idSet.has(t.id)) };
-    });
-    savePlaylists(updated);
-    const updatedSel = updated.find(p => p.id === playlistId) || null;
-    setSelectedPlaylist(updatedSel);
-    showToast(`Removed ${trackIds.length} track${trackIds.length > 1 ? "s" : ""} from playlist`, "info");
+  function changePlaylistSelection(source: Playlist, indices: Set<number>, destinationId = "") {
+    const destination = playlists.find(item => item.id === destinationId && item.id !== source.id);
+    const picked = source.tracks.filter((_, index) => indices.has(index));
+    if (!picked.length || (destinationId && !destination)) return;
+    const before = destination ? [source, destination] : [source];
+    const after = [{ ...source, tracks: source.tracks.filter((_, index) => !indices.has(index)) }];
+    if (destination) {
+      const keys = new Set(destination.tracks.map(trackTitleArtistKey));
+      const added = picked.filter(track => {
+        const key = trackTitleArtistKey(track);
+        if (keys.has(key)) return false;
+        keys.add(key);
+        return true;
+      });
+      after.push({ ...destination, tracks: [...destination.tracks, ...added] });
+    }
+    savePlaylists(playlists.map(item => after.find(updated => updated.id === item.id) ?? item));
+    setSelectedPlaylist(after[0]);
+    setPlaylistUndo({ before, after });
+    setDuplicateSelection(null);
     clearSelection();
-  };
+    setShowBulkPlaylistPicker(false);
+    showToast(destination ? "Canciones movidas." : "Canciones quitadas.", "success");
+  }
+
+  function undoPlaylistChange() {
+    if (!playlistUndo) return;
+    const current = latestLibrary.current.playlists;
+    setPlaylistUndo(null);
+    if (!playlistUndo.after.every(item => equalLibraryData(current.find(list => list.id === item.id)?.tracks, item.tracks))) {
+      showToast("La playlist cambió después de esta acción.", "info");
+      return;
+    }
+    const restored = current.map(item => {
+      const before = playlistUndo.before.find(list => list.id === item.id);
+      return before ? { ...item, tracks: before.tracks } : item;
+    });
+    savePlaylists(restored);
+    if (selectedPlaylist) setSelectedPlaylist(restored.find(item => item.id === selectedPlaylist.id) ?? selectedPlaylist);
+    showToast("Cambio deshecho.", "success");
+  }
+
+  function duplicateIndices(tracks: Track[]) {
+    const seen = new Set<string>();
+    return tracks.flatMap((track, index) => {
+      const key = trackTitleArtistKey(track);
+      if (seen.has(key)) return [index];
+      seen.add(key);
+      return [];
+    });
+  }
 
   const handleBulkRemoveFromFavorites = (trackIds: string[]) => {
     const idSet = new Set(trackIds);
@@ -1817,7 +2027,7 @@ const MainLayout: React.FC = () => {
           setSharedTrack({ track, seconds });
           navigateTab("search", false);
         }).catch(() => {
-          if (request === token) showToast("No se pudo abrir la canción compartida.", "error");
+          if (request === token) showToast(localized(language, "No se pudo abrir la canción compartida.", "Couldn't open the shared song.", "Ezin izan da partekatutako abestia ireki."), "error");
         });
       } else {
         setSharedTrack(null);
@@ -1877,18 +2087,21 @@ const MainLayout: React.FC = () => {
     }
   }, [user]);
 
-  const latestLibrary = useRef<Library>({ favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists });
+  const latestLibrary = useRef<Library>({ favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists, listenLater });
   const cloudInFlight = useRef<Promise<unknown> | null>(null);
   const userId = user?.id as string | undefined;
   useEffect(() => {
-    latestLibrary.current = { favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists };
-  }, [favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists]);
+    latestLibrary.current = { favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists, listenLater };
+  }, [favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists, listenLater]);
 
   useEffect(() => {
     const retry = () => setSyncAttempt(attempt => attempt + 1);
+    const offline = () => setSyncState("offline");
+    window.addEventListener("offline", offline);
     window.addEventListener("online", retry);
     window.addEventListener("focus", retry);
     return () => {
+      window.removeEventListener("offline", offline);
       window.removeEventListener("online", retry);
       window.removeEventListener("focus", retry);
     };
@@ -1896,6 +2109,7 @@ const MainLayout: React.FC = () => {
 
   useEffect(() => {
     if (!userId) return;
+    if (!navigator.onLine) { setSyncState("offline"); return; }
     let cancelled = false;
     const key = "ibrastream_cloud_base_" + userId;
     if (!equalLibraryData(StorageService.getItemSync<Library>(key), latestLibrary.current)) setSyncState("pending");
@@ -1910,6 +2124,8 @@ const MainLayout: React.FC = () => {
           const pending = await StorageService.getItem<Library>("ibrastream_cloud_pending_" + userId);
           const captured = pending ? mergeLibrary({}, observed, pending) : observed;
           if (cancelled) return;
+          if (!navigator.onLine) { setSyncState("offline"); return; }
+          setSyncState("syncing");
           const synced = await syncLibrary(userId, captured, mirror);
           if (cancelled && userId !== (await supabase.auth.getSession()).data.session?.user.id) return;
           if (!equalLibraryData(mirror, synced)) await StorageService.setItem(key, synced);
@@ -1917,6 +2133,7 @@ const MainLayout: React.FC = () => {
           const current = latestLibrary.current;
           const next = mergeLibrary(observed, current, synced);
           latestLibrary.current = next;
+          if (next.listenLater && !equalLibraryData(next.listenLater, current.listenLater)) setListenLater(next.listenLater);
           if (!equalLibraryData(next.favorites, current.favorites)) {
             setFavorites(next.favorites);
             StorageService.setItemSync("ibrastream_favorites", next.favorites);
@@ -1940,13 +2157,13 @@ const MainLayout: React.FC = () => {
         } catch (error) {
           if (cancelled) return;
           const code = (error as { code?: string } | null)?.code;
-          setSyncError(!navigator.onLine ? "Sin conexión a internet."
-            : code === "42501" ? "Supabase denegó el acceso a tu biblioteca."
-            : code === "PGRST301" || code === "PGRST303" ? "La sesión ha caducado. Vuelve a iniciar sesión."
+          setSyncError(!navigator.onLine ? localized(language, "Sin conexión a internet.", "No internet connection.", "Interneteko konexiorik gabe.")
+            : code === "42501" ? localized(language, "Supabase denegó el acceso a tu biblioteca.", "Supabase denied access to your library.", "Supabasek liburutegirako sarbidea ukatu du.")
+            : code === "PGRST301" || code === "PGRST303" ? localized(language, "La sesión ha caducado. Vuelve a iniciar sesión.", "Your session expired. Sign in again.", "Saioa iraungi da. Hasi saioa berriro.")
             : error instanceof Error && error.message.startsWith("La biblioteca") ? error.message
-            : "No se pudo completar la sincronización con Supabase.");
+            : localized(language, "No se pudo completar la sincronización con Supabase.", "Couldn't finish syncing with Supabase.", "Ezin izan da Supabaseko sinkronizazioa osatu."));
           if (code) console.warn("Cloud sync failed:", code);
-          setSyncState("error");
+          setSyncState(navigator.onLine ? "error" : "offline");
         }
       })();
       cloudInFlight.current = work;
@@ -1955,7 +2172,7 @@ const MainLayout: React.FC = () => {
       });
     }, 900);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [userId, favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists, syncAttempt]);
+  }, [userId, favorites, playlists, followedArtists, themeSettings, accumulatedStats, savedAlbums, deletedPlaylists, listenLater, syncAttempt]);
 
   const rankingPreference = (user?.user_metadata?.ranking as "public" | "anonymous" | undefined) ?? "off";
   const [rankingBusy, setRankingBusy] = useState(false);
@@ -2064,10 +2281,11 @@ const MainLayout: React.FC = () => {
             .from("public_playlists")
             .select("*")
             .eq("playlist_id", sharedPlaylistId)
+            .abortSignal(AbortSignal.timeout(10_000))
             .single();
 
           if (error) {
-            showToast("Failed to load shared playlist", "error");
+            showToast(localized(language, "No se pudo cargar la playlist compartida", "Failed to load shared playlist", "Ezin izan da partekatutako zerrenda kargatu"), "error");
             console.error(error);
             return;
           }
@@ -2086,6 +2304,8 @@ const MainLayout: React.FC = () => {
           }
         } catch (err) {
           console.error("Error loading shared playlist:", err);
+        } finally {
+          setIsOpeningPublicPlaylist(false);
         }
       };
 
@@ -2116,7 +2336,7 @@ const MainLayout: React.FC = () => {
         }
       }
       await signOut();
-      showToast("Signed out successfully!", "info");
+      showToast(localized(language, "Sesión cerrada", "Signed out successfully!", "Saioa itxi da"), "info");
     } catch (err: any) {
       showToast(`Sign out failed: ${err.message}`, "error");
     }
@@ -2151,7 +2371,7 @@ const MainLayout: React.FC = () => {
       await navigator.clipboard.writeText(String(url));
       setCopyNotice(performance.now());
     } catch {
-      showToast("No se pudo copiar el enlace.", "error");
+      showToast(localized(language, "No se pudo copiar el enlace.", "Couldn't copy the link.", "Ezin izan da esteka kopiatu."), "error");
     }
   }
 
@@ -2174,10 +2394,12 @@ const MainLayout: React.FC = () => {
 
   async function handleSearch(query: string, type: typeof searchType = searchType) {
     const value = query.trim();
+    if (!value) { updateSearchQuery(value); return; }
+    const key = JSON.stringify([type, value]);
+    if (searchPending.current?.key === key && searchPending.current.id === searchRequest.current) return;
     updateSearchQuery(value);
-    if (!value) return;
-
     const request = searchRequest.current;
+    searchPending.current = { key, id: request };
     const beganAt = performance.now();
     const isCurrent = () => searchRequest.current === request;
     setSearchType(type);
@@ -2197,7 +2419,10 @@ const MainLayout: React.FC = () => {
       if (type === "library") {
         const terms = normalizeSearch(value).split(/\s+/);
         const artistMatches = followedArtists.filter(artist => normalizeSearch(artist.name).includes(normalizeSearch(value)));
-        if (isCurrent()) setArtistResults(artistMatches);
+        if (isCurrent()) {
+          setArtistResults(artistMatches);
+          setAlbumResults(savedAlbums.filter(album => terms.every(term => normalizeSearch(album.title + " " + album.artist).includes(term))));
+        }
         const tracks = [...favorites, ...playlists.flatMap(list => list.tracks), ...downloadService.listTracks()];
         const found = tracks.filter(track => {
           const text = normalizeSearch([track.title, track.artist, track.albumName].filter(Boolean).join(" "));
@@ -2239,6 +2464,7 @@ const MainLayout: React.FC = () => {
     } catch {
       if (isCurrent()) setSearchError(true);
     } finally {
+      if (searchPending.current?.id === request) searchPending.current = null;
       if (isCurrent()) setIsSearching(false);
     }
   }
@@ -2259,11 +2485,11 @@ const MainLayout: React.FC = () => {
 
     let fetchedTracks: Track[] = [];
     try {
-      fetchedTracks = await getAlbumTracks(album.id);
+      fetchedTracks = await getAlbumTracks(album.id, album.provider);
 
       // Smart Fallback: if album.id failed to return tracks (e.g. single track ID, obsolete token, or mismatch),
       // search for the album by title and artist to obtain full tracks list
-      if ((!fetchedTracks || fetchedTracks.length === 0) && (album.title || album.artist)) {
+      if (!album.provider && (!fetchedTracks || fetchedTracks.length === 0) && (album.title || album.artist)) {
         try {
           const searchQ = `${album.title} ${album.artist || ""}`.trim();
           const foundAlbums = await searchAlbums(searchQ);
@@ -2335,155 +2561,139 @@ const MainLayout: React.FC = () => {
     });
   };
 
-  const handleOpenArtist = async (artist: Artist, writeAddress = true) => {
+  const handleOpenArtist = async (artist: Artist, writeAddress = true, initialTab: typeof artistTab = "popular", seed?: Track) => {
     const request = ++detailRequest.current;
     if (writeAddress) setViewAddress(buildShareLink("artist", artist.id, artist.name));
     setShareToken(null);
-    setSelectedArtist(artist);
+    setSelectedArtist({ ...artist, portrait: artistProfilePortrait(artist) });
     setPreviousArtist(null);
     setSelectedAlbum(null);
     setArtistTracks([]);
     setArtistAlbums([]);
+    setArtistReleasePage(undefined);
+    setArtistCatalogIdentity(undefined);
+    setIsLoadingMoreArtistReleases(false);
     setIsLoadingArtist(true);
     setVisibleArtistTracksCount(8);
     setIsLoadingArtistAlbums(true);
-    setArtistTab("popular");
+    setArtistTab(initialTab);
 
-    // Fetch actual artist profile image
-    const fetchArtistImage = async () => {
-      // 1. Try Spotify first
-      const token = localStorage.getItem("ibrastream_spotify_token");
-      if (token) {
-        try {
-          const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(artist.name)}&type=artist&limit=1`, {
-            headers: { "Authorization": `Bearer ${token}` }
-          });
-          if (res.ok) {
-            const sData = await res.json();
-            const spotifyArtist = sData.artists?.items?.[0];
-            if (spotifyArtist && spotifyArtist.images && spotifyArtist.images.length > 0) {
-              const pfp = spotifyArtist.images[0].url;
-              setSelectedArtist(prev => prev && prev.id === artist.id ? { ...prev, thumbnail: pfp } : prev);
-              return;
-            }
-          }
-        } catch (err) {
-          console.warn("Failed to update artist thumbnail with Spotify image:", err);
-        }
-      }
+    setArtistTracksError(false);
+    setArtistReleasesError(false);
+    setIsLoadingArtistAbout(true);
+    const isCurrent = () => detailRequest.current === request;
+    const knownTracks = profileTracks([
+      ...(seed ? [seed] : []),
+      ...(currentTrack ? [currentTrack] : []),
+      ...history,
+      ...favorites,
+      ...playlists.flatMap(list => list.tracks),
+    ], artist);
+    if (filterTracks(knownTracks).length) {
+      setArtistTracks(knownTracks);
+      setArtistTracksSource("local");
+      setIsLoadingArtist(false);
+    }
+    const identity = await resolveArtistIdentity(artist, seed && profileTracks([seed], artist).length
+      ? seed : knownTracks.find(track => track.duration > 0));
+    if (!isCurrent()) return;
+    if (!identity) {
+      setIsLoadingArtist(false);
+      setIsLoadingArtistAlbums(false);
+      setIsLoadingArtistAbout(false);
+      setArtistTracksSource("local");
+      setArtistTracksError(true);
+      setArtistReleasesError(true);
+      return;
+    }
+    setArtistCatalogIdentity(identity);
+    setSelectedArtist(previous => previous?.id === artist.id ? {
+      ...previous,
+      portrait: identity.portrait,
+      description: identity.description?.trim() || previous.description,
+      popularity: identity.popularity,
+    } : previous);
+    setIsLoadingArtistAbout(false);
 
-      // 2. Fallback to Tidal/Monochrome artist picture
+    const loadTracks = async () => {
+      let source: typeof artistTracksSource = "top";
+      let primaryFailed = false;
+      let tracks: Track[] = [];
       try {
-        const results = await searchArtists(artist.name);
-        if (results && results.length > 0) {
-          const match = results.find(a => a.name.toLowerCase() === artist.name.toLowerCase()) || results[0];
-          if (match && match.thumbnail) {
-            setSelectedArtist(prev => prev && prev.id === artist.id ? { ...prev, thumbnail: match.thumbnail } : prev);
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to fallback search artist image:", err);
+        tracks = await getArtistProfileTracks(identity);
+      } catch {
+        primaryFailed = true;
       }
+      if (!isCurrent()) return;
+      if (filterTracks(tracks).length === 0 && identity.provider === "deezer") {
+        source = "catalog";
+        try {
+          tracks = profileTracks(await searchTracks(identity.name, identity), identity);
+        } catch {
+          primaryFailed = true;
+        }
+        if (!isCurrent()) return;
+      }
+      if (filterTracks(tracks).length === 0) {
+        source = "local";
+        tracks = profileTracks([...tracks, ...knownTracks], identity);
+      }
+      setArtistTracks(tracks);
+      setArtistTracksSource(source);
+      setArtistTracksError(primaryFailed && source === "local");
     };
 
-    fetchArtistImage();
+    await Promise.all([
+      loadTracks().finally(() => { if (isCurrent()) setIsLoadingArtist(false); }),
+      getArtistReleasePage(identity).then(page => {
+        if (!isCurrent()) return;
+        setArtistAlbums(profileReleases(page.albums, identity));
+        if (page.nextIndex !== undefined) setArtistReleasePage({ artist: identity, index: page.nextIndex });
+      }).catch(() => {
+        if (isCurrent()) setArtistReleasesError(true);
+      }).finally(() => { if (isCurrent()) setIsLoadingArtistAlbums(false); }),
+    ]);
+  };
 
-    // Fetch tracks
-    let fetchedTracks: Track[] = [];
+  const loadMoreArtistReleases = async () => {
+    if (!artistReleasePage || isLoadingMoreArtistReleases) return;
+    const request = detailRequest.current;
+    const { artist, index } = artistReleasePage;
+    setIsLoadingMoreArtistReleases(true);
+    setArtistReleasesError(false);
     try {
-      fetchedTracks = await getArtistTracks(artist.id, artist.name);
+      const page = await getArtistReleasePage(artist, index);
       if (detailRequest.current !== request) return;
-      setArtistTracks(fetchedTracks);
-      if (fetchedTracks && fetchedTracks.length > 0) {
-        setExplicitTrackIds(prev => {
-          let changed = false;
-          const next = new Set(prev);
-          fetchedTracks.forEach(t => {
-            if (t.isExplicit && !next.has(t.id)) {
-              next.add(t.id);
-              changed = true;
-            }
-          });
-          if (changed) saveExplicitTrackIds(next);
-          return changed ? next : prev;
-        });
-      }
-    } catch (e) {
-      console.error("Failed to load artist tracks", e);
+      setArtistAlbums(previous => profileReleases([...previous, ...page.albums], artist));
+      setArtistReleasePage(page.nextIndex === undefined ? undefined : { artist, index: page.nextIndex });
+    } catch {
+      if (detailRequest.current === request) setArtistReleasesError(true);
     } finally {
-      if (detailRequest.current === request) setIsLoadingArtist(false);
-    }
-
-    // Fetch Spotify stats from RapidAPI
-    getSpotifyArtistStats(artist.name).then((stats) => {
-      if (stats) {
-        setSelectedArtist(prev => {
-          if (prev && prev.id === artist.id) {
-            return {
-              ...prev,
-              description: stats.biography || prev.description,
-              monthlyListeners: stats.monthlyListeners
-            };
-          }
-          return prev;
-        });
-
-        if (stats.topTracks && stats.topTracks.length > 0 && fetchedTracks.length > 0) {
-          const formatStreamCount = (count: number): string => {
-            if (count >= 1e9) return `${(count / 1e9).toFixed(1)}B`;
-            if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
-            if (count >= 1e3) return `${(count / 1e3).toFixed(1)}K`;
-            return String(count);
-          };
-
-          const updatedTracks = fetchedTracks.map(t => {
-            const match = stats.topTracks!.find(tt =>
-              tt.name.toLowerCase().includes(t.title.toLowerCase()) ||
-              t.title.toLowerCase().includes(tt.name.toLowerCase())
-            );
-            if (match) {
-              return { ...t, plays: formatStreamCount(match.streamCount) };
-            }
-            return t;
-          });
-
-          setArtistTracks(updatedTracks);
-        }
-      }
-    }).catch(err => {
-      console.warn("Failed to merge Spotify stats:", err);
-    });
-
-    // Fetch albums in parallel using artist name search
-    try {
-      const albums = await searchAlbums(artist.name);
-      // Filter albums to make sure they match the artist
-      const filtered = albums.filter(al => al.artist.toLowerCase().includes(artist.name.toLowerCase()));
-      const sorted = [...filtered].sort((a, b) => {
-        const dateA = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
-        const dateB = b.releaseDate ? new Date(b.releaseDate).getTime() : 0;
-        return dateB - dateA;
-      });
-      setArtistAlbums(sorted);
-    } catch (e) {
-      console.error("Failed to load artist albums", e);
-    } finally {
-      setIsLoadingArtistAlbums(false);
+      if (detailRequest.current === request) setIsLoadingMoreArtistReleases(false);
     }
   };
 
-  const handleTrackContextMenu = (e: React.MouseEvent, track: Track, currentPlaylistId?: string | null) => {
+  const handleTrackContextMenu = React.useCallback((e: React.MouseEvent, track: Track, currentPlaylistId?: string | null) => {
+    if (e.type === "contextmenu") {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setPlaylistContextMenu(null);
+    setSourceMenuTrack(null);
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
       track,
+      anchor: e.currentTarget instanceof HTMLElement ? e.currentTarget : undefined,
       currentPlaylistId
     });
-  };
+  }, []);
+  const closeTrackContextMenu = React.useCallback(() => setContextMenu(null), []);
 
   const handlePlaylistContextMenu = (e: React.MouseEvent, playlist: Playlist) => {
     e.preventDefault();
     e.stopPropagation();
+    setContextMenu(null);
     setPlaylistContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -2506,7 +2716,7 @@ const MainLayout: React.FC = () => {
   const handlePlayPlaylist = (playlist: Playlist) => {
     recordPlaylistActivity(playlist.id);
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("Playlist is empty", "info");
+      showToast(localized(language, "La playlist está vacía", "Playlist is empty", "Zerrenda hutsik dago"), "info");
       return;
     }
     playTrack(playlist.tracks[0], playlist.tracks, playlist.id);
@@ -2515,16 +2725,15 @@ const MainLayout: React.FC = () => {
 
   const handleAddPlaylistToQueue = (playlist: Playlist) => {
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("Playlist is empty", "info");
+      showToast(localized(language, "La playlist está vacía", "Playlist is empty", "Zerrenda hutsik dago"), "info");
       return;
     }
     playlist.tracks.forEach((track) => addToQueue(track));
-    showToast(`Added ${playlist.tracks.length} songs to queue`, "success");
   };
 
   const handleMergePlaylists = (sourcePlaylist: Playlist, targetPlaylistId: string) => {
     if (!sourcePlaylist.tracks || sourcePlaylist.tracks.length === 0) {
-      showToast("No songs to transfer", "info");
+      showToast(localized(language, "No hay canciones para mover", "No songs to transfer", "Ez dago mugitzeko abestirik"), "info");
       return;
     }
     const target = playlists.find((p) => p.id === targetPlaylistId);
@@ -2553,17 +2762,17 @@ const MainLayout: React.FC = () => {
     const updated = new Set(hiddenPlaylistIds);
     if (updated.has(playlistId)) {
       updated.delete(playlistId);
-      showToast("Playlist visible again", "info");
+      showToast(localized(language, "Playlist visible de nuevo", "Playlist visible again", "Zerrenda berriro ikusgai dago"), "info");
     } else {
       updated.add(playlistId);
-      showToast("Playlist hidden", "info");
+      showToast(localized(language, "Playlist oculta", "Playlist hidden", "Zerrenda ezkutatu da"), "info");
     }
     saveHiddenPlaylistIds(updated);
   };
 
   const handleTogglePlaylistExplicit = (playlist: Playlist, makeExplicit: boolean) => {
     if (!playlist.tracks || playlist.tracks.length === 0) {
-      showToast("Playlist has no songs", "info");
+      showToast(localized(language, "La playlist no tiene canciones", "Playlist has no songs", "Zerrendak ez du abestirik"), "info");
       return;
     }
     chooseTrackVersions(playlist.tracks, makeExplicit);
@@ -2575,10 +2784,57 @@ const MainLayout: React.FC = () => {
     );
   };
 
+  const [librarySearchQuery, setLibrarySearchQuery] = useState("");
+  const [listenLaterSort, setListenLaterSort] = useState("date");
+  const [listenLaterLimit, setListenLaterLimit] = useState(50);
+  const listenLaterLabel = localized(language, "Escuchar más tarde", "Listen Later", "Gero entzun");
+  const listenLaterTracks = React.useMemo(() => {
+    const query = normalizeSearch(librarySearchQuery);
+    const entries = listenLater.filter(({ track }) =>
+      normalizeSearch([track.title, track.artist, track.albumName ?? ""].join(" ")).includes(query));
+    entries.sort((a, b) => {
+      if (listenLaterSort === "title") return a.track.title.localeCompare(b.track.title, language);
+      if (listenLaterSort === "artist") return a.track.artist.localeCompare(b.track.artist, language);
+      return b.savedAt.localeCompare(a.savedAt);
+    });
+    return filterTracks(entries.map(({ track, savedAt }) => ({ ...track, dateAdded: savedAt })));
+  }, [listenLater, librarySearchQuery, listenLaterSort, language, filterTracks]);
+  const toggleListenLater = (track: Track) => {
+    const saved = isSavedForLater(track);
+    if (!saved && isInPersonalLibrary(track)) return;
+    const matchesTrack = indexLibraryTracks([track]);
+    const savedAt = new Date().toISOString();
+    setListenLater(previous => saved ? previous.filter(entry => !matchesTrack(entry.track))
+      : previous.some(entry => matchesTrack(entry.track)) ? previous : [{ id: track.id, savedAt, track }, ...previous]);
+    showToast(saved
+      ? localized(language, "Quitada de Escuchar más tarde", "Removed from Listen Later", "Gero entzutetik kenduta")
+      : localized(language, "Guardada en Escuchar más tarde", "Saved to Listen Later", "Gero entzuteko gordeta"), "success");
+  };
+  const inListenLater = activeTab === "playlists" && showListenLater && !selectedPlaylist && !selectedArtist && !selectedAlbum;
+  const headerSearchScope = activeTab === "playlists" ? "library" : activeTab === "search" ? searchType : "all";
+  const headerSearchLabel = inListenLater
+    ? localized(language, "Buscar en Escuchar más tarde", "Search Listen Later", "Bilatu Gero entzun atalean")
+    : headerSearchScope === "library" ? localized(language, "Buscar en tu biblioteca", "Search your library", "Bilatu liburutegian") : labels.searchField;
+  const headerSearchValue = activeTab === "playlists" ? librarySearchQuery : searchQuery;
+  const changeHeaderSearch = activeTab === "playlists" ? setLibrarySearchQuery : updateSearchQuery;
+
   function submitSearch(value: string) {
+    if (inListenLater) {
+      setLibrarySearchQuery(value);
+      setMobileSearchOpen(false);
+      return;
+    }
     navigateTab("search");
-    void handleSearch(value, /^https?:\/\//i.test(value) ? "track" : searchType);
+    setMobileSearchOpen(false);
+    void handleSearch(value, headerSearchScope === "library" ? "library" : /^https?:\/\//i.test(value) ? "track" : headerSearchScope);
   }
+
+  const libraryMatches = searchType === "library" && submittedQuery.trim() ? playlists.flatMap(list => {
+    const query = normalizeSearch(submittedQuery);
+    const matches = list.tracks.filter(track => query.split(/\s+/).every(term =>
+      normalizeSearch([track.title, track.artist, track.albumName].filter(Boolean).join(" ")).includes(term)));
+    return matches.length || normalizeSearch(list.name).includes(query) ? [{ list, matches }] : [];
+  }) : [];
 
   function filterRecommended(tracks: Track[]) {
     if (privateSession) return [];
@@ -2587,20 +2843,54 @@ const MainLayout: React.FC = () => {
 
   const visibleHomeRecommendations = filterRecommended(homeRecommendations).filter(track => !playlistTrackKeys.has(trackTitleArtistKey(track)));
 
+  const [discoveryCutoff, setDiscoveryCutoff] = React.useState(() => Date.now() - 30 * 86_400_000);
+  useEffect(() => {
+    const update = () => setDiscoveryCutoff(Date.now() - 30 * 86_400_000);
+    const timer = window.setInterval(update, 60 * 60 * 1000);
+    window.addEventListener("focus", update);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", update);
+    };
+  }, []);
+  const smartPlaylists = React.useMemo(() => {
+    if (privateSession) return [];
+    const stats = statsFor(listeningEntries);
+    const top = Object.values(stats.tracks).sort((a, b) => b.count - a.count || b.seconds - a.seconds).map(item => item.track);
+    const regular = Object.values(stats.artists).sort((a, b) => b.seconds - a.seconds).slice(0, 5).map(item => item.name);
+    const chronological = [...listeningEntries].sort((a, b) => a.at - b.at);
+    const last = new Map(chronological.map(item => [trackTitleArtistKey(item.track), item]));
+    const seen = new Set<string>();
+    const discoveries = chronological.filter(item => {
+      const key = trackTitleArtistKey(item.track);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return item.at > discoveryCutoff;
+    }).reverse().map(item => item.track);
+    const distant = [...last.values()].filter(item => item.at <= discoveryCutoff).sort((a, b) => a.at - b.at).map(item => item.track);
+    return [
+      { id: "smart-top", name: localized(language, "Más escuchadas", "Most played", "Gehien entzunak"), tracks: top },
+      { id: "smart-favorites", name: localized(language, "Favoritos recientes", "Recent favorites", "Azken gogokoak"), tracks: favorites.slice(-30).reverse() },
+      { id: "smart-artists", name: localized(language, "Artistas habituales", "Frequent artists", "Ohiko artistak"), tracks: top.filter(track => regular.includes(track.artist)) },
+      { id: "smart-revisit", name: localized(language, "Hace tiempo que no escuchas", "Listen again", "Entzun berriro"), tracks: distant },
+      { id: "smart-discovered", name: localized(language, "Descubrimientos recientes", "Recent discoveries", "Azken aurkikuntzak"), tracks: discoveries },
+    ].filter(list => list.tracks.length).map(list => ({ ...list, tracks: list.tracks.slice(0, 30) }));
+  }, [listeningEntries, favorites, language, privateSession, discoveryCutoff]);
+
   async function startRadio(track: Track, useArtist = false) {
-    showToast("Preparando radio…", "info");
+    showToast(localized(language, "Preparando radio…", "Preparing radio…", "Irratia prestatzen…"), "info");
     try {
       const recommendations = useArtist
         ? await getSearchRecommendations(track.artist, [track])
         : await getSearchRecommendations(track.title + " " + track.artist, [track]);
       const candidates = filterTracks(rankTracks(recommendations, "")).filter(candidate => candidate.id !== track.id);
       if (!candidates.length) {
-        showToast("No se encontraron pistas para esta radio.", "info");
+        showToast(localized(language, "No se encontraron pistas para esta radio.", "No tracks found for this radio.", "Ez da irrati honetarako abestirik aurkitu."), "info");
         return;
       }
       playTrack(candidates[0], candidates, "radio-" + track.id);
     } catch {
-      showToast("No se pudo preparar la radio.", "error");
+      showToast(localized(language, "No se pudo preparar la radio.", "Couldn't prepare radio.", "Ezin izan da irratia prestatu."), "error");
     }
   }
 
@@ -2628,32 +2918,23 @@ const MainLayout: React.FC = () => {
 
   return (
     <div
-      className="h-dvh w-full flex flex-col overflow-hidden relative"
+      className="app-shell isolate h-dvh w-full flex flex-col overflow-hidden relative"
       style={{
-        backgroundColor: themeSettings.theme === "bright" ? "var(--app-bg-color-val, #fafafa)" : themeSettings.theme === "noir" ? "var(--app-bg-color-val, #000000)" : "var(--app-bg-color-val, #0f0f0f)",
+        backgroundColor: themeSettings.theme === "bright" ? "var(--app-bg-color-val, #fafafa)" : themeSettings.theme === "noir" ? "var(--app-bg-color-val, #000000)" : "var(--app-bg-color-val, var(--desktop-dark-base, #0f0f0f))",
         backgroundImage: "var(--app-bg-image-val, none)",
         backgroundSize: "cover",
         backgroundPosition: "center",
         backgroundAttachment: "fixed",
-      }}
+        "--desktop-player-width": desktopPanelWidth + "px",
+        "--desktop-playback-height": currentTrack ? "6rem" : "0px",
+      } as React.CSSProperties}
     >
       <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:m-3 focus:rounded-lg focus:bg-white focus:p-3 focus:text-black">{labels.skip}</a>
       {/* Ambient Glow Background */}
-      {auraActive && !palette && currentTrack && (
-        <div className="absolute inset-0 pointer-events-none overflow-hidden z-0 select-none">
-          <div 
-            className="absolute inset-0 scale-125 blur-[100px] md:blur-[140px] opacity-35 transition-all duration-1000 ease-in-out"
-            style={{
-              backgroundImage: `url(${currentTrack.thumbnail})`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-            }}
-          />
-          <div className={`absolute inset-0 ${themeSettings.theme === "bright" ? "bg-white/45" : "bg-black/50"}`} />
-        </div>
+      {auraActive && ambientMode === "cover" && palette?.auraImage && (
+        <div key={coverUrl} className="ambient-cover-layer" aria-hidden="true" />
       )}
-
-      <div className="flex-1 flex overflow-hidden relative w-full z-10">
+      <div className="flex min-h-0 flex-1 overflow-hidden relative w-full z-10">
 
         {/* Navigation Sidebar */}
         <Sidebar
@@ -2708,16 +2989,16 @@ const MainLayout: React.FC = () => {
         >
           {mobileSearchOpen ? (
             <div className="flex items-center gap-3 px-4 py-3">
-              <SearchField value={searchQuery} suggestions={searchSuggestions} label={labels.searchField} onChange={updateSearchQuery} onSubmit={submitSearch} autoFocus />
+              <SearchField value={headerSearchValue} suggestions={searchSuggestions} label={headerSearchLabel} onChange={changeHeaderSearch} onSubmit={submitSearch} autoFocus />
               <button
                 onClick={() => {
                   setMobileSearchOpen(false);
-                  updateSearchQuery("");
+                  changeHeaderSearch("");
                   setSearchRecommendations([]);
                 }}
                 className="text-gray-400 hover:text-white text-sm font-medium shrink-0"
               >
-                Cancel
+                {localized(language, "Cancelar", "Cancel", "Utzi")}
               </button>
             </div>
           ) : (
@@ -2729,12 +3010,13 @@ const MainLayout: React.FC = () => {
                 <span className="text-base font-semibold text-white tracking-tight">IbraMusic</span>
               </div>
               <div className="flex items-center gap-2">
-                <button
+                {activeTab !== "search" && <button
+                  aria-label={headerSearchLabel}
                   onClick={() => setMobileSearchOpen(true)}
                   className="w-9 h-9 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white transition-all"
                 >
                   <Search className="w-4.5 h-4.5" />
-                </button>
+                </button>}
                 <button
                   onClick={() => {
                     if (user) {
@@ -2793,15 +3075,16 @@ const MainLayout: React.FC = () => {
           tabIndex={-1}
           ref={mainContentRef}
           onScroll={event => {
+            setIsHeaderScrolled(event.currentTarget.scrollTop > 0);
             if (activeTab === "search" && !selectedPlaylist && !selectedAlbum && !selectedArtist) searchScrollTop.current = event.currentTarget.scrollTop;
           }}
-          className={`flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-0 md:px-8 md:pb-40 ${sidebarCollapsed ? "md:ml-20" : "md:ml-72"} lg:mr-[380px] transition-all duration-300`}
+          className={`desktop-content-scroll min-w-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] pt-[76px] px-4 pb-[148px] md:pt-0 md:px-8 ${sidebarCollapsed ? "md:ml-20" : "md:ml-72"} ${desktopPanelVisible ? "lg:mr-[var(--desktop-player-size)]" : ""} transition-colors duration-300`}
         >
 
           {/* Desktop-only Top Header Bar (Sticky) */}
           <header className={`hidden md:flex items-center justify-between gap-4 py-3 mb-4 sticky top-0 z-30 pt-4 px-8 -mx-8 transition-all duration-200 ${
             isHeaderScrolled 
-              ? "bg-black/20 backdrop-blur-xl border-b border-white/5" 
+              ? "bg-brand-darkBg border-b border-white/5"
               : "bg-transparent backdrop-blur-none border-b border-transparent"
           }`}>
             <div className="flex items-center gap-3 flex-1 max-w-lg">
@@ -2815,7 +3098,7 @@ const MainLayout: React.FC = () => {
                       ? "opacity-30 cursor-not-allowed text-gray-600"
                       : "hover:bg-black/60 text-gray-400 hover:text-white"
                   }`}
-                  title="Go back"
+                  title={localized(language, "Atrás", "Go back", "Atzera")}
                 >
                   <span className="text-sm font-bold">←</span>
                 </button>
@@ -2827,7 +3110,7 @@ const MainLayout: React.FC = () => {
                       ? "opacity-30 cursor-not-allowed text-gray-600"
                       : "hover:bg-black/60 text-gray-400 hover:text-white"
                   }`}
-                  title="Go forward"
+                  title={localized(language, "Adelante", "Go forward", "Aurrera")}
                 >
                   <span className="text-sm font-bold">→</span>
                 </button>
@@ -2845,12 +3128,12 @@ const MainLayout: React.FC = () => {
                     ? "bg-white text-black font-bold"
                     : "bg-black/40 text-gray-400 hover:text-white hover:bg-black/60 border border-white/5"
                   }`}
-                title="Home"
+                title={localized(language, "Inicio", "Home", "Hasiera")}
               >
                 <Home className="w-5 h-5" />
               </button>
 
-              <SearchField value={searchQuery} suggestions={searchSuggestions} label={labels.searchField} onChange={updateSearchQuery} onSubmit={submitSearch} />
+              <div ref={mainSearchRef} className="min-w-0 flex-1"><SearchField value={headerSearchValue} suggestions={searchSuggestions} label={headerSearchLabel} onChange={changeHeaderSearch} onSubmit={submitSearch} /></div>
             </div>
 
             <div className="flex items-center gap-3">
@@ -2863,7 +3146,7 @@ const MainLayout: React.FC = () => {
                       ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
                       : "bg-white/5 border-white/5 hover:bg-white/10 text-gray-300 hover:text-white"
                   }`}
-                  title="Listen Together"
+                  title={localized(language, "Escuchar juntos", "Listen Together", "Entzun elkarrekin")}
                 >
                   <Radio className={`w-5 h-5 ${roomId ? "animate-pulse" : ""}`} />
                 </button>
@@ -2879,7 +3162,7 @@ const MainLayout: React.FC = () => {
               <button
                 onClick={() => setShowQueueOverlay(true)}
                 className="p-2.5 rounded-full bg-white/5 border border-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition-all relative shrink-0"
-                title="View Queue"
+                title={localized(language, "Ver cola", "View Queue", "Ikusi ilara")}
               >
                 <ListMusic className="w-5 h-5" />
                 {queue.length > 0 && (
@@ -3074,7 +3357,7 @@ const MainLayout: React.FC = () => {
                           className="w-full mt-1.5 py-2 bg-brand-accent hover:bg-brand-accent/90 text-black font-bold rounded-xl transition-all text-xs text-center flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <User className="w-4 h-4 text-black" />
-                          <span>Login</span>
+                          <span>{localized(language, "Iniciar sesión", "Login", "Hasi saioa")}</span>
                         </button>
                       )}
                     </div>
@@ -3096,8 +3379,8 @@ const MainLayout: React.FC = () => {
             }
           >
           {shareToken ? (
-            <React.Suspense fallback={<p role="status">Cargando lista…</p>}>
-              <SharedPlaylistView key={shareToken + (userId ?? "")} token={shareToken} account={userId} onPlay={playTrack} onLeave={() => {
+            <React.Suspense fallback={<LoadingSkeleton layout="detail" label="Cargando lista…" />}>
+              <SharedPlaylistView key={shareToken + (userId ?? "")} token={shareToken} account={userId} onPlay={playTrack} onTrackContextMenu={handleTrackContextMenu} onLeave={() => {
                 const url = new URL(location.href);
                 url.searchParams.delete("share");
                 window.history.replaceState(null, "", url);
@@ -3105,12 +3388,14 @@ const MainLayout: React.FC = () => {
                 navigateTab("playlists");
               }} />
             </React.Suspense>
+          ) : isOpeningPublicPlaylist ? (
+            <LoadingSkeleton layout="detail" label="Cargando playlist pública…" />
           ) : selectedArtist ? (
             /* ARTIST PANEL - FULL PAGE SPACE */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-subpage">
               <div className="flex items-center justify-between">
                 <button
-                  onClick={() => setSelectedArtist(null)}
+                  onClick={() => { detailRequest.current++; setSelectedArtist(null); }}
                   className="text-xs text-gray-400 hover:text-white transition-all flex items-center gap-1 bg-white/5 px-3 py-1.5 rounded-xl border border-white/5"
                 >
                   ← Back
@@ -3119,20 +3404,22 @@ const MainLayout: React.FC = () => {
 
               <div
                 className="p-6 md:p-8 rounded-[32px] flex flex-col justify-end min-h-[220px] border border-white/5 relative overflow-hidden bg-cover bg-center select-none"
-                style={{ backgroundImage: `linear-gradient(to bottom, rgba(18,18,18,0.2) 0%, rgba(18,18,18,0.95) 100%), url(${selectedArtist.thumbnail})` }}
+                style={{ backgroundColor: "var(--color-brand-cardBg)" }}
               >
-                <div className="relative z-10 flex flex-col gap-1.5">
-                  <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-sky-400">
-                    <span className="w-4 h-4 bg-sky-500 rounded-full flex items-center justify-center text-white text-[8px]">✓</span> Verified Artist
-                  </span>
-                  <h3 className="text-3xl md:text-5xl font-extrabold text-white leading-tight drop-shadow-md">
+                {selectedArtist.portrait && <img src={selectedArtist.portrait} alt="" aria-hidden="true" className="pointer-events-none absolute inset-0 size-full scale-105 object-cover opacity-30 blur-xl" />}
+                <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-r from-brand-darkBg via-brand-darkBg/70 to-transparent" />
+                {selectedArtist.portrait
+                  ? <img src={selectedArtist.portrait} alt="" className="pointer-events-none absolute inset-y-0 right-0 h-full w-2/5 object-contain object-right"
+                    onError={() => setSelectedArtist(previous => previous && previous.portrait === selectedArtist.portrait ? { ...previous, portrait: undefined } : previous)} />
+                  : <User aria-hidden="true" className="absolute right-10 top-1/2 size-24 -translate-y-1/2 text-gray-400/30" />}
+                <div className="relative z-10 flex flex-col items-start gap-3">
+                  <h3 className="break-words text-3xl font-extrabold leading-tight tracking-tight text-white drop-shadow-md md:text-5xl">
                     {selectedArtist.name}
                   </h3>
-                  <button className="mt-2 rounded-lg border border-white/15 px-3 py-2 text-sm text-white" onClick={() => void copyLink(buildShareLink("artist", selectedArtist.id, selectedArtist.name))}>Compartir artista</button>
-                  <div className="flex flex-wrap items-center gap-4 mt-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {selectedArtist.monthlyListeners !== undefined && (
                       <span className="text-xs text-gray-300 font-semibold drop-shadow">
-                        {selectedArtist.monthlyListeners.toLocaleString()} monthly listeners
+                        {selectedArtist.monthlyListeners.toLocaleString(language)} {localized(language, "oyentes mensuales", "monthly listeners", "hileko entzule")}
                       </span>
                     )}
                     <button
@@ -3142,7 +3429,10 @@ const MainLayout: React.FC = () => {
                           : "bg-brand-accent border-transparent text-black hover:bg-brand-accent/90"
                         }`}
                     >
-                      {followedArtists.some(a => a.id === selectedArtist.id) ? "Following" : "Follow"}
+                      {followedArtists.some(a => a.id === selectedArtist.id) ? localized(language, "Siguiendo", "Following", "Jarraitzen") : localized(language, "Seguir", "Follow", "Jarraitu")}
+                    </button>
+                    <button className={playlistHeaderButton} onClick={() => void copyLink(buildShareLink("artist", selectedArtist.id, selectedArtist.name))}>
+                      <Link className="size-3.5" aria-hidden="true" /> {localized(language, "Compartir", "Share", "Partekatu")}
                     </button>
                   </div>
                 </div>
@@ -3153,12 +3443,13 @@ const MainLayout: React.FC = () => {
                   <button
                     key={tab}
                     onClick={() => setArtistTab(tab)}
+                    aria-pressed={artistTab === tab}
                     className={`pb-1.5 border-b-2 text-xs font-bold uppercase tracking-wider transition-all ${artistTab === tab
                         ? "border-brand-accent text-white"
                         : "border-transparent text-gray-400 hover:text-white"
                       }`}
                   >
-                    {tab}
+                    {tab === "popular" ? localized(language, "Popular", "Popular", "Ezagunak") : tab === "albums" ? localized(language, "Lanzamientos", "Releases", "Argitalpenak") : localized(language, "Información", "About", "Informazioa")}
                   </button>
                 ))}
               </div>
@@ -3166,28 +3457,35 @@ const MainLayout: React.FC = () => {
               <div className="flex-1">
                 {artistTab === "popular" && (
                   isLoadingArtist ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
-                      <div className="w-8 h-8 border-4 border-brand-accent border-t-transparent rounded-full animate-spin" />
-                      <span className="text-xs">Loading popular songs...</span>
-                    </div>
-                  ) : artistTracks.length === 0 ? (
-                    <p className="text-center py-12 text-gray-500 text-sm">No tracks found for this artist.</p>
+                    <LoadingSkeleton layout="tracks" label="Cargando canciones del artista…" />
+                  ) : artistTracksError && visibleArtistTracks.length === 0 ? (
+                    <button className={playlistHeaderButton} onClick={() => void handleOpenArtist(selectedArtist, false)}>{localized(language, "No se pudieron cargar las canciones. Reintentar", "Couldn't load songs. Retry", "Ezin izan dira abestiak kargatu. Saiatu berriro")}</button>
+                  ) : visibleArtistTracks.length === 0 ? (
+                    <p className="text-center py-12 text-gray-500 text-sm">{artistTracks.length
+                      ? localized(language, "Ninguna canción coincide con el filtro actual.", "No songs match the current filter.", "Ez dago uneko iragazkiarekin bat datorren abestirik.")
+                      : localized(language, "No se encontraron canciones de este artista.", "No songs found for this artist.", "Ez da artista honen abestirik aurkitu.")}</p>
                   ) : (
                     <div className="flex flex-col gap-3 animate-[fadeIn_0.3s_ease]">
+                      <p className="px-2 text-xs text-gray-400">{artistTracksSource === "top"
+                        ? localized(language, "Orden del proveedor.", "Provider order.", "Hornitzailearen ordena.")
+                        : artistTracksSource === "catalog"
+                        ? localized(language, "Coincidencias del catálogo en orden de búsqueda.", "Catalog matches in search order.", "Katalogoko emaitzak bilaketaren ordenan.")
+                        : localized(language, "Solo tu historial y biblioteca. El catálogo no está disponible.", "Your history and library only. The catalog is unavailable.", "Zure historia eta liburutegia soilik. Katalogoa ez dago erabilgarri.")}</p>
+                      {artistTracksError && <button className={playlistHeaderButton + " self-start"} onClick={() => void handleOpenArtist(selectedArtist, false)}>{localized(language, "Reintentar catálogo", "Retry catalog", "Saiatu katalogoa berriro")}</button>}
                       {/* Bulk Action Toolbar */}
                       {isSelecting && (
                         <div id="bulk-action-toolbar" className="sticky top-0 z-30 flex items-center gap-2 px-4 py-2.5 mb-2 rounded-2xl bg-brand-accent/10 border border-brand-accent/30 backdrop-blur-xl animate-[fadeIn_0.2s_ease]">
                           <button
-                            onClick={() => handleSelectAll(artistTracks.slice(0, visibleArtistTracksCount))}
+                            onClick={() => handleSelectAll(visibleArtistTracks.slice(0, visibleArtistTracksCount))}
                             className="text-xs text-brand-accent hover:underline font-semibold shrink-0"
                           >
-                            {selectedTrackIds.size === artistTracks.slice(0, visibleArtistTracksCount).length ? "Deselect all" : "Select all"}
+                            {selectedTrackIds.size === visibleArtistTracks.slice(0, visibleArtistTracksCount).length ? "Deselect all" : "Select all"}
                           </button>
                           <span className="text-gray-500 text-xs shrink-0">{selectedTrackIds.size} selected</span>
                           <div className="flex-1" />
                           <button
                             onClick={() => {
-                              const sel = artistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
+                              const sel = visibleArtistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
                               handleBulkAddToFavorites(sel);
                             }}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-300 hover:text-red-400 text-xs font-medium transition-all"
@@ -3201,7 +3499,7 @@ const MainLayout: React.FC = () => {
                               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
                             >
                               <Plus className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">Add to playlist</span>
+                              <span className="hidden sm:inline">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                             </button>
                             {showBulkPlaylistPicker && (
                               <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
@@ -3212,7 +3510,7 @@ const MainLayout: React.FC = () => {
                                     <button
                                       key={pl.id}
                                       onClick={() => {
-                                        const sel = artistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
+                                        const sel = visibleArtistTracks.slice(0, visibleArtistTracksCount).filter(t => selectedTrackIds.has(t.id));
                                         handleBulkAddToPlaylist(pl.id, sel);
                                       }}
                                       className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
@@ -3234,7 +3532,7 @@ const MainLayout: React.FC = () => {
                         </div>
                       )}
 
-                      {filterTracks(artistTracks).slice(0, visibleArtistTracksCount).map((track, idx) => {
+                      {visibleArtistTracks.slice(0, visibleArtistTracksCount).map((track, idx) => {
                         const isChecked = selectedTrackIds.has(track.id);
                         return (
                           <div
@@ -3267,7 +3565,8 @@ const MainLayout: React.FC = () => {
                               <TrackCard
                                 track={track}
                                 variant="row"
-                                tracksQueue={filterTracks(artistTracks)}
+                                tracksQueue={visibleArtistTracks}
+                                artistProfile={selectedArtist}
                                 onToggleFavorite={handleToggleFavorite}
                                 isFavorite={favorites.some((f) => f.id === track.id)}
                                 isExplicit={isTrackExplicit(track)}
@@ -3279,7 +3578,7 @@ const MainLayout: React.FC = () => {
                           </div>
                         );
                       })}
-                      {artistTracks.length > visibleArtistTracksCount && (
+                      {visibleArtistTracks.length > visibleArtistTracksCount && (
                         <button
                           onClick={() => setVisibleArtistTracksCount(prev => prev + 10)}
                           className="mt-4 py-2.5 px-6 self-center rounded-full bg-white/5 hover:bg-white/10 text-xs font-semibold text-gray-300 hover:text-white transition-all border border-white/5 hover:border-white/10"
@@ -3293,44 +3592,65 @@ const MainLayout: React.FC = () => {
 
                 {artistTab === "albums" && (
                   isLoadingArtistAlbums ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
-                      <div className="w-8 h-8 border-4 border-brand-accent border-t-transparent rounded-full animate-spin" />
-                      <span className="text-xs">Loading albums...</span>
-                    </div>
-                  ) : artistAlbums.length === 0 ? (
-                    <p className="text-center py-12 text-gray-500 text-sm">No albums found for this artist.</p>
+                    <LoadingSkeleton layout="grid" label="Cargando álbumes…" />
+                  ) : artistReleasesError && artistAlbums.length === 0 && !artistReleasePage ? (
+                    <button className={playlistHeaderButton} onClick={() => void handleOpenArtist(selectedArtist, false, "albums")}>{localized(language, "No se pudieron cargar los lanzamientos. Reintentar", "Couldn't load releases. Retry", "Ezin izan dira argitalpenak kargatu. Saiatu berriro")}</button>
+                  ) : artistAlbums.length === 0 && !artistReleasePage ? (
+                    <p className="text-center py-12 text-gray-500 text-sm">{localized(language, "No se encontraron lanzamientos.", "No releases found.", "Ez da argitalpenik aurkitu.")}</p>
                   ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 animate-[fadeIn_0.3s_ease]">
-                      {artistAlbums.map((album) => (
-                        <AlbumCard
-                          key={album.id}
-                          album={album}
-                          onClick={handleOpenAlbum}
-                        />
-                      ))}
+                    <div className="grid gap-6">
+                      {([
+                        ["album", localized(language, "Álbumes", "Albums", "Albumak")],
+                        ["ep", "EP"],
+                        ["single", localized(language, "Sencillos", "Singles", "Singleak")],
+                        ["compilation", localized(language, "Recopilaciones", "Compilations", "Bildumak")],
+                        [undefined, localized(language, "Tipo sin confirmar", "Unclassified releases", "Sailkatu gabeko argitalpenak")],
+                      ] as const).map(([type, title]) => {
+                        const releases = artistAlbums.filter(album => album.releaseType === type);
+                        return releases.length > 0 && <section key={title} className="grid gap-3">
+                          <h4 className="font-semibold text-white">{title}</h4>
+                          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                            {releases.map(album => <AlbumCard key={album.id} album={album} onClick={handleOpenAlbum} />)}
+                          </div>
+                        </section>;
+                      })}
+                      {artistReleasePage && <button type="button" className={playlistHeaderButton + " justify-self-start"} disabled={isLoadingMoreArtistReleases}
+                        onClick={() => void loadMoreArtistReleases()}>
+                        {isLoadingMoreArtistReleases ? localized(language, "Cargando…", "Loading…", "Kargatzen…")
+                          : artistReleasesError ? localized(language, "Reintentar", "Retry", "Saiatu berriro")
+                          : localized(language, "Cargar más lanzamientos", "Load more releases", "Kargatu argitalpen gehiago")}
+                      </button>}
                     </div>
                   )
                 )}
 
                 {artistTab === "about" && (
                   <div className="flex flex-col gap-4 text-sm text-gray-300 leading-relaxed max-w-xl animate-[fadeIn_0.3s_ease]">
-                    <div className="relative overflow-hidden rounded-2xl aspect-video w-full mb-2 bg-cover bg-center" style={{ backgroundImage: `url(${selectedArtist.thumbnail})` }}>
-                      <div className="absolute inset-0 bg-gradient-to-t from-brand-darkBg via-black/35 to-transparent" />
-                    </div>
-                    <h4 className="text-lg font-bold text-white">Biography</h4>
-                    <p>
-                      {selectedArtist.description ||
-                        `Explore popular tracks, albums, and biography details for ${selectedArtist.name} directly on their profile.`
-                      }
-                    </p>
-                    {selectedArtist.monthlyListeners !== undefined && (
-                      <div className="grid grid-cols-1 gap-4 mt-4 border-t border-white/5 pt-4">
-                        <div>
-                          <span className="text-xs text-gray-500 block">Monthly Listeners</span>
-                          <span className="text-base font-bold text-white">{selectedArtist.monthlyListeners.toLocaleString()}</span>
-                        </div>
+                    {artistCatalogIdentity?.provider === "youtube" && /^UC[\w-]+$/.test(artistCatalogIdentity.id) && (
+                      <a href={`https://music.youtube.com/channel/${artistCatalogIdentity.id}`} target="_blank" rel="noreferrer"
+                        className="rounded-xl border border-white/10 p-4 font-semibold text-brand-accent hover:underline">
+                        {localized(language, "Perfil en YouTube Music", "YouTube Music artist profile", "YouTube Music-eko artistaren profila")}
+                      </a>
+                    )}
+                    {artistCatalogIdentity?.provider === "tidal" && /^\d+$/.test(artistCatalogIdentity.id) && (
+                      <a href={`https://tidal.com/artist/${artistCatalogIdentity.id}`} target="_blank" rel="noreferrer"
+                        className="rounded-xl border border-white/10 p-4 font-semibold text-brand-accent hover:underline">
+                        {localized(language, "Perfil en TIDAL", "TIDAL artist profile", "TIDALeko artistaren profila")}
+                      </a>
+                    )}
+                    {artistCatalogIdentity?.provider === "deezer" && /^\d+$/.test(artistCatalogIdentity.id) && (
+                      <div className="rounded-xl border border-white/10 p-4">
+                        <a href={`https://www.deezer.com/artist/${artistCatalogIdentity.id}`} target="_blank" rel="noreferrer" className="font-semibold text-brand-accent hover:underline">
+                          {localized(language, "Ficha en Deezer", "Deezer artist page", "Deezerreko artistaren orria")}
+                        </a>
+                        {Number.isFinite(artistCatalogIdentity.popularity) && <p>{artistCatalogIdentity.popularity?.toLocaleString()} {localized(language, "fans en Deezer", "Deezer fans", "jarraitzaile Deezer-en")}</p>}
                       </div>
                     )}
+                    {selectedArtist.description ? <>
+                      <h4 className="text-lg font-bold text-white">{localized(language, "Biografía", "Biography", "Biografia")}</h4>
+                      <p className="whitespace-pre-line">{selectedArtist.description}</p>
+                    </> : isLoadingArtistAbout ? <LoadingSkeleton layout="text" label={localized(language, "Cargando biografía…", "Loading biography…", "Biografia kargatzen…")} />
+                      : <p className="rounded-xl border border-white/10 p-4">{localized(language, "La fuente no ofrece una biografía para este artista. Puedes explorar sus canciones y lanzamientos.", "The source has no biography for this artist. Explore their songs and releases instead.", "Iturriak ez du artista honen biografiarik. Haren abestiak eta argitalpenak araka ditzakezu.")}</p>}
                   </div>
                 )}
               </div>
@@ -3353,7 +3673,7 @@ const MainLayout: React.FC = () => {
                 </button>
               </div>
 
-              <div className="p-6 md:p-8 rounded-[32px] bg-gradient-to-br from-brand-accent/10 to-transparent border border-white/5 flex flex-col md:flex-row gap-6 items-center">
+              <div className="p-6 md:p-8 rounded-[32px] bg-gradient-to-br from-white/5 to-transparent border border-white/5 flex flex-col md:flex-row gap-6 items-center">
                 <img src={selectedAlbum.thumbnail} className="w-32 h-32 md:w-40 md:h-40 rounded-2xl object-cover shadow-lg" />
                 <div className="flex-1 text-center md:text-left">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-brand-accent">Album</span>
@@ -3388,7 +3708,7 @@ const MainLayout: React.FC = () => {
                       title="Add album tracks to an existing playlist"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>Add to playlist</span>
+                      <span>{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                     </button>
                     <button
                       onClick={(e) => {
@@ -3408,10 +3728,7 @@ const MainLayout: React.FC = () => {
 
               <div className="flex flex-col gap-3">
                 {isLoadingAlbum ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
-                    <div className="w-8 h-8 border-4 border-brand-accent border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs">Loading tracks...</span>
-                  </div>
+                  <LoadingSkeleton layout="tracks" label="Cargando canciones del álbum…" />
                 ) : albumTracks.length === 0 ? (
                   <p className="text-center py-12 text-gray-500 text-sm">No tracks found for this album.</p>
                 ) : (
@@ -3443,7 +3760,7 @@ const MainLayout: React.FC = () => {
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Add to playlist</span>
+                            <span className="hidden sm:inline">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                           </button>
                           {showBulkPlaylistPicker && (
                             <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
@@ -3487,7 +3804,9 @@ const MainLayout: React.FC = () => {
                             <div
                               className="shrink-0 flex items-center justify-center w-8 h-8 ml-1 rounded-full cursor-pointer transition-all opacity-100"
                               onClick={(e) => { e.stopPropagation(); handleSelectTrack(track.id); }}
-                              title={isChecked ? "Deselect" : "Select"}
+                              onKeyDown={(event) => { if (event.key === " " || event.key === "Enter") { event.preventDefault(); event.stopPropagation(); handleSelectTrack(track.id); } }}
+                              role="checkbox" tabIndex={0} aria-checked={isChecked} aria-label={track.title}
+                              title={isChecked ? localized(language, "Deseleccionar", "Deselect", "Kendu hautapena") : localized(language, "Seleccionar", "Select", "Hautatu")}
                             >
                               <div
                                 className={`rounded-md border-2 flex items-center justify-center transition-all
@@ -3528,18 +3847,27 @@ const MainLayout: React.FC = () => {
           ) : activeTab === "playlists" ? (
             /* PLAYLISTS PANEL */
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                  <ListMusic className="w-6 h-6 text-brand-accent" /> Biblioteca
+                  <ListMusic className="w-6 h-6 text-brand-accent" /> {labels.playlists}
                 </h2>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" aria-pressed={inListenLater} className={playlistHeaderButton} onClick={() => {
+                    setSelectedPlaylist(null);
+                    setShowListenLater(!inListenLater);
+                    setLibrarySearchQuery("");
+                    setListenLaterLimit(50);
+                    clearSelection();
+                  }}>
+                    <Clock className="size-4" /> {listenLaterLabel}
+                  </button>
                   <button
                     onClick={() => {
                       setShowSpotifyImportModal(true);
                     }}
                     className="px-4 py-2 rounded-full border border-white/10 hover:border-brand-accent hover:text-white text-xs font-semibold text-gray-300 transition-all active:scale-95 flex items-center gap-1.5"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Importar
+                    <Plus className="w-3.5 h-3.5" /> {labels.importPlaylist}
                   </button>
                   <button
                     onClick={() => {
@@ -3547,12 +3875,96 @@ const MainLayout: React.FC = () => {
                     }}
                     className="px-4 py-2 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-xs font-semibold text-black transition-all active:scale-95 flex items-center gap-1.5 shadow-md shadow-brand-accent/25"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Nueva lista
+                    <Plus className="w-3.5 h-3.5" /> {labels.newPlaylist}
                   </button>
                 </div>
               </div>
 
-              {selectedPlaylist ? (
+              {inListenLater ? (() => {
+                const selected = listenLaterTracks.filter(track => selectedTrackIds.has(track.id));
+                return <div className="grid gap-4">
+                  <header className="glass-card flex items-center gap-4 rounded-2xl p-5">
+                    <div className="grid size-12 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/5 text-brand-accent">
+                      <Clock className="size-6" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-white">{listenLaterLabel}</h3>
+                      <p className="mt-1 text-sm text-gray-400">
+                        {localized(language, `${listenLater.length} canciones guardadas`, `${listenLater.length} saved tracks`, `${listenLater.length} abesti gordeta`)}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-400">
+                        {localized(language, "Canciones pendientes de escuchar u organizar.", "Tracks to listen to or organize later.", "Gero entzuteko edo antolatzeko abestiak.")}
+                      </p>
+                    </div>
+                  </header>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className={playlistHeaderButton} disabled={!listenLaterTracks.length}
+                      onClick={() => playTrack(listenLaterTracks[0], listenLaterTracks, "listen-later")}>
+                      <Play className="size-4" /> {localized(language, "Reproducir todo", "Play all", "Erreproduzitu dena")}
+                    </button>
+                    <button type="button" className={playlistHeaderButton} disabled={!listenLaterTracks.length}
+                      onClick={() => playShuffledPlaylist(listenLaterTracks, "listen-later")}>
+                      <Shuffle className="size-4" /> {localized(language, "Aleatorio", "Shuffle", "Ausaz")}
+                    </button>
+                    <select className={playlistHeaderButton} aria-label={localized(language, "Orden", "Sort", "Ordenatu")} value={listenLaterSort}
+                      onChange={event => setListenLaterSort(event.target.value)}>
+                      <option value="date">{localized(language, "Fecha de guardado", "Date saved", "Gordetze-data")}</option>
+                      <option value="title">{localized(language, "Título", "Title", "Izenburua")}</option>
+                      <option value="artist">{localized(language, "Artista", "Artist", "Artista")}</option>
+                    </select>
+                  </div>
+                  {userId && (syncState === "error" || syncState === "offline") && <div role="status" className="flex items-center gap-2 text-xs text-gray-400">
+                    <span>{syncError || localized(language, "Guardado en este dispositivo", "Saved on this device", "Gailu honetan gordeta")}</span>
+                    {syncState === "error" && <button className={playlistHeaderButton} onClick={() => setSyncAttempt(attempt => attempt + 1)}>
+                      {localized(language, "Reintentar", "Retry", "Saiatu berriro")}
+                    </button>}
+                  </div>}
+                  {!!selected.length && <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-gray-400">{selected.length}</span>
+                    <button type="button" className={playlistHeaderButton} onClick={() => {
+                      const ids = new Set(selected.map(track => track.id));
+                      setListenLater(entries => entries.filter(entry => !ids.has(entry.id)));
+                      clearSelection();
+                      showToast(localized(language, "Selección quitada", "Selection removed", "Hautapena kenduta"), "success");
+                    }}><Trash2 className="size-4" /> {localized(language, "Quitar", "Remove", "Kendu")}</button>
+                    <button type="button" className={playlistHeaderButton} onClick={() => {
+                      selected.forEach(track => roomId && !isHost ? proposeRoomTrack(track) : addToQueue(track));
+                      clearSelection();
+                    }}><ListPlus className="size-4" /> {localized(language, "Añadir a la cola", "Add to queue", "Gehitu ilarara")}</button>
+                    <ActionMenu label={localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")} className={playlistHeaderButton}
+                      button={<><Plus className="size-4" /> {localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</>}>
+                      {close => playlists.map(playlist => <button key={playlist.id} className={menuAction}
+                        onClick={() => { handleBulkAddToPlaylist(playlist.id, selected); close(); }}>{playlist.name}</button>)}
+                    </ActionMenu>
+                    <button type="button" className={playlistHeaderButton} onClick={clearSelection}>
+                      {localized(language, "Deseleccionar", "Clear selection", "Garbitu hautapena")}
+                    </button>
+                  </div>}
+                  {!listenLaterTracks.length && <p className="py-10 text-center text-sm text-gray-400">
+                    {listenLater.length ? localized(language, "No hay coincidencias visibles.", "No visible matches.", "Ez dago emaitza ikusgairik.")
+                      : localized(language, "Guarda canciones desde su menú para encontrarlas aquí.", "Save songs from their menu to find them here.", "Gorde abestiak menutik hemen aurkitzeko.")}
+                  </p>}
+                  {listenLaterTracks.slice(0, listenLaterLimit).map((track, index) => (
+                    <div key={track.id} className="flex items-center gap-2">
+                      <input type="checkbox" className="ml-2 accent-brand-accent" checked={selectedTrackIds.has(track.id)}
+                        aria-label={`${localized(language, "Seleccionar", "Select", "Hautatu")} ${track.title}`} onChange={() => handleSelectTrack(track.id)} />
+                      <div className="min-w-0 flex-1">
+                        <TrackCard track={track} trackIndex={index + 1} variant="row" tracksQueue={listenLaterTracks} playlistId="listen-later"
+                          onContextMenu={handleTrackContextMenu} isFavorite={favorites.some(item => item.id === track.id)}
+                          isExplicit={isTrackExplicit(track)} onToggleFavorite={handleToggleFavorite} onAddToPlaylist={handleOpenAddToPlaylist}
+                          onOpenArtist={handleOpenArtist} onOpenAlbum={handleOpenAlbum} />
+                      </div>
+                      <button type="button" className={playlistHeaderButton} title={localized(language, "Quitar de Escuchar más tarde", "Remove from Listen Later", "Kendu Gero entzutetik")}
+                        aria-label={localized(language, "Quitar de Escuchar más tarde", "Remove from Listen Later", "Kendu Gero entzutetik")}
+                        onClick={() => toggleListenLater(track)}><Trash2 className="size-4" /></button>
+                    </div>
+                  ))}
+                  {listenLaterTracks.length > listenLaterLimit && <button type="button" className={playlistHeaderButton + " justify-self-center"}
+                    onClick={() => setListenLaterLimit(limit => limit + 50)}>
+                    {localized(language, "Mostrar más", "Show more", "Erakutsi gehiago")}
+                  </button>}
+                </div>;
+              })() : selectedPlaylist ? (
                 /* VIEW SPECIFIC PLAYLIST */
                 <div className="flex flex-col gap-6">
                   {/* Playlist Header */}
@@ -3588,11 +4000,11 @@ const MainLayout: React.FC = () => {
                             >
                               {selectedPlaylist.isPublic ? (
                                 <>
-                                  <Globe className="w-3.5 h-3.5" /> Public
+                                  <Globe className="w-3.5 h-3.5" /> {localized(language, "Pública", "Public", "Publikoa")}
                                 </>
                               ) : (
                                 <>
-                                  <Lock className="w-3.5 h-3.5" /> Private
+                                  <Lock className="w-3.5 h-3.5" /> {localized(language, "Privada", "Private", "Pribatua")}
                                 </>
                               )}
                             </button>
@@ -3602,40 +4014,78 @@ const MainLayout: React.FC = () => {
                               onClick={() => void copyLink(getPlaylistShareUrl(selectedPlaylist.id))}
                               className={playlistHeaderButton}
                             >
-                              <Link className="w-3.5 h-3.5" /> Copy Link
+                              <Link className="w-3.5 h-3.5" /> {localized(language, "Copiar enlace", "Copy link", "Kopiatu esteka")}
                             </button>
                           )}
-                          <button
-                            onClick={() => {
-                              setEditingPlaylistId(selectedPlaylist.id);
-                              setEditingPlaylistName(selectedPlaylist.name);
-                            }}
-                            className={playlistHeaderButton}
-                          >
-                            Rename
-                          </button>
-                          {userId && <button className={playlistHeaderButton} onClick={() => setManageShare(selectedPlaylist)}>Compartir con permisos</button>}
-
-                          <details className="group/export relative">
-                            <summary className={playlistHeaderButton + " cursor-pointer list-none [&::-webkit-details-marker]:hidden"}>
-                              Exportar <ChevronDown className="size-3.5 transition-transform group-open/export:rotate-180" aria-hidden="true" />
-                            </summary>
-                            <div className="absolute left-0 top-full z-50 mt-1.5 w-32 rounded-2xl border border-white/10 glass-panel py-1.5 text-xs text-gray-300 shadow-2xl shadow-black/80">
-                              {(["json", "csv", "m3u"] as const).map(format => (
-                                <button type="button" key={format} className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-colors hover:bg-white/5 hover:text-white focus-visible:bg-white/5"
-                                  onClick={event => {
-                                    exportPlaylist(selectedPlaylist, format);
-                                    event.currentTarget.closest("details")?.removeAttribute("open");
-                                  }}>
-                                  {format.toUpperCase()}
+                          {userId && <button className={playlistHeaderButton} onClick={() => setManageShare(selectedPlaylist)}><Link className="size-3.5" /> {localized(language, "Compartir", "Share", "Partekatu")}</button>}
+                          <ActionMenu animated label={localized(language, "Acciones de playlist", "Playlist options", "Zerrendaren aukerak")} button={<MoreVertical className="size-4" />} className={playlistHeaderButton}>
+                            {close => <>
+                              <section className="playlist-options-group">
+                                <h3>{localized(language, "Personalización", "Customization", "Pertsonalizazioa")}</h3>
+                                <button className={menuAction} onClick={() => { close(); setEditingPlaylistId(selectedPlaylist.id); setEditingPlaylistName(selectedPlaylist.name); }}><Pencil aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Editar nombre", "Edit playlist name", "Editatu izena")}</button>
+                                <button className={menuAction} onClick={() => { close(); openPlaylistCoverPicker(); }}><Image aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Cambiar portada", "Change cover", "Aldatu azala")}</button>
+                                <details className="group/cover-fit">
+                                  <summary className={menuAction + " cursor-pointer list-none justify-between [&::-webkit-details-marker]:hidden"}>
+                                    {localized(language, "Ajuste de portada", "Cover fit", "Azalaren egokitzapena")}
+                                    <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 motion-safe:transition-transform group-open/cover-fit:rotate-180" />
+                                  </summary>
+                                  <div className="ml-3 mt-0.5 border-l border-white/10 pl-1.5 motion-safe:animate-[fadeIn_0.15s_ease-out]">
+                                    {([
+                                      ["cover", localized(language, "Rellenar el espacio", "Fill (crop)", "Bete (moztu)")],
+                                      ["contain", localized(language, "Mostrar imagen completa", "Fit whole image", "Egokitu irudi osoa")],
+                                      ["scale-down", localized(language, "Centrar sin ampliar", "Center without enlarging", "Erdiratu handitu gabe")],
+                                    ] as const).map(([mode, label]) => {
+                                      const active = (selectedPlaylist.coverFit ?? "contain") === mode;
+                                      return <button key={mode} type="button" aria-pressed={active} className={menuAction + " justify-between"} onClick={() => {
+                                        handlePlaylistCoverFit(selectedPlaylist.id, mode);
+                                        close();
+                                      }}>
+                                        {label}
+                                        {active && <CheckCircle2 aria-hidden="true" className="size-3.5 shrink-0 text-brand-accent" />}
+                                      </button>;
+                                    })}
+                                  </div>
+                                </details>
+                              </section>
+                              <section className="playlist-options-group">
+                                <h3>{localized(language, "Organización", "Organization", "Antolaketa")}</h3>
+                                <button className={menuAction} onClick={() => { handleTogglePinPlaylist(selectedPlaylist.id); close(); }}>
+                                  {pinnedPlaylistIds.has(selectedPlaylist.id)
+                                    ? <><PinOff aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Desfijar playlist", "Unpin playlist", "Askatu zerrenda")}</>
+                                    : <><Pin aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Fijar playlist", "Pin playlist", "Finkatu zerrenda")}</>}
                                 </button>
-                              ))}
-                            </div>
-                          </details>
-                          <button type="button" className={playlistHeaderButton} onClick={() => setPlaylistFolderDraft(selectedPlaylist.folder ?? "")}>
-                            <Folder className="w-3.5 h-3.5" aria-hidden="true" />
-                            {selectedPlaylist.folder ? "Carpeta: " + selectedPlaylist.folder : "Asignar a carpeta"}
-                          </button>
+                                <button className={menuAction} onClick={() => { close(); setPlaylistFolderDraft(selectedPlaylist.folder ?? ""); }}><Folder aria-hidden="true" className="size-4 shrink-0" /> {selectedPlaylist.folder || localized(language, "Asignar a carpeta", "Assign to folder", "Esleitu karpetara")}</button>
+                                <button className={menuAction} onClick={() => { close(); setCleanDestination(""); setDuplicateSelection(new Set(duplicateIndices(selectedPlaylist.tracks))); }}><CheckCircle2 aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Revisar duplicados", "Review duplicates", "Berrikusi bikoiztuak")}</button>
+                              </section>
+                              <section className="playlist-options-group">
+                                <h3>{localized(language, "Gestión", "Management", "Kudeaketa")}</h3>
+                                {(["json", "csv", "m3u"] as const).map(format => <button key={format} className={menuAction} onClick={() => { close(); exportPlaylist(selectedPlaylist, format); }}><FileDown aria-hidden="true" className="size-4 shrink-0" />{localized(language, "Exportar", "Export", "Esportatu")} {format.toUpperCase()}</button>)}
+                                <button className={menuAction + " !text-red-400 hover:!bg-red-500/20"} onClick={() => { close(); handleDeletePlaylist(selectedPlaylist.id); }}><Trash2 aria-hidden="true" className="size-4 shrink-0" /> {localized(language, "Eliminar playlist", "Delete playlist", "Ezabatu zerrenda")}</button>
+                              </section>
+                            </>}
+                          </ActionMenu>
+                          {duplicateSelection !== null && <Modal title="Duplicados de la playlist" onClose={() => setDuplicateSelection(null)}>
+                            {duplicateIndices(selectedPlaylist.tracks).length === 0 ? <p className="text-sm text-gray-400">Esta playlist no tiene duplicados por título y artista.</p> : <div className="grid gap-3">
+                              <p className="text-xs text-gray-400">Se conserva la primera copia de cada canción.</p>
+                              <div className="grid max-h-[40dvh] overflow-auto">
+                                {duplicateIndices(selectedPlaylist.tracks).map(index => <label key={index} className={menuAction}>
+                                  <input type="checkbox" checked={duplicateSelection.has(index)} onChange={() => setDuplicateSelection(previous => {
+                                    const next = new Set(previous ?? []);
+                                    if (next.has(index)) next.delete(index); else next.add(index);
+                                    return next;
+                                  })} />
+                                  {selectedPlaylist.tracks[index].title} · {selectedPlaylist.tracks[index].artist}
+                                </label>)}
+                              </div>
+                              <label className="grid gap-1 text-xs text-gray-300">Acción
+                                <select className={playlistHeaderButton} value={cleanDestination} onChange={event => setCleanDestination(event.target.value)}>
+                                  <option value="">Quitar de esta playlist</option>
+                                  {playlists.filter(list => list.id !== selectedPlaylist.id).map(list => <option key={list.id} value={list.id}>Mover a {list.name}</option>)}
+                                </select>
+                              </label>
+                              <button className={playlistHeaderButton} disabled={!duplicateSelection.size} onClick={() => changePlaylistSelection(selectedPlaylist, duplicateSelection, cleanDestination)}>{cleanDestination ? "Mover" : "Quitar"} ({duplicateSelection.size})</button>
+                            </div>}
+                          </Modal>}
                           {playlistFolderDraft !== null && (
                             <Modal title="Asignar a carpeta" onClose={() => setPlaylistFolderDraft(null)}>
                               <form className="flex flex-col gap-4" onSubmit={event => {
@@ -3659,18 +4109,12 @@ const MainLayout: React.FC = () => {
                                   {[...new Set(playlists.map(item => item.folder).filter(Boolean))].map(folder => <option key={folder} value={folder} />)}
                                 </datalist>
                                 <div className="flex justify-end gap-2">
-                                  <button type="button" className={playlistHeaderButton} onClick={() => setPlaylistFolderDraft(null)}>Cancelar</button>
+                                  <button type="button" className={playlistHeaderButton} onClick={() => setPlaylistFolderDraft(null)}>{localized(language, "Cancelar", "Cancel", "Utzi")}</button>
                                   <button type="submit" className="rounded-full bg-brand-accent px-4 py-2 text-xs font-semibold text-black">Guardar</button>
                                 </div>
                               </form>
                             </Modal>
                           )}
-                          <button
-                            onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
-                            className={playlistHeaderControl + " border-red-500/20 bg-red-500/5 text-red-400 hover:border-red-500 hover:bg-red-600 hover:text-white focus-visible:border-red-500 focus-visible:bg-red-600 focus-visible:text-white"}
-                          >
-                            Delete
-                          </button>
                         </>
                       ) : (
                         <>
@@ -3720,18 +4164,18 @@ const MainLayout: React.FC = () => {
                   <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-br from-brand-accent/10 to-transparent border border-white/5 flex flex-col md:flex-row gap-6 items-center">
                     <div
                       className={`w-44 h-44 sm:w-52 sm:h-52 md:w-60 md:h-60 rounded-2xl md:rounded-3xl bg-white/5 border border-white/10 flex items-center justify-center relative shadow-2xl shadow-black/60 overflow-hidden shrink-0 ${isOwnPlaylist ? "group cursor-pointer" : ""}`}
-                      onClick={() => isOwnPlaylist && document.getElementById("playlist-cover-upload")?.click()}
-                      title={isOwnPlaylist ? "Click to upload custom cover photo" : undefined}
+                      onClick={isOwnPlaylist ? openPlaylistCoverPicker : undefined}
+                      title={isOwnPlaylist ? localized(language, "Cambiar portada", "Change cover", "Aldatu azala") : undefined}
                     >
                       {selectedPlaylist.coverUrl || (selectedPlaylist.tracks && selectedPlaylist.tracks.length > 0 && selectedPlaylist.tracks[0].thumbnail) ? (
-                        <img src={selectedPlaylist.coverUrl || selectedPlaylist.tracks[0].thumbnail} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="Playlist cover" />
+                        <img src={selectedPlaylist.coverUrl || selectedPlaylist.tracks[0].thumbnail} className="w-full h-full object-contain" style={{ objectFit: selectedPlaylist.coverFit }} alt="Playlist cover" />
                       ) : (
                         <ListMusic className="w-20 h-20 text-brand-accent/70" />
                       )}
                       {isOwnPlaylist && (
                         <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-[2px]">
                           <Plus className="w-8 h-8 text-white mb-1.5" />
-                          <span className="text-[11px] font-bold text-white uppercase tracking-wider">Change Cover</span>
+                          <span className="text-[11px] font-bold text-white uppercase tracking-wider">{localized(language, "Cambiar portada", "Change cover", "Aldatu azala")}</span>
                         </div>
                       )}
                     </div>
@@ -3774,7 +4218,7 @@ const MainLayout: React.FC = () => {
                             onClick={() => setEditingPlaylistId(null)}
                             className="px-3.5 py-1.5 border border-white/10 text-gray-400 rounded-xl text-xs"
                           >
-                            Cancel
+                            {localized(language, "Cancelar", "Cancel", "Utzi")}
                           </button>
                         </div>
                       ) : (
@@ -3831,7 +4275,7 @@ const MainLayout: React.FC = () => {
                       <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
                         type="text"
-                        placeholder="Search inside this playlist..."
+                        placeholder={localized(language, "Buscar en esta playlist…", "Search inside this playlist...", "Bilatu zerrenda honetan…")}
                         value={subSearchQuery}
                         onChange={(e) => setSubSearchQuery(e.target.value)}
                         className="w-full pl-10 pr-10 py-2.5 bg-white/5 border border-white/5 focus:border-brand-accent/50 focus:bg-white/10 rounded-full text-xs text-white placeholder:text-gray-500 focus:outline-none transition-all"
@@ -3859,7 +4303,7 @@ const MainLayout: React.FC = () => {
                       if (playlistTracks.length === 0) {
                         return (
                           <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
-                            <p className="font-semibold text-gray-400">No hay canciones visibles con el filtro actual.</p>
+                            <p className="font-semibold text-gray-400">{localized(language, "No hay canciones visibles con el filtro actual.", "No songs match the current filter.", "Iragazki honekin ez da abestirik ikusten.")}</p>
                           </div>
                         );
                       }
@@ -3872,7 +4316,7 @@ const MainLayout: React.FC = () => {
                         return (
                           <div className="text-center py-12 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
                             <p className="font-semibold text-gray-400">No results found for "{subSearchQuery}"</p>
-                            <p className="text-xs text-gray-600 mt-1">Try checking for typos or searching a different song</p>
+                            <p className="text-xs text-gray-600 mt-1">{localized(language, "Revisa la ortografía o busca otra canción", "Try checking for typos or searching a different song", "Egiaztatu ortografia edo bilatu beste abesti bat")}</p>
                           </div>
                         );
                       }
@@ -3974,7 +4418,7 @@ const MainLayout: React.FC = () => {
                                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
-                                  <span className="hidden sm:inline">Add to playlist</span>
+                                  <span className="hidden sm:inline">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                                 </button>
                                 {showBulkPlaylistPicker && (
                                   <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
@@ -3982,8 +4426,8 @@ const MainLayout: React.FC = () => {
                                       <div className="px-4 py-3 text-xs text-gray-500 italic text-center">No playlists yet</div>
                                     ) : (
                                       playlists.map(pl => (
+                                        <React.Fragment key={pl.id}>
                                         <button
-                                          key={pl.id}
                                           onClick={() => {
                                             const sel = sortedTracks.filter(t => selectedTrackIds.has(t.id));
                                             handleBulkAddToPlaylist(pl.id, sel);
@@ -3991,18 +4435,20 @@ const MainLayout: React.FC = () => {
                                           className="w-full px-4 py-2 text-left flex items-center gap-2 hover:bg-white/5 hover:text-white text-gray-300 text-xs transition-all truncate"
                                         >
                                           <ListMusic className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                                          <span className="truncate">{pl.name}</span>
+                                          <span className="truncate">Copiar a {pl.name}</span>
                                         </button>
+                                        {isOwnPlaylist && pl.id !== selectedPlaylist.id && <button type="button" className={menuAction} onClick={() => changePlaylistSelection(selectedPlaylist, new Set(selectedPlaylist.tracks.flatMap((track, index) => selectedTrackIds.has(track.id) ? [index] : [])), pl.id)}>Mover a {pl.name}</button>}
+                                        </React.Fragment>
                                       ))
                                     )}
                                   </div>
                                 )}
                               </div>
                               {/* Remove from this playlist */}
-                              {selectedPlaylist && (
+                              {isOwnPlaylist && (
                                 <button
                                   onClick={() => {
-                                    handleBulkRemoveFromPlaylist(selectedPlaylist.id, Array.from(selectedTrackIds));
+                                    changePlaylistSelection(selectedPlaylist, new Set(selectedPlaylist.tracks.flatMap((track, index) => selectedTrackIds.has(track.id) ? [index] : [])));
                                   }}
                                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 border border-white/10 text-gray-400 hover:text-red-400 text-xs font-medium transition-all"
                                 >
@@ -4027,6 +4473,21 @@ const MainLayout: React.FC = () => {
                               return (
                                 <div
                                   key={`${track.id}-${idx}`}
+                                  draggable={isOwnPlaylist && !sortField && !subSearchQuery && !isSelecting}
+                                  onDragStart={event => {
+                                    if (!matchMedia("(min-width: 1024px)").matches) { event.preventDefault(); return; }
+                                    playlistDrag.current = selectedPlaylist.tracks.indexOf(track);
+                                    event.dataTransfer.effectAllowed = "move";
+                                    event.dataTransfer.setData("text/plain", track.title);
+                                  }}
+                                  onDragOver={event => { if (playlistDrag.current !== null) event.preventDefault(); }}
+                                  onDragEnd={() => { playlistDrag.current = null; }}
+                                  onDrop={event => {
+                                    if (playlistDrag.current === null) return;
+                                    event.preventDefault();
+                                    reorderPlaylistTracks(selectedPlaylist, playlistDrag.current, selectedPlaylist.tracks.indexOf(track));
+                                    playlistDrag.current = null;
+                                  }}
                                   className={`relative flex items-center group transition-all ${isChecked ? "bg-brand-accent/5 rounded-2xl" : ""}`}
                                 >
                                   {/* Checkbox (only rendered during selection) */}
@@ -4090,6 +4551,18 @@ const MainLayout: React.FC = () => {
                   <React.Suspense fallback={null}>
                     <LibraryExtras deleted={deletedPlaylists} onRestore={restorePlaylist} />
                   </React.Suspense>
+                  <div className="hidden flex-wrap gap-2 lg:flex">
+                    <select aria-label={localized(language, "Orden de biblioteca", "Library sort order", "Liburutegiaren ordena")} className={playlistHeaderButton} value={desktopLibrarySort} onChange={event => setDesktopLibrarySort(event.target.value)}>
+                      <option value="default">{localized(language, "Orden habitual", "Default order", "Ohiko ordena")}</option>
+                      <option value="name">{localized(language, "Nombre", "Name", "Izena")}</option>
+                      <option value="recent">{localized(language, "Modificadas recientemente", "Recently modified", "Duela gutxi aldatuak")}</option>
+                      <option value="size">{localized(language, "Número de canciones", "Song count", "Abesti kopurua")}</option>
+                    </select>
+                    <button type="button" className={playlistHeaderButton} aria-pressed={desktopLibraryLayout === "list"} onClick={() => {
+                      const next = desktopLibraryLayout === "list" ? "grid" : "list";
+                      setDesktopLibraryLayout(next); localStorage.setItem("ibrastream_desktop_library_layout", next);
+                    }}>{desktopLibraryLayout === "list" ? localized(language, "Ver cuadrícula", "Grid view", "Sareta-ikuspegia") : localized(language, "Ver lista compacta", "Compact list", "Zerrenda trinkoa")}</button>
+                  </div>
                   {playlists.some(item => item.folder) && (
                     <label className="text-sm text-gray-300">Carpeta
                       <select className="ml-2 rounded-lg bg-brand-darkBg p-2 text-white" value={playlistFolder} onChange={event => setPlaylistFolder(event.target.value)}>
@@ -4098,70 +4571,63 @@ const MainLayout: React.FC = () => {
                       </select>
                     </label>
                   )}
-                  {(playlists.length > 0 || savedAlbums.length > 0) && (
-                    <div className="relative max-w-md w-full">
-                      <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        placeholder="Buscar en la biblioteca…"
-                        value={subSearchQuery}
-                        onChange={(e) => setSubSearchQuery(e.target.value)}
-                        className="w-full pl-10 pr-10 py-2.5 bg-white/5 border border-white/5 focus:border-brand-accent/50 focus:bg-white/10 rounded-full text-xs text-white placeholder:text-gray-500 focus:outline-none transition-all"
-                      />
-                      {subSearchQuery && (
-                        <button
-                          onClick={() => setSubSearchQuery("")}
-                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {playlists.length === 0 && savedAlbums.length === 0 ? (
+                  {smartPlaylists.length > 0 && <section className="hidden gap-2 rounded-2xl border border-white/10 p-3 lg:grid">
+                    <h3 className="text-sm font-semibold text-white">{localized(language, "Playlists inteligentes", "Smart playlists", "Zerrenda adimendunak")}</h3>
+                    <div className="flex flex-wrap gap-2">{smartPlaylists.map(list => <button key={list.id} className={playlistHeaderButton} onClick={() => setSelectedPlaylist(list)}><Sparkles className="size-3.5" />{list.name}</button>)}</div>
+                  </section>}
+                  {isHydratingPlaylists && playlists.length === 0 && savedAlbums.length === 0 ? (
+                    <LoadingSkeleton layout="grid" count={4} label="Cargando biblioteca…" />
+                  ) : playlists.length === 0 && savedAlbums.length === 0 ? (
                     <div className="text-center py-16 text-gray-500 glass-panel rounded-3xl p-8 border border-dashed border-gray-800">
                       <ListMusic className="w-12 h-12 text-gray-700 mx-auto mb-3" />
                       <p className="font-semibold text-gray-400">Create your first playlist</p>
                       <p className="text-xs text-gray-600 mt-1">Click the button above to start your curation</p>
                     </div>
                   ) : (() => {
-                    const query = normalizeSearch(subSearchQuery);
                     const filteredPlaylists = playlists.filter(playlist =>
-                      !hiddenPlaylistIds.has(playlist.id) && (!playlistFolder || playlist.folder === playlistFolder) && normalizeSearch(playlist.name).includes(query)
+                      !hiddenPlaylistIds.has(playlist.id) && (!playlistFolder || playlist.folder === playlistFolder)
                     );
-                    const filteredAlbums = playlistFolder ? [] : savedAlbums.filter(album =>
-                      normalizeSearch(album.title + " " + album.artist).includes(query)
-                    );
+                    if (desktopLibrarySort === "name") filteredPlaylists.sort((a, b) => a.name.localeCompare(b.name, language));
+                    if (desktopLibrarySort === "size") filteredPlaylists.sort((a, b) => b.tracks.length - a.tracks.length);
+                    if (desktopLibrarySort === "recent") {
+                      const activity = new Map(filteredPlaylists.map(list => [list.id, list.tracks.reduce(
+                        (latest, track) => Math.max(latest, Date.parse(track.dateAdded ?? "") || 0),
+                        Date.parse(list.modifiedAt ?? list.createdAt ?? "") || 0,
+                      )]));
+                      filteredPlaylists.sort((a, b) => (activity.get(b.id) ?? 0) - (activity.get(a.id) ?? 0));
+                    }
+                    const filteredAlbums = playlistFolder ? [] : savedAlbums;
                     if (filteredPlaylists.length === 0 && filteredAlbums.length === 0) {
                       return (
                         <div className="text-center py-12 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
-                          <p className="font-semibold text-gray-400">{subSearchQuery ? "No hay resultados para “" + subSearchQuery + "”" : "No hay elementos visibles en la biblioteca"}</p>
+                              <p className="font-semibold text-gray-400">{localized(language, "No hay elementos visibles en la biblioteca", "No visible items in your library", "Ez dago ikusgai dagoen elementurik liburutegian")}</p>
                         </div>
                       );
                     }
                     return (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      <div className={"desktop-library-grid grid grid-cols-2 gap-4 sm:grid-cols-4 " + (desktopLibraryLayout === "list" ? "desktop-library-list" : "")}>
                         {filteredPlaylists.map(playlist => (
                           <button
                             type="button"
                             key={playlist.id}
+                            title={playlist.name}
                             onClick={() => setSelectedPlaylist(playlist)}
                             onContextMenu={(e) => handlePlaylistContextMenu(e, playlist)}
                             className="group relative flex flex-col items-center gap-3 p-4 rounded-2xl glass-card cursor-pointer select-none transition-all duration-300 hover:bg-white/5 border border-white/5"
                           >
                             <div className="relative w-full aspect-square rounded-xl bg-white/5 border border-white/5 flex items-center justify-center shadow-lg shadow-black/40 overflow-hidden">
                               {playlist.coverUrl || (playlist.tracks && playlist.tracks.length > 0 && playlist.tracks[0].thumbnail) ? (
-                                <img src={playlist.coverUrl || playlist.tracks[0].thumbnail} alt={playlist.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                                <img src={playlist.coverUrl || playlist.tracks[0].thumbnail} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain" style={{ objectFit: playlist.coverFit }} />
                               ) : (
                                 <ListMusic className="w-16 h-16 text-brand-accent transition-transform duration-500 group-hover:scale-110" />
                               )}
                             </div>
                             <div className="w-full text-center min-w-0">
-                              <h3 className="font-semibold text-sm text-white truncate group-hover:text-brand-accent transition-colors duration-200">
-                                {playlist.name}
+                              <h3 className="flex items-center justify-center gap-1.5 text-sm font-semibold text-white group-hover:text-brand-accent">
+                                <span className="min-w-0 truncate">{playlist.name}</span>
+                                {pinnedPlaylistIds.has(playlist.id) && <span className="shrink-0 text-[10px] text-brand-accent">{localized(language, "Fijada", "Pinned", "Finkatua")}</span>}
                               </h3>
-                              <p className="text-[10px] text-gray-400 mt-1">{playlist.tracks.length} canciones</p>
+                              <p className="mt-1 text-[10px] text-gray-400">{playlist.tracks.length} {localized(language, "canciones", "songs", "abesti")}</p>
                             </div>
                           </button>
                         ))}
@@ -4191,7 +4657,7 @@ const MainLayout: React.FC = () => {
             <section className="flex flex-col gap-6 animate-[fadeIn_0.3s_ease] animate-mobile-page">
 
               <div className="md:hidden">
-                {!mobileSearchOpen && <SearchField value={searchQuery} suggestions={searchSuggestions} label={labels.searchField} onChange={updateSearchQuery} onSubmit={submitSearch} autoFocus={searchQuery === ""} />}
+                {!mobileSearchOpen && <SearchField value={headerSearchValue} suggestions={searchSuggestions} label={headerSearchLabel} onChange={changeHeaderSearch} onSubmit={submitSearch} autoFocus={searchQuery === ""} />}
               </div>
 
               {/* Desktop header */}
@@ -4201,7 +4667,7 @@ const MainLayout: React.FC = () => {
                 </h2>
               </div>
 
-              {sharedTrack && <article className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+              {sharedTrack && <article onContextMenu={event => handleTrackContextMenu(event, sharedTrack.track)} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div><h2 className="font-semibold text-white">{sharedTrack.track.title}</h2><p className="text-sm text-gray-300">{sharedTrack.track.artist}</p></div>
                 <button onClick={() => playTrack(sharedTrack.track, [sharedTrack.track], null, false, sharedTrack.seconds)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">{sharedTrack.seconds ? "Reproducir desde " + sharedTrack.seconds + " s" : "Reproducir"}</button>
               </article>}
@@ -4290,6 +4756,7 @@ const MainLayout: React.FC = () => {
                               key={`explore-recent-${track.id}-${idx}`}
                               className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 active:bg-white/8 transition-all cursor-pointer group border border-transparent hover:border-white/5"
                               onClick={() => playTrack(track, recentTracks.slice(0, 10))}
+                              onContextMenu={event => handleTrackContextMenu(event, track)}
                             >
                               <div className="relative shrink-0">
                                 <img src={track.thumbnail} alt={track.title} className="w-11 h-11 rounded-xl object-cover" />
@@ -4396,16 +4863,16 @@ const MainLayout: React.FC = () => {
                     ))}
                   </div>
 
-                  {isSearching && <p role="status" className="py-8 text-center text-sm text-gray-300">{labels.searching}</p>}
-                  {searchError && <div role="alert" className="rounded-xl border border-white/10 p-4 text-sm">No se pudo completar la búsqueda. <button className="underline" onClick={() => handleSearch(submittedQuery)}>Reintentar</button></div>}
+                  {isSearching && <LoadingSkeleton layout={["artist", "album", "community"].includes(searchType) ? "grid" : "tracks"} label={labels.searching} />}
+                  {searchError && <div role="alert" className="rounded-xl border border-white/10 p-4 text-sm">No se pudo completar la búsqueda. <button className="underline" onClick={() => handleSearch(submittedQuery)}>{localized(language, "Reintentar", "Retry", "Saiatu berriro")}</button></div>}
                   {(searchType === "all" || searchType === "library") && (artistResults.length > 0 || albumResults.length > 0) && (
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                      {artistResults.slice(0, 2).map(artist => <ArtistCard key={artist.id} artist={artist} onClick={handleOpenArtist} />)}
+                      {artistResults.slice(0, 2).map(artist => <ArtistCard key={artist.id} artist={artist} onClick={handleOpenArtist} onFollow={handleToggleFollowArtist} followed={followedArtists.some(item => item.id === artist.id)} onShare={item => void copyLink(buildShareLink("artist", item.id, item.name))} />)}
                       {albumResults.filter(album => !releaseYear || album.releaseDate?.startsWith(releaseYear)).slice(0, 2).map(album => <AlbumCard key={album.id} album={album} onClick={handleOpenAlbum} />)}
                     </div>
                   )}
                   {sortedSearchTracks.length > visibleSearchTracks && !isSearching && <button className="order-last self-start rounded-lg border border-white/10 px-3 py-2 text-sm" onClick={() => setVisibleSearchTracks(count => count + 30)}>Mostrar más canciones</button>}
-                  {searchType === "all" && isSearchingMore && !isSearching && <p role="status" className="text-sm text-gray-400">Buscando también artistas y álbumes…</p>}
+                  {searchType === "all" && isSearchingMore && !isSearching && <LoadingSkeleton layout="grid" count={2} label="Buscando artistas y álbumes…" />}
                   {(searchType === "album" || searchType === "all") && albumResults.length > 0 && (
                     <label className="text-sm text-gray-300">Año de lanzamiento
                       <select value={releaseYear} onChange={event => setReleaseYear(event.target.value)} className="ml-2 rounded-lg bg-brand-darkBg p-2 text-white">
@@ -4428,9 +4895,23 @@ const MainLayout: React.FC = () => {
                       </select>
                     </label>
                   )}
+                  {libraryMatches.length > 0 && !isSearching && <section className="grid gap-2">
+                    <h3 className="text-sm font-semibold text-white">Playlists de tu biblioteca</h3>
+                    {libraryMatches.map(({ list, matches }) => <button key={list.id} className={menuAction} onClick={() => {
+                      navigateTab("playlists");
+                      setSubSearchQuery("");
+                      setSelectedPlaylist(list);
+                    }}>
+                      <ListMusic className="size-4 shrink-0" />
+                      <span className="min-w-0"><span className="block truncate text-white">{list.name}</span>
+                        {matches.length > 0 && <span className="block truncate text-[11px] font-normal text-gray-400">{matches.map(track => track.title).slice(0, 3).join(" · ")}{matches.length > 3 ? " · +" + (matches.length - 3) : ""}</span>}
+                      </span>
+                    </button>)}
+                  </section>}
+
                   {(!isSearching && !searchError && (searchType === "track" || searchType === "all" || searchType === "library")) && (
                     sortedSearchTracks.length === 0 ? (
-                      isSearchingMore || (searchType === "all" && (albumResults.length > 0 || artistResults.length > 0)) ? null :
+                      isSearchingMore || (searchType === "all" && (albumResults.length > 0 || artistResults.length > 0)) || (searchType === "library" && (libraryMatches.length || artistResults.length || albumResults.length)) ? null :
                       <div className="text-center py-12 text-gray-500">
                         <p>{language === "es" ? "Sin canciones para" : "No tracks found for"} “{submittedQuery}”</p>
                         <p className="text-xs text-gray-400 mt-1">{language === "es" ? "Prueba con otro término o filtro" : "Try a different term or filter"}</p>
@@ -4465,7 +4946,7 @@ const MainLayout: React.FC = () => {
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
                               >
                                 <Plus className="w-3.5 h-3.5" />
-                                <span className="hidden sm:inline">Add to playlist</span>
+                                <span className="hidden sm:inline">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                               </button>
                               {showBulkPlaylistPicker && (
                                 <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
@@ -4628,7 +5109,7 @@ const MainLayout: React.FC = () => {
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         {artistResults.map((artist) => (
-                          <ArtistCard key={artist.id} artist={artist} onClick={handleOpenArtist} />
+                          <ArtistCard key={artist.id} artist={artist} onClick={handleOpenArtist} onFollow={handleToggleFollowArtist} followed={followedArtists.some(item => item.id === artist.id)} onShare={item => void copyLink(buildShareLink("artist", item.id, item.name))} />
                         ))}
                       </div>
                     )
@@ -4671,7 +5152,7 @@ const MainLayout: React.FC = () => {
                                     setActiveTab("playlists");
                                   } catch (err) {
                                     console.error("Failed to load YouTube playlist tracks:", err);
-                                    showToast("Failed to load playlist tracks", "error");
+                                    showToast(localized(language, "No se pudieron cargar las canciones", "Failed to load playlist tracks", "Ezin izan dira abestiak kargatu"), "error");
                                   } finally {
                                     setLoadingYouTubePlaylistId(null);
                                   }
@@ -4716,9 +5197,7 @@ const MainLayout: React.FC = () => {
                                 </div>
                                 {/* Loading overlay */}
                                 {isLoadingThis && (
-                                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-xl">
-                                    <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                  </div>
+                                  <LoadingSkeleton layout="text" count={3} className="absolute inset-0 grid content-center rounded-xl bg-brand-darkBg/90 p-4" label="Cargando playlist…" />
                                 )}
                                 {/* Play hover overlay */}
                                 {!isLoadingThis && (
@@ -4752,7 +5231,7 @@ const MainLayout: React.FC = () => {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                    <Heart className="w-6 h-6 text-brand-accent" /> Your Favorites
+                    <Heart className="w-6 h-6 text-brand-accent" /> {labels.yourFavorites}
                   </h2>
                   {favorites.length > 0 && (
                     <button
@@ -4767,7 +5246,7 @@ const MainLayout: React.FC = () => {
                         }
                       }}
                       className="w-10 h-10 rounded-full bg-brand-accent hover:bg-brand-accent/90 text-black flex items-center justify-center transition-all shadow-lg shadow-brand-accent/25 active:scale-95 shrink-0"
-                      title="Play favorites"
+                      title={labels.playFavorites}
                     >
                       <Play className="w-4 h-4 fill-current ml-0.5" />
                     </button>
@@ -4795,18 +5274,20 @@ const MainLayout: React.FC = () => {
                 )}
               </div>
 
-              {favorites.length === 0 ? (
+              {isHydratingFavorites && favorites.length === 0 ? (
+                <LoadingSkeleton layout="tracks" label={localized(language, "Cargando favoritos…", "Loading favorites…", "Gogokoak kargatzen…")} />
+              ) : favorites.length === 0 ? (
                 <div className="text-center py-16 text-gray-500 glass-panel rounded-3xl p-8 border border-dashed border-gray-800">
                   <Heart className="w-12 h-12 text-gray-700 mx-auto mb-3" />
-                  <p className="font-semibold text-gray-400">Your collection is empty</p>
-                  <p className="text-xs text-gray-600 mt-1">Click the heart icon on any song to save it here</p>
+                  <p className="font-semibold text-gray-400">{localized(language, "Tu colección está vacía", "Your collection is empty", "Zure bilduma hutsik dago")}</p>
+                  <p className="text-xs text-gray-600 mt-1">{localized(language, "Pulsa el corazón de una canción para guardarla aquí", "Click the heart icon on any song to save it here", "Sakatu abesti baten bihotza hemen gordetzeko")}</p>
                 </div>
               ) : (() => {
                 const favTracks = filterTracks(favorites);
                 if (favTracks.length === 0) {
                   return (
                     <div className="text-center py-16 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
-                      <p className="font-semibold text-gray-400">No hay canciones visibles con el filtro actual.</p>
+                      <p className="font-semibold text-gray-400">{localized(language, "No hay canciones visibles con el filtro actual.", "No songs match the current filter.", "Iragazki honekin ez da abestirik ikusten.")}</p>
                     </div>
                   );
                 }
@@ -4819,7 +5300,7 @@ const MainLayout: React.FC = () => {
                   return (
                     <div className="text-center py-12 text-gray-500 rounded-3xl p-8 border border-dashed border-gray-800">
                       <p className="font-semibold text-gray-400">No results found for "{subSearchQuery}"</p>
-                      <p className="text-xs text-gray-600 mt-1">Try checking for typos or searching a different song</p>
+                      <p className="text-xs text-gray-600 mt-1">{localized(language, "Revisa la ortografía o busca otra canción", "Try checking for typos or searching a different song", "Egiaztatu ortografia edo bilatu beste abesti bat")}</p>
                     </div>
                   );
                 }
@@ -4842,7 +5323,7 @@ const MainLayout: React.FC = () => {
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-brand-accent/20 border border-white/10 text-gray-300 hover:text-brand-accent text-xs font-medium transition-all"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline">Add to playlist</span>
+                            <span className="hidden sm:inline">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</span>
                           </button>
                           {showBulkPlaylistPicker && (
                             <div className="absolute right-0 top-full mt-1.5 w-52 py-1.5 rounded-2xl glass-panel border border-white/10 shadow-2xl shadow-black/80 z-50 max-h-56 overflow-y-auto animate-[fadeIn_0.15s_ease]">
@@ -4984,7 +5465,7 @@ const MainLayout: React.FC = () => {
                   {adminSongSearchResults.length > 0 && (
                     <div className="max-h-48 overflow-y-auto bg-black/40 rounded-xl p-2 border border-white/5 flex flex-col gap-1">
                       {adminSongSearchResults.slice(0, 5).map((track) => (
-                        <div key={track.id} className="flex items-center justify-between p-1.5 hover:bg-white/5 rounded-lg text-xs">
+                        <div key={track.id} onContextMenu={event => handleTrackContextMenu(event, track)} className="flex items-center justify-between p-1.5 hover:bg-white/5 rounded-lg text-xs">
                           <span className="text-white font-semibold truncate max-w-[200px]">{track.title} - {track.artist}</span>
                           <button 
                             onClick={async () => {
@@ -5007,12 +5488,14 @@ const MainLayout: React.FC = () => {
 
                 <div className="flex flex-col gap-2">
                   <span className="text-xs text-gray-400">Current Featured Songs:</span>
-                  {featuredSongs.length === 0 ? (
+                  {isLoadingFeatured && featuredSongs.length === 0 ? (
+                    <LoadingSkeleton layout="tracks" count={3} label="Cargando canciones destacadas…" />
+                  ) : featuredSongs.length === 0 ? (
                     <p className="text-[11px] text-gray-600 italic">No featured songs yet.</p>
                   ) : (
                     <div className="flex flex-col gap-1.5">
                       {featuredSongs.map((track, index) => (
-                        <div key={track.id + "-" + index} className="flex items-center justify-between p-2 bg-white/2 rounded-xl text-xs border border-white/5">
+                        <div key={track.id + "-" + index} onContextMenu={event => handleTrackContextMenu(event, track)} className="flex items-center justify-between p-2 bg-white/2 rounded-xl text-xs border border-white/5">
                           <span className="text-white truncate">{track.title} - {track.artist}</span>
                           <button 
                             onClick={async () => {
@@ -5152,7 +5635,9 @@ const MainLayout: React.FC = () => {
 
                 <div className="flex flex-col gap-2">
                   <span className="text-xs text-gray-400">Featured Playlists List:</span>
-                  {featuredPlaylists.length === 0 ? (
+                  {isLoadingFeatured && featuredPlaylists.length === 0 ? (
+                    <LoadingSkeleton layout="tracks" count={3} label="Cargando playlists destacadas…" />
+                  ) : featuredPlaylists.length === 0 ? (
                     <p className="text-[11px] text-gray-600 italic">No featured playlists yet.</p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -5527,8 +6012,8 @@ const MainLayout: React.FC = () => {
             </section>
           ) : activeTab === "stats" ? (
             /* STATS PANEL */
-            <React.Suspense fallback={<p role="status">Cargando estadísticas…</p>}>
-              <StatsPanel accumulatedStats={accumulatedStats} entries={listeningEntries} playTrack={playTrack} showToast={showToast} />
+            <React.Suspense fallback={<LoadingSkeleton layout="stats" count={4} label="Cargando estadísticas…" />}>
+              <StatsPanel accumulatedStats={accumulatedStats} entries={listeningEntries} playTrack={playTrack} showToast={showToast} onTrackContextMenu={handleTrackContextMenu} />
             </React.Suspense>
           ) : activeTab === "wrapped" ? (
             /* WRAPPED PANEL */
@@ -5553,7 +6038,6 @@ const MainLayout: React.FC = () => {
                   <h3 className="text-xl font-bold text-white">Ready for your Wrapped?</h3>
                   <p className="text-xs text-gray-400 leading-relaxed">
                     Discover your top artists, most played tracks, total listening time, and your music personality archetype. 
-                    {history.length < 5 && " (You don't have enough listening history yet, but you can experience it in Demo Mode!)"}
                   </p>
                 </div>
 
@@ -5580,8 +6064,16 @@ const MainLayout: React.FC = () => {
               )}
             </section>
           ) : activeTab === "settings" ? (
-            <React.Suspense fallback={<p role="status" className="p-6 text-gray-400">Cargando ajustes…</p>}>
+            <React.Suspense fallback={<LoadingSkeleton layout="settings" count={4} className="mx-auto max-w-4xl p-4 sm:p-6" label={localized(language, "Cargando ajustes…", "Loading settings…", "Ezarpenak kargatzen…")} />}>
               <SettingsPanel
+                ambientMode={ambientMode}
+                onAmbientModeChange={setAmbientMode}
+                liquidGlassEnabled={liquidGlassEnabled}
+                onToggleLiquidGlass={() => {
+                  const next = !liquidGlassEnabled;
+                  localStorage.setItem("ibrastream_desktop_hero_glass", next ? "on" : "off");
+                  setLiquidGlassEnabled(next);
+                }}
                 themeSettings={themeSettings}
                 setThemeSettings={setThemeSettings}
                 filterExplicit={filterExplicit}
@@ -5661,45 +6153,97 @@ const MainLayout: React.FC = () => {
                 </div>
               )}
 
-              {/* Hero Card - Native Liquid Glass */}
-              <div className="relative overflow-hidden rounded-[32px] p-6 md:p-10 min-h-[200px] flex flex-col justify-between border border-white/20 shadow-[inset_0_1.5px_1px_0_rgba(255,255,255,0.4),0_20px_50px_rgba(0,0,0,0.4)] bg-gradient-to-br from-white/10 via-white/[0.03] to-white/[0.08]">
-                {/* Specular glare edge */}
-                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-white/60 to-transparent pointer-events-none z-10" />
-
-                <div className="max-w-md relative z-10 flex flex-col gap-2">
-                  <span className={`inline-block font-semibold bg-gradient-to-r from-gray-400 via-white to-gray-400 bg-clip-text text-transparent bg-[length:200%_auto] animate-[shine_4s_linear_infinite] text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`} style={{ animationDuration: "4s" }}>{heroTitle}</span>
-                  <span className={`inline-flex flex-wrap text-3xl md:text-4xl font-extrabold tracking-wide ${heroTextColor}`}>
-                    {heroSubtitle.split("").map((char, index) => (
-                      <span
-                        key={index}
-                        className="inline-block transition-all duration-300 hover:scale-110 hover:text-brand-accent cursor-default select-none animate-[fadeIn_0.4s_ease]"
-                        style={{
-                          animationDelay: `${index * 40}ms`,
-                          opacity: 1,
-                          whiteSpace: char === " " ? "pre" : "normal"
-                        }}
-                      >
-                        {char}
-                      </span>
-                    ))}
-                  </span>
-                  <p className="text-xs md:text-sm text-gray-400 mt-1 leading-relaxed">{heroDescription}</p>
+              <section aria-label={heroTitle} className={"home-hero relative flex min-h-[200px] items-center overflow-hidden rounded-[24px] p-5 sm:px-8 lg:min-h-[132px] " + (!liquidGlassEnabled ? "home-hero-matte" : "")}>
+                <div aria-hidden="true" className="home-hero-glare pointer-events-none absolute inset-x-0 top-0 h-px" />
+                <div className="relative grid max-w-xl gap-2">
+                  <h2 className={"home-hero-title text-2xl font-bold tracking-tight md:text-3xl " + heroTextColor}>{heroTitle}</h2>
+                  {heroSubtitle && <p className="text-base font-semibold text-white">{heroSubtitle}</p>}
+                  {heroDescription && <p className="text-sm leading-relaxed text-gray-300">{heroDescription}</p>}
                 </div>
-              </div>
+              </section>
 
-              {visibleHomeRecommendations.length === 0 && !currentTrack && (
+              {!privateSession && <DesktopListeningHome onTrackContextMenu={handleTrackContextMenu} entries={listeningEntries} recent={recentlyPlayed.filter(item => item.type === "playlist" && playlists.some(list => list.id === item.id))}
+                resume={savedPlaybackQueue} onTrack={track => playTrack(track)}
+                onResume={() => { if (savedPlaybackQueue && !roomId) restoreQueue(savedPlaybackQueue.track, savedPlaybackQueue.upcoming, savedPlaybackQueue.manual, savedPlaybackQueue.playlistId, savedPlaybackQueue.seconds); }}
+                onList={item => { const list = playlists.find(candidate => candidate.id === item.id); if (list) { navigateTab("playlists"); setSelectedPlaylist(list); } }}
+                onArtist={handleOpenArtist} />}
+              {isRefreshingHome && visibleHomeRecommendations.length === 0 && <LoadingSkeleton layout="grid" label="Cargando recomendaciones…" />}
+              {visibleHomeRecommendations.length === 0 && !isRefreshingHome && !currentTrack && (
                 <div className="glass-panel rounded-[var(--app-radius-xl)] border border-white/5 p-4 sm:p-5">
                   <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-                    <div><h1 className="text-lg font-bold text-white">Descubre música</h1><p className="mt-1 text-sm text-gray-300">Elige una canción para empezar.</p></div>
-                    <button onClick={() => navigateTab("search")} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">Buscar música</button>
+                    <div><h1 className="text-lg font-bold text-white">{localized(language, "Descubre música", "Discover music", "Aurkitu musika")}</h1><p className="mt-1 text-sm text-gray-300">{localized(language, "Elige una canción para empezar.", "Choose a song to get started.", "Aukeratu abesti bat hasteko.")}</p></div>
+                    <button onClick={() => navigateTab("search")} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black">{localized(language, "Buscar música", "Search music", "Bilatu musika")}</button>
                   </div>
                   {!user && <p className="mb-3 text-sm text-gray-300">Como invitado puedes guardar favoritos y listas en este navegador. Inicia sesión para sincronizarlos y seguir escuchando.</p>}
                   <div className="grid gap-2 sm:grid-cols-2">
                     {starterTracks.map(track => (
-                      <button key={track.id} onClick={() => playTrack(track, starterTracks, "starter")} className="flex gap-3 glass-card rounded-[var(--app-radius-lg)] border border-white/5 p-3 text-left text-white hover:bg-white/10">
+                      <button key={track.id} onContextMenu={event => handleTrackContextMenu(event, track)} onClick={() => playTrack(track, starterTracks, "starter")} className="flex gap-3 glass-card rounded-[var(--app-radius-lg)] border border-white/5 p-3 text-left text-white hover:bg-white/10">
                         <Play aria-hidden="true" className="m-1 size-4 shrink-0" />
                         <span><strong className="block text-sm">{track.title}</strong><span className="text-xs text-gray-300">{track.artist}</span></span>
                       </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Escuchas recientes */}
+              {visibleHomeRecommendations.length > 0 && (
+                <div className="animate-[fadeIn_0.3s_ease]">
+                  <div className="flex items-center justify-between mb-4 pl-1 pr-1">
+                    <h2 className="text-2xl font-bold text-white tracking-wide">
+                      {localized(language, "Recomendaciones para ti", "Recommendations for you", "Zuretzako gomendioak")}
+                    </h2>
+                    <button
+                      onClick={() => refreshHomeRecs(true)}
+                      disabled={isRefreshingHome}
+                      className="p-1.5 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-all duration-300 disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                      title={localized(language, "Refrescar recomendaciones", "Refresh recommendations", "Eguneratu gomendioak")}
+                      aria-label={localized(language, "Refrescar recomendaciones", "Refresh recommendations", "Eguneratu gomendioak")}
+                    >
+                      <RotateCw className={`w-4 h-4 ${isRefreshingHome ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    {/* 8 quick-access cards using square variant */}
+                    {visibleHomeRecommendations.slice(0, 8).map((track, idx) => (
+                      <TrackCard
+                        key={`quick-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={visibleHomeRecommendations}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track)}
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Descubre más */}
+              {visibleHomeRecommendations.length > 8 && (
+                <div className="animate-[fadeIn_0.4s_ease] mt-4">
+                  <h2 className="text-lg font-bold text-white tracking-wide mb-4 pl-1 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-brand-accent" /> {localized(language, "Descubre canciones nuevas", "Discover new songs", "Aurkitu abesti berriak")}
+                  </h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+                    {visibleHomeRecommendations.slice(8, 12).map((track, idx) => (
+                      <TrackCard
+                        key={`discover-${track.id}-${idx}`}
+                        track={track}
+                        variant="square"
+                        tracksQueue={visibleHomeRecommendations}
+                        onToggleFavorite={handleToggleFavorite}
+                        isFavorite={favorites.some((f) => f.id === track.id)}
+                        isExplicit={isTrackExplicit(track)}
+
+                        onOpenArtist={handleOpenArtist}
+                        onAddToPlaylist={handleOpenAddToPlaylist}
+                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
+                      />
                     ))}
                   </div>
                 </div>
@@ -5759,68 +6303,6 @@ const MainLayout: React.FC = () => {
                         onToggleFavorite={handleToggleFavorite}
                         isFavorite={favorites.some((f) => f.id === track.id)}
                         isExplicit={isTrackExplicit(track)}
-                        onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={handleOpenAddToPlaylist}
-                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Good Afternoon Section */}
-              {visibleHomeRecommendations.length > 0 && (
-                <div className="animate-[fadeIn_0.3s_ease]">
-                  <div className="flex items-center justify-between mb-4 pl-1 pr-1">
-                    <h2 className="text-2xl font-bold text-white tracking-wide">
-                      Good Afternoon
-                    </h2>
-                    <button
-                      onClick={() => refreshHomeRecs(true)}
-                      disabled={isRefreshingHome}
-                      className="p-1.5 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-all duration-300 disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                      title="Refrescar recomendaciones"
-                    >
-                      <RotateCw className={`w-4 h-4 ${isRefreshingHome ? 'animate-spin' : ''}`} />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                    {/* 8 quick-access cards using square variant */}
-                    {visibleHomeRecommendations.slice(0, 8).map((track, idx) => (
-                      <TrackCard
-                        key={`quick-${track.id}-${idx}`}
-                        track={track}
-                        variant="square"
-                        tracksQueue={visibleHomeRecommendations}
-                        onToggleFavorite={handleToggleFavorite}
-                        isFavorite={favorites.some((f) => f.id === track.id)}
-                        isExplicit={isTrackExplicit(track)}
-                        onOpenArtist={handleOpenArtist}
-                        onAddToPlaylist={handleOpenAddToPlaylist}
-                        onContextMenu={(e) => handleTrackContextMenu(e, track)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Discover Weekly */}
-              {visibleHomeRecommendations.length > 8 && (
-                <div className="animate-[fadeIn_0.4s_ease] mt-4">
-                  <h2 className="text-lg font-bold text-white tracking-wide mb-4 pl-1 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-brand-accent" /> Discover Weekly
-                  </h2>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-                    {visibleHomeRecommendations.slice(8, 12).map((track, idx) => (
-                      <TrackCard
-                        key={`discover-${track.id}-${idx}`}
-                        track={track}
-                        variant="square"
-                        tracksQueue={visibleHomeRecommendations}
-                        onToggleFavorite={handleToggleFavorite}
-                        isFavorite={favorites.some((f) => f.id === track.id)}
-                        isExplicit={isTrackExplicit(track)}
-
                         onOpenArtist={handleOpenArtist}
                         onAddToPlaylist={handleOpenAddToPlaylist}
                         onContextMenu={(e) => handleTrackContextMenu(e, track)}
@@ -5892,8 +6374,21 @@ const MainLayout: React.FC = () => {
 
         </main>
 
+        <button type="button" aria-label={desktopPanelVisible ? "Ocultar panel del reproductor" : "Mostrar panel del reproductor"}
+          title={desktopPanelVisible ? "Ocultar panel" : "Mostrar panel"} onClick={() => setDesktopPanelVisible(value => !value)}
+          className="fixed bottom-[6.5rem] right-3 z-40 hidden rounded-full border border-white/10 bg-brand-darkBg p-2.5 text-gray-300 hover:text-white lg:grid">
+          <PanelRight className="size-4" />
+        </button>
+        {currentTrack && <button type="button" title="Modo inmersivo" aria-label="Modo inmersivo" onClick={() => setImmersivePlayer(true)} className="fixed bottom-[6.5rem] right-14 z-40 hidden rounded-full border border-white/10 bg-brand-darkBg p-2.5 text-gray-300 hover:text-white lg:grid"><Maximize2 className="size-4" /></button>}
+        {immersivePlayer && currentTrack && <Modal title={localized(language, "Modo inmersivo", "Immersive mode", "Murgiltze-modua")} fullscreen onClose={() => setImmersivePlayer(false)}><React.Suspense fallback={<LoadingSkeleton layout="player" />}><PlayerPanel immersive onTrackContextMenu={handleTrackContextMenu} immersivePalette={(advancedAmbient ? palette?.ambient : palette?.saturation) ? "color" : undefined} /></React.Suspense></Modal>}
         {/* PC Right Player Sidebar panel */}
-        <aside aria-label="Reproductor" className="hidden lg:block fixed right-0 top-0 w-[380px] h-[calc(100vh-96px)] z-10 overflow-hidden border-l border-white/5 bg-brand-darkBg/95 backdrop-blur-md">
+        <aside ref={desktopPanelRef} aria-label="Reproductor" className={"ambient-chrome ambient-player-panel fixed right-0 top-0 bottom-[var(--desktop-playback-height)] z-10 hidden w-[var(--desktop-player-size)] overflow-hidden border-l border-white/5 bg-brand-darkBg/95 backdrop-blur-md " + (desktopPanelVisible ? "lg:block" : "")}>
+          <div role="separator" aria-label="Ancho del reproductor" aria-orientation="vertical" aria-valuemin={300} aria-valuemax={640} aria-valuenow={desktopPanelWidth} tabIndex={0}
+            className="absolute inset-y-0 left-0 z-20 w-2 cursor-col-resize select-none hover:bg-white/10"
+            onPointerDown={event => { panelDrag.current = { x: event.clientX, width: desktopPanelRef.current?.clientWidth ?? desktopPanelWidth }; event.currentTarget.setPointerCapture(event.pointerId); }}
+            onPointerMove={event => { if (panelDrag.current) resizeDesktopPanel(panelDrag.current.width + panelDrag.current.x - event.clientX); }}
+            onLostPointerCapture={() => { panelDrag.current = null; }}
+            onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); resizeDesktopPanel(desktopPanelWidth + (event.key === "ArrowLeft" ? 16 : -16)); } }} />
           {showQueueOverlay ? (
             <div className="h-full flex flex-col p-6 select-none overflow-hidden">
               {/* Header */}
@@ -5901,10 +6396,11 @@ const MainLayout: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <ListMusic className="w-5 h-5 text-brand-accent animate-pulse" />
                   <span className="text-xs uppercase tracking-widest font-bold text-gray-200">
-                    Play Queue
+                    Cola de reproducción
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <QueueSessionActions notify={showToast} saved={savedPlaybackQueue} onSave={setSavedPlaybackQueue} />
                   {queue.length > 0 && (
                     <>
                       {canSaveQueueAsPlaylist && (
@@ -5944,7 +6440,7 @@ const MainLayout: React.FC = () => {
                 {queue.length === 0 ? (
                   <div className="text-center py-16 text-gray-500 rounded-3xl p-6 border border-dashed border-gray-800/80">
                     <ListMusic className="w-10 h-10 text-gray-700 mx-auto mb-3" />
-                    <p className="font-semibold text-gray-400 text-sm">Queue is empty</p>
+                    <p className="font-semibold text-gray-400 text-sm">{localized(language, "La cola está vacía", "Queue is empty", "Ilara hutsik dago")}</p>
                     <p className="text-xs text-gray-600 mt-1">Play songs to build a queue</p>
                   </div>
                 ) : (
@@ -5954,13 +6450,13 @@ const MainLayout: React.FC = () => {
                         <span className="text-[10px] font-bold uppercase text-brand-accent tracking-wider pl-1">
                           Now Playing
                         </span>
-                        <div className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center gap-3">
+                        <div onContextMenu={event => handleTrackContextMenu(event, currentTrack)} className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center gap-3">
                           <img src={currentTrack.thumbnail} className="w-10 h-10 rounded-lg object-cover" />
                           <div className="flex-1 min-w-0">
                             <h4 className="font-bold text-xs text-white truncate">{currentTrack.title}</h4>
                             <p className="text-[10px] text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
                           </div>
-                          <span className="text-[10px] text-brand-accent font-bold animate-pulse">Playing</span>
+                          <span className="text-[10px] text-brand-accent font-bold animate-pulse">{localized(language, "Reproduciendo", "Playing", "Erreproduzitzen")}</span>
                         </div>
                       </div>
                     )}
@@ -5969,13 +6465,13 @@ const MainLayout: React.FC = () => {
                       <div className="flex flex-col gap-2">
                         <div className="flex items-center justify-between pl-1 mt-2">
                           <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider">
-                            Next in queue
+                            {localized(language, "Añadidas a mano", "Added manually", "Eskuz gehituak")}
                           </span>
                           <button
-                            onClick={clearQueue}
+                            onClick={clearManualQueue}
                             className="text-[10px] font-bold text-gray-400 hover:text-brand-accent transition-colors"
                           >
-                            Clear queue
+                            Vaciar cola
                           </button>
                         </div>
                         <div className="flex flex-col gap-2">
@@ -6015,8 +6511,8 @@ const MainLayout: React.FC = () => {
                               >
                                 <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
                                 <div className="flex-1 min-w-0">
-                                  <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
-                                    {track.title}
+                                  <h4 className="font-semibold text-xs text-white truncate">
+                                    {originalIdx === currentIndex + 1 && <span className="mr-1.5 text-[9px] text-gray-400">{localized(language, "SIGUIENTE", "NEXT", "HURRENGOA")}</span>}{track.title}
                                   </h4>
                                   <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
                                 </div>
@@ -6040,7 +6536,7 @@ const MainLayout: React.FC = () => {
                     {playlistItems.length > 0 && (
                       <div className="flex flex-col gap-2">
                         <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider pl-1 mt-2">
-                          Next from: {queueSourceName}
+                          Sigue desde: {queueSourceName}
                         </span>
                         <div className="flex flex-col gap-2">
                           {playlistItems.map(({ track, originalIdx }) => {
@@ -6080,8 +6576,8 @@ const MainLayout: React.FC = () => {
                                 <span className="text-[10px] font-medium text-gray-500 w-4 text-right shrink-0">{originalIdx - currentIndex}</span>
                                 <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
                                 <div className="flex-1 min-w-0">
-                                  <h4 className="font-semibold text-xs text-white truncate group-hover:text-brand-accent transition-colors">
-                                    {track.title}
+                                  <h4 className="font-semibold text-xs text-white truncate">
+                                    {originalIdx === currentIndex + 1 && <span className="mr-1.5 text-[9px] text-gray-400">{localized(language, "SIGUIENTE", "NEXT", "HURRENGOA")}</span>}{track.title}
                                   </h4>
                                   <p className="text-[10px] text-gray-400 truncate mt-0.5">{track.artist}</p>
                                 </div>
@@ -6106,8 +6602,10 @@ const MainLayout: React.FC = () => {
               </div>
             </div>
           ) : (
-            <React.Suspense fallback={<p role="status" className="p-4 text-sm text-gray-300">Cargando reproductor…</p>}>
+            <React.Suspense fallback={<LoadingSkeleton layout="player" className="p-5" label="Cargando reproductor…" />}>
             <PlayerPanel
+              desktopLyricsRequest={desktopLyricsRequest}
+              onTrackContextMenu={handleTrackContextMenu}
               onToggleFavorite={handleToggleFavorite}
               isFavorite={currentTrack ? favorites.some((f) => f.id === currentTrack.id) : false}
               isExplicit={currentTrack ? isTrackExplicit(currentTrack) : false}
@@ -6122,7 +6620,7 @@ const MainLayout: React.FC = () => {
         {/* Mobile Full Screen Now Playing — PlayerPanel (has Lyrics, Overview, all controls) */}
         {showMobilePlayer && currentTrack && (
           <div className="lg:hidden fixed inset-0 bg-brand-darkBg z-50 overflow-hidden flex flex-col animate-[slideUp_0.2s_cubic-bezier(0.16,1,0.3,1)]">
-            <React.Suspense fallback={<p role="status" className="p-4 text-sm text-gray-300">Cargando reproductor…</p>}>
+            <React.Suspense fallback={<LoadingSkeleton layout="player" className="p-5" label="Cargando reproductor…" />}>
             <PlayerPanel
               onToggleFavorite={handleToggleFavorite}
               isFavorite={favorites.some((f) => f.id === currentTrack.id)}
@@ -6151,7 +6649,7 @@ const MainLayout: React.FC = () => {
                 title="Reintentar reproducción"
               >
                 <RotateCw className="w-3 h-3" />
-                <span>Reintentar</span>
+                <span>{localized(language, "Reintentar", "Retry", "Saiatu berriro")}</span>
               </button>
               {currentTrack && !currentTrack.id.startsWith("local-") && (
                 <button
@@ -6199,7 +6697,7 @@ const MainLayout: React.FC = () => {
             <div className={`w-2 h-2 rounded-full ${toast.type === "success" ? "bg-emerald-400" : toast.type === "error" ? "bg-red-400" : "bg-brand-accent"
               } animate-pulse`} />
             <span className="text-xs font-semibold">{toast.message}</span>
-            {undoQueue && <button onClick={undoQueue} className="text-xs font-semibold underline">Deshacer cola</button>}
+            {undoQueue && <button onClick={undoQueue} className="text-xs font-semibold underline">{localized(language, "Deshacer cambio de cola", "Undo queue change", "Desegin ilarako aldaketa")}</button>}
           </div>
         )}
 
@@ -6214,11 +6712,12 @@ const MainLayout: React.FC = () => {
               >
                 <X className="w-5 h-5" />
               </button>
-              <div className="p-6 flex items-center justify-between border-b border-white/5 bg-gradient-to-br from-brand-accent/10 to-transparent">
+              <div className="p-6 flex items-center justify-between border-b border-white/5 bg-gradient-to-br from-white/5 to-transparent">
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <ListMusic className="w-6 h-6 text-brand-accent" /> Play Queue
+                  <ListMusic className="w-6 h-6 text-brand-accent" /> Cola
                 </h3>
-                <div className="flex items-center gap-2 pr-8">
+                <div className="flex flex-wrap items-center justify-end gap-2 pr-8">
+                  <QueueSessionActions notify={showToast} saved={savedPlaybackQueue} onSave={setSavedPlaybackQueue} />
                   {upcomingItems.length > 0 && (
                     <>
                       {canSaveQueueAsPlaylist && (
@@ -6245,7 +6744,7 @@ const MainLayout: React.FC = () => {
               </div>
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
                 {!currentTrack && upcomingItems.length === 0 ? (
-                  <p className="text-center py-8 text-gray-500 text-sm">Queue is empty</p>
+                  <p className="text-center py-8 text-gray-500 text-sm">{localized(language, "La cola está vacía", "Queue is empty", "Ilara hutsik dago")}</p>
                 ) : (
                   <div className="flex flex-col gap-4">
                     {/* Now Playing Section */}
@@ -6254,27 +6753,27 @@ const MainLayout: React.FC = () => {
                         <span className="text-[10px] font-bold uppercase text-brand-accent tracking-wider pl-1">
                           Now Playing
                         </span>
-                        <div className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center gap-3">
+                        <div onContextMenu={event => handleTrackContextMenu(event, currentTrack)} className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center gap-3">
                           <img src={currentTrack.thumbnail} className="w-10 h-10 rounded-lg object-cover" />
                           <div className="flex-1 min-w-0">
                             <h4 className="font-bold text-xs text-white truncate">{currentTrack.title}</h4>
                             <p className="text-[10px] text-gray-400 truncate mt-0.5">{currentTrack.artist}</p>
                           </div>
-                          <span className="text-[10px] text-brand-accent font-bold animate-pulse shrink-0">Playing</span>
+                          <span className="text-[10px] text-brand-accent font-bold animate-pulse shrink-0">{localized(language, "Reproduciendo", "Playing", "Erreproduzitzen")}</span>
                         </div>
                       </div>
                     )}
 
-                    {/* Next in Queue Section */}
+                    {/* Añadidas a mano Section */}
                     {userAddedItems.length > 0 && (
                       <div className="flex flex-col gap-2 text-left">
                         <div className="flex items-center justify-between border-b border-white/5 pb-1">
-                          <span className="text-xs font-bold text-gray-400">Next in queue</span>
+                          <span className="text-xs font-bold text-gray-400">{localized(language, "Añadidas a mano", "Added manually", "Eskuz gehituak")}</span>
                           <button
-                            onClick={clearQueue}
+                            onClick={clearManualQueue}
                             className="text-xs font-semibold text-brand-accent hover:underline"
                           >
-                            Clear queue
+                            Vaciar cola
                           </button>
                         </div>
                         <div className="flex flex-col gap-2">
@@ -6282,6 +6781,7 @@ const MainLayout: React.FC = () => {
                             <div
                               key={`${track.id}-${originalIdx}`}
                               className="flex items-center gap-3 p-2 rounded-xl transition-all border border-transparent hover:bg-white/5"
+                              onContextMenu={event => handleTrackContextMenu(event, track)}
                               onClick={() => {
                                 playTrack(track);
                                 setShowQueueOverlay(false);
@@ -6289,7 +6789,7 @@ const MainLayout: React.FC = () => {
                             >
                               <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
                               <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold truncate text-white">{track.title}</p>
+                                <p className="text-xs font-semibold truncate text-white">{originalIdx === currentIndex + 1 && <span className="mr-1.5 text-[9px] text-gray-400">{localized(language, "SIGUIENTE", "NEXT", "HURRENGOA")}</span>}{track.title}</p>
                                 <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -6336,13 +6836,14 @@ const MainLayout: React.FC = () => {
                     {playlistItems.length > 0 && (
                       <div className="flex flex-col gap-2 text-left">
                         <div className="border-b border-white/5 pb-1">
-                          <span className="text-xs font-bold text-gray-400">Next from: {queueSourceName}</span>
+                          <span className="text-xs font-bold text-gray-400">Sigue desde: {queueSourceName}</span>
                         </div>
                         <div className="flex flex-col gap-2">
                           {playlistItems.map(({ track, originalIdx }) => (
                             <div
                               key={`${track.id}-${originalIdx}`}
                               className="flex items-center gap-3 p-2 rounded-xl transition-all border border-transparent hover:bg-white/5"
+                              onContextMenu={event => handleTrackContextMenu(event, track)}
                               onClick={() => {
                                 playTrack(track);
                                 setShowQueueOverlay(false);
@@ -6350,7 +6851,7 @@ const MainLayout: React.FC = () => {
                             >
                               <img src={track.thumbnail} className="w-8 h-8 rounded object-cover" />
                               <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold truncate text-white">{track.title}</p>
+                                <p className="text-xs font-semibold truncate text-white">{originalIdx === currentIndex + 1 && <span className="mr-1.5 text-[9px] text-gray-400">{localized(language, "SIGUIENTE", "NEXT", "HURRENGOA")}</span>}{track.title}</p>
                                 <p className="text-[10px] text-gray-400 truncate">{track.artist}</p>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -6599,7 +7100,7 @@ const MainLayout: React.FC = () => {
                   }}
                   className="flex-1 py-2.5 rounded-full border border-white/10 hover:bg-white/5 text-xs font-semibold text-gray-400 hover:text-white transition-all"
                 >
-                  Cancel
+                  {localized(language, "Cancelar", "Cancel", "Utzi")}
                 </button>
                 <button
                   onClick={() => handleCreatePlaylist(newPlaylistName)}
@@ -6643,14 +7144,14 @@ const MainLayout: React.FC = () => {
                 <X className="w-4 h-4" />
               </button>
               
-              <h3 className="text-sm font-bold text-white pr-6 text-left">Add to playlist</h3>
+              <h3 className="text-sm font-bold text-white pr-6 text-left">{localized(language, "Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}</h3>
 
               {/* Search playlist */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
                 <input
                   type="text"
-                  placeholder="Find a playlist"
+                  placeholder={localized(language, "Busca una playlist", "Find a playlist", "Bilatu zerrenda bat")}
                   value={playlistSearchQuery}
                   onChange={(e) => setPlaylistSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 rounded-xl bg-white/5 border border-white/5 focus:border-brand-accent/50 text-white text-xs placeholder:text-gray-500 focus:outline-none transition-all"
@@ -6669,27 +7170,27 @@ const MainLayout: React.FC = () => {
                 className="flex items-center gap-2 px-1 text-xs font-bold text-gray-300 hover:text-white transition-all text-left"
               >
                 <Plus className="w-4 h-4 text-gray-400" />
-                New playlist
+                {localized(language, "Nueva playlist", "New playlist", "Zerrenda berria")}
               </button>
 
               {/* List of playlists */}
               <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1 max-h-[35vh]">
                 {playlists.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-4 text-center">No playlists created yet.</p>
+                  <p className="text-xs text-gray-500 py-4 text-center">{localized(language, "Todavía no hay playlists.", "No playlists created yet.", "Ez dago zerrendarik oraindik.")}</p>
                 ) : (() => {
                   const filtered = playlists.filter(p => p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()));
                   const savedIn = filtered.filter(p => p.tracks.some(t => t.id === trackToAddToPlaylist.id));
                   const others = filtered.filter(p => !p.tracks.some(t => t.id === trackToAddToPlaylist.id));
 
                   if (filtered.length === 0) {
-                    return <p className="text-xs text-gray-500 py-4 text-center">No playlists found.</p>;
+                    return <p className="text-xs text-gray-500 py-4 text-center">{localized(language, "No se encontraron playlists.", "No playlists found.", "Ez da zerrendarik aurkitu.")}</p>;
                   }
 
                   return (
                     <>
                       {savedIn.length > 0 && (
                         <div className="flex flex-col gap-2">
-                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">Saved In</span>
+                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">{localized(language, "Guardada en", "Saved In", "Hemen gordeta")}</span>
                           {savedIn.map(playlist => (
                             <button
                               key={playlist.id}
@@ -6717,7 +7218,7 @@ const MainLayout: React.FC = () => {
 
                       {others.length > 0 && (
                         <div className="flex flex-col gap-2">
-                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">Recently updated</span>
+                          <span className="text-[10px] text-gray-500 font-extrabold uppercase tracking-widest text-left">{localized(language, "Actualizadas recientemente", "Recently updated", "Duela gutxi eguneratuak")}</span>
                           {others.map(playlist => (
                             <button
                               key={playlist.id}
@@ -6756,7 +7257,7 @@ const MainLayout: React.FC = () => {
                   }}
                   className="px-4 py-1.5 rounded-full hover:bg-white/5 text-xs font-bold text-gray-400 hover:text-white transition-all"
                 >
-                  Cancel
+                  {localized(language, "Cancelar", "Cancel", "Utzi")}
                 </button>
               </div>
 
@@ -6780,7 +7281,7 @@ const MainLayout: React.FC = () => {
               </button>
               
               <div>
-                <h3 className="text-sm font-bold text-white pr-6 text-left">Add album to playlist</h3>
+                <h3 className="text-sm font-bold text-white pr-6 text-left">{localized(language, "Añadir álbum a playlist", "Add album to playlist", "Gehitu albuma zerrendara")}</h3>
                 <p className="text-[11px] text-gray-400 text-left mt-0.5 truncate">
                   {albumToAddToPlaylist.album.title} • {(albumToAddToPlaylist.tracks.length > 0 ? albumToAddToPlaylist.tracks.length : albumTracks.length > 0 ? albumTracks.length : (albumToAddToPlaylist.album.numberOfTracks || 0))} tracks
                 </p>
@@ -6814,12 +7315,12 @@ const MainLayout: React.FC = () => {
               {/* List of playlists */}
               <div className="flex flex-col gap-2 max-h-[35vh] overflow-y-auto pr-1">
                 {playlists.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-4 text-center">No playlists created yet.</p>
+                  <p className="text-xs text-gray-500 py-4 text-center">{localized(language, "Todavía no hay playlists.", "No playlists created yet.", "Ez dago zerrendarik oraindik.")}</p>
                 ) : (() => {
                   const filtered = playlists.filter(p => p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase()));
 
                   if (filtered.length === 0) {
-                    return <p className="text-xs text-gray-500 py-4 text-center">No playlists found.</p>;
+                    return <p className="text-xs text-gray-500 py-4 text-center">{localized(language, "No se encontraron playlists.", "No playlists found.", "Ez da zerrendarik aurkitu.")}</p>;
                   }
 
                   return filtered.map(playlist => (
@@ -6856,7 +7357,7 @@ const MainLayout: React.FC = () => {
                   }}
                   className="px-4 py-1.5 rounded-full hover:bg-white/5 text-xs font-bold text-gray-400 hover:text-white transition-all"
                 >
-                  Cancelar
+                  {localized(language, "Cancelar", "Cancel", "Utzi")}
                 </button>
               </div>
 
@@ -6877,15 +7378,15 @@ const MainLayout: React.FC = () => {
               >
                 <X className="w-4 h-4" />
               </button>
-              <h3 className="text-lg font-bold text-white">Importar lista</h3>
-              {importProgress && <p role="status" className="flex items-center gap-2 text-sm">{importProgress.done} de {importProgress.total}<progress aria-label="Progreso de importación" value={importProgress.done} max={Math.max(1, importProgress.total)} /><button className="underline" onClick={() => importAbort.current?.abort()}>Cancelar</button></p>}
+              <h3 className="text-lg font-bold text-white">{localized(language, "Importar playlist", "Import playlist", "Inportatu zerrenda")}</h3>
+              {importProgress && <p role="status" className="flex items-center gap-2 text-sm">{importProgress.done} de {importProgress.total}<progress aria-label={localized(language, "Progreso de importación", "Import progress", "Inportazioaren aurrerapena")} value={importProgress.done} max={Math.max(1, importProgress.total)} /><button className="underline" onClick={() => importAbort.current?.abort()}>{localized(language, "Cancelar", "Cancel", "Utzi")}</button></p>}
               {importPreview && (
                 <div className="grid gap-3 rounded-xl border border-white/10 p-3">
                   <input aria-label="Nombre de la lista importada" className="w-full rounded-lg bg-white/5 p-2 text-sm" value={importPreview.name} onChange={event => setImportPreview({ ...importPreview, name: event.target.value })} />
                   <p className="text-sm text-gray-300">{importPreview.tracks.length} pistas en la vista previa</p>
                   <ul className="max-h-44 overflow-auto">
-                    {importPreview.tracks.map((track, index) => <li key={track.id + index} className="flex items-center justify-between gap-2 border-t border-white/5 py-1.5 text-xs">
-                      <span>{track.title} · {track.artist}{track.id.startsWith("m3u-") && <span className="block text-amber-300">Coincidencia pendiente</span>}</span>
+                    {importPreview.tracks.map((track, index) => <li key={track.id + index} onContextMenu={event => handleTrackContextMenu(event, track)} className="flex items-center justify-between gap-2 border-t border-white/5 py-1.5 text-xs">
+                      <span>{track.title} · {track.artist}{track.id.startsWith("m3u-") && <span className="block text-amber-300">{localized(language, "Coincidencia pendiente", "Match pending", "Bat-etortzea zain")}</span>}</span>
                       <button aria-label={"Quitar " + track.title} className="p-2" onClick={() => setImportPreview({ ...importPreview, tracks: importPreview.tracks.filter((_, position) => position !== index) })}><X className="size-4" /></button>
                     </li>)}
                   </ul>
@@ -6894,7 +7395,7 @@ const MainLayout: React.FC = () => {
                     setSpotifyLink("");
                     setShowSpotifyImportModal(false);
                     showToast("Lista importada.", "success");
-                  }}>Guardar lista</button>
+                  }}>{localized(language, "Guardar lista", "Save playlist", "Gorde zerrenda")}</button>
                 </div>
               )}
 
@@ -6924,7 +7425,7 @@ const MainLayout: React.FC = () => {
 
               {importTab === "spotify" ? (
                 <>
-                  <p className="text-xs text-gray-400">Paste the Spotify public playlist link below to import its tracks.</p>
+                  <p className="text-xs text-gray-400">{localized(language, "Pega el enlace público de Spotify para importar sus canciones.", "Paste the Spotify public playlist link below to import its tracks.", "Itsatsi Spotifyko zerrenda publikoaren esteka abestiak inportatzeko.")}</p>
                   <input
                     type="text"
                     placeholder="https://open.spotify.com/playlist/..."
@@ -7004,14 +7505,14 @@ const MainLayout: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <p className="text-xs text-gray-400">Select any file containing tracks or a playlist to import.</p>
+                  <p className="text-xs text-gray-400">{localized(language, "Selecciona un archivo con canciones o una playlist.", "Select any file containing tracks or a playlist to import.", "Hautatu abestiak edo zerrenda bat dituen fitxategia.")}</p>
                   
                   {importFileError && (
                     <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex flex-col gap-2 relative animate-[fadeIn_0.2s_ease]">
                       <div className="flex items-start gap-2.5">
                         <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-red-400">Could not read file</p>
+                          <p className="text-xs font-bold text-red-400">{localized(language, "No se pudo leer el archivo", "Could not read file", "Ezin izan da fitxategia irakurri")}</p>
                           <p className="text-[11px] text-gray-300 mt-1 leading-normal break-words">
                             {importFileError}
                           </p>
@@ -7092,7 +7593,7 @@ const MainLayout: React.FC = () => {
                       className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
                     />
                     <ListMusic className="w-8 h-8 text-brand-accent group-hover:scale-110 transition-all duration-300 mb-2" />
-                    <span className="text-xs font-bold text-white mb-0.5">Click to choose a file</span>
+                    <span className="text-xs font-bold text-white mb-0.5">{localized(language, "Elegir archivo", "Click to choose a file", "Aukeratu fitxategia")}</span>
                     <span className="text-[10px] text-gray-500">Supports .m3u, .m3u8, .csv, .json, .txt, etc.</span>
                   </div>
                 </>
@@ -7104,7 +7605,7 @@ const MainLayout: React.FC = () => {
                   disabled={isImportingSpotify}
                   className="flex-1 py-2.5 rounded-full border border-white/10 hover:bg-white/5 text-xs font-semibold text-gray-400 hover:text-white transition-all disabled:opacity-50"
                 >
-                  Cancel
+                  {localized(language, "Cancelar", "Cancel", "Utzi")}
                 </button>
                 {importTab === "spotify" && (
                   <button
@@ -7147,7 +7648,7 @@ const MainLayout: React.FC = () => {
                 <div className="w-12 h-12 rounded-full bg-brand-accent/20 flex items-center justify-center text-brand-accent mb-4 animate-bounce">
                   <Sparkles className="w-6 h-6" />
                 </div>
-                <h3 className="text-xl font-bold text-white mb-1">New Update Available!</h3>
+                <h3 className="text-xl font-bold text-white mb-1">{localized(language, "Hay una actualización disponible", "New Update Available!", "Eguneratze bat dago eskuragarri")}</h3>
                 <p className="text-xs text-gray-400 mb-4">
                   Version {updateInfo.latestVersion} is now available (You have {updateInfo.currentVersion}).
                 </p>
@@ -7229,8 +7730,8 @@ const MainLayout: React.FC = () => {
 
                 {!authRecovery && authEmail.includes("@") && (
                   <div className="flex flex-wrap gap-3 text-xs">
-                    <button onClick={() => sendPasswordReset(authEmail).then(() => showToast("Si la cuenta existe, recibirás un enlace.", "info")).catch(() => setAuthError("No se pudo enviar el correo. Reintenta en unos minutos."))}>Recuperar contraseña</button>
-                    <button onClick={() => resendConfirmation(authEmail).then(() => showToast("Solicitud de confirmación enviada.", "info")).catch(() => setAuthError("No se pudo reenviar la confirmación."))}>Reenviar confirmación</button>
+                    <button onClick={() => sendPasswordReset(authEmail).then(() => showToast("Si la cuenta existe, recibirás un enlace.", "info")).catch(() => setAuthError("No se pudo enviar el correo. Reintenta en unos minutos."))}>{localized(language, "Recuperar contraseña", "Reset password", "Berreskuratu pasahitza")}</button>
+                    <button onClick={() => resendConfirmation(authEmail).then(() => showToast("Solicitud de confirmación enviada.", "info")).catch(() => setAuthError("No se pudo reenviar la confirmación."))}>{localized(language, "Reenviar confirmación", "Resend confirmation", "Bidali berriro baieztapena")}</button>
                   </div>
                 )}
                 {authError && (
@@ -7251,10 +7752,10 @@ const MainLayout: React.FC = () => {
                       showToast("Contraseña actualizada.", "success");
                     } else if (authIsSignUp) {
                       await signUp(authEmail, authPassword);
-                      showToast("Account created! Check your email.", "success");
+                      showToast(localized(language, "Cuenta creada. Revisa tu correo.", "Account created! Check your email.", "Kontua sortu da. Begiratu zure posta."), "success");
                     } else {
                       await signIn(authEmail, authPassword);
-                      showToast("Signed in successfully!", "success");
+                      showToast(localized(language, "Sesión iniciada", "Signed in successfully!", "Saioa hasi da"), "success");
                     }
                     setShowAuthModal(false);
                     setAuthEmail("");
@@ -7268,7 +7769,7 @@ const MainLayout: React.FC = () => {
 
                   {/* Email */}
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">Email</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">{localized(language, "Correo electrónico", "Email", "Helbide elektronikoa")}</label>
                     <input
                       type="email"
                       aria-label="Correo electrónico"
@@ -7284,7 +7785,7 @@ const MainLayout: React.FC = () => {
 
                   {/* Password */}
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">Password</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-1">{localized(language, "Contraseña", "Password", "Pasahitza")}</label>
                     <input
                       type="password"
                       aria-label="Contraseña"
@@ -7331,7 +7832,9 @@ const MainLayout: React.FC = () => {
 
 
       {/* ═══ MOBILE MINI-PLAYER (above bottom nav) ═══ */}
+      {playlistUndo && createPortal(<div role="status" className="fixed bottom-36 left-1/2 z-[115] flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-full border border-white/10 bg-brand-darkBg px-4 py-2 text-xs text-white shadow-xl">Playlist actualizada <button className="font-semibold underline" onClick={undoPlaylistChange}>{localized(language, "Deshacer", "Undo", "Desegin")}</button></div>, document.body)}
       <MobileMiniPlayer
+        copyTrackLink={copyLink}
         favorites={favorites}
         handleToggleFavorite={handleToggleFavorite}
         showMobilePlayer={showMobilePlayer}
@@ -7340,10 +7843,12 @@ const MainLayout: React.FC = () => {
 
       {/* ═══ DESKTOP BOTTOM PLAYBACK BAR ═══ */}
       <DesktopPlaybackBar
+        onTrackContextMenu={handleTrackContextMenu}
+        copyTrackLink={copyLink}
         favorites={favorites}
         handleToggleFavorite={handleToggleFavorite}
         handleOpenAlbum={handleOpenAlbum}
-        handleOpenArtist={handleOpenArtist}
+        handleOpenArtist={(artist, seed) => void handleOpenArtist(artist, true, "popular", seed)}
         showQueueOverlay={showQueueOverlay}
         setShowQueueOverlay={setShowQueueOverlay}
         playlists={playlists}
@@ -7390,17 +7895,21 @@ const MainLayout: React.FC = () => {
         <TrackContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          anchor={contextMenu.anchor}
           track={contextMenu.track}
           isFavorite={favorites.some((f) => f.id === contextMenu.track.id)}
           isExplicit={isTrackExplicit(contextMenu.track)}
           playlists={playlists}
           currentPlaylistId={contextMenu.currentPlaylistId}
-          onClose={() => setContextMenu(null)}
+          onClose={closeTrackContextMenu}
           onToggleFavorite={() => handleToggleFavorite(contextMenu.track)}
+          isSavedForLater={isSavedForLater(contextMenu.track)}
+          listenLaterBlocked={isInPersonalLibrary(contextMenu.track)}
+          onToggleListenLater={() => toggleListenLater(contextMenu.track)}
           onToggleExplicit={() => handleToggleExplicit(contextMenu.track)}
           onAddToQueue={() => { if (roomId && !isHost) proposeRoomTrack(contextMenu.track); else addToQueue(contextMenu.track); }}
           queueActionLabel={roomId && !isHost ? "Proponer a la sala" : undefined}
-          onPlayNext={() => playNext(contextMenu.track)}
+          onPlayNext={!roomId || isHost ? () => playNext(contextMenu.track) : undefined}
           onWrongSong={!roomId && !contextMenu.track.id.startsWith("local-") ? () => {
             const track = contextMenu.track;
             setSourceMenuTrack(currentTrack?.id === track.id ? currentTrack : {
@@ -7410,35 +7919,31 @@ const MainLayout: React.FC = () => {
           } : undefined}
           onGoToArtist={(targetArtist?: Artist) => {
             if (targetArtist) {
-              handleOpenArtist(targetArtist);
+              handleOpenArtist(targetArtist, true, "popular", contextMenu.track);
               return;
             }
             if (contextMenu.track.artistId || contextMenu.track.artist) {
               handleOpenArtist({
                 id: contextMenu.track.artistId || `artist-${encodeURIComponent(contextMenu.track.artist)}`,
                 name: contextMenu.track.artist,
-                thumbnail: contextMenu.track.thumbnail
-              });
+                thumbnail: ""
+              }, true, "popular", contextMenu.track);
             }
           }}
-          onGoToAlbum={() => {
+          onGoToAlbum={contextMenu.track.albumId || contextMenu.track.albumName ? () => {
             handleOpenAlbum({
               id: contextMenu.track.albumId || "",
               title: contextMenu.track.albumName || contextMenu.track.title || "Album",
               artist: contextMenu.track.artist,
               thumbnail: contextMenu.track.thumbnail
             });
-          }}
-          onShare={() => {
+          } : undefined}
+          onShare={!contextMenu.track.id.startsWith("local-") ? () => {
             const track = contextMenu.track;
-            if (track.id.startsWith("local-")) {
-              showToast("La pista solo está disponible en este dispositivo.", "info");
-              return;
-            }
             const saved = StorageService.getItemSync<{ id: string; seconds: number }>("ibrastream_resume_position");
             const seconds = currentTrack?.id === track.id && saved?.id === track.id ? saved.seconds : undefined;
             void copyLink(buildShareLink("track", track.id, track.title, track.artist, seconds));
-          }}
+          } : undefined}
 
           onAddToPlaylist={(playlistId) => handleAddTrackToPlaylist(playlistId, contextMenu.track)}
           onRemoveFromPlaylist={
@@ -7465,7 +7970,8 @@ const MainLayout: React.FC = () => {
             }
             showToast("Preferencia de descubrimiento guardada.", "success");
           }}
-          onSelect={() => handleSelectTrack(contextMenu.track.id)}
+          onSelect={!contextMenu.anchor || contextMenu.anchor.closest("[data-track-row]")
+            ? () => handleSelectTrack(contextMenu.track.id) : undefined}
         />
       )}
       {sourceMenuTrack && !roomId && <WrongSongMenu track={sourceMenuTrack} onClose={() => setSourceMenuTrack(null)} />}
@@ -7483,11 +7989,12 @@ const MainLayout: React.FC = () => {
           showToast("Cuenta eliminada.", "info");
         }}>Eliminar de forma permanente</button>
       </Modal>}
-      {manageShare && userId && <React.Suspense fallback={null}><SharePlaylistManager playlist={manageShare} account={userId} onClose={() => setManageShare(null)} /></React.Suspense>}
-      {isWrappedModalOpen && <React.Suspense fallback={null}><WrappedModal
+      {manageShare && userId && <React.Suspense fallback={<LoadingSkeleton layout="text" count={3} className="fixed inset-x-8 top-1/4 z-[100] mx-auto max-w-sm rounded-3xl bg-brand-darkBg p-5" label="Cargando permisos…" />}><SharePlaylistManager playlist={manageShare} account={userId} onClose={() => setManageShare(null)} /></React.Suspense>}
+      {isWrappedModalOpen && <React.Suspense fallback={<LoadingSkeleton layout="stats" count={2} className="fixed inset-x-8 top-1/4 z-[100] mx-auto max-w-lg rounded-3xl bg-brand-darkBg p-5" label="Cargando Wrapped…" />}><WrappedModal
         isOpen={isWrappedModalOpen}
         onClose={() => setIsWrappedModalOpen(false)}
         entries={listeningEntries}
+        onTrackContextMenu={handleTrackContextMenu}
         onSavePlaylist={(name, tracks) => {
           savePlaylists([...playlists, { id: crypto.randomUUID(), name, tracks }]);
           showToast("Lista de Wrapped guardada en tu biblioteca.", "success");
@@ -7497,7 +8004,78 @@ const MainLayout: React.FC = () => {
   );
 };
 
+function DesktopListeningHome({ entries, recent, resume, onTrack, onResume, onList, onArtist, onTrackContextMenu }: {
+  entries: import("./services/listeningHistory").ListeningEntry[]; recent: RecentItem[]; resume: SavedPlaybackQueue | null;
+  onTrackContextMenu: (event: React.MouseEvent, track: Track) => void;
+  onTrack: (track: Track) => void; onResume: () => void; onList: (item: RecentItem) => void; onArtist: (artist: Artist) => void;
+}) {
+  const { language } = useLanguage();
+  const latest = React.useMemo(() => [...new Map(entries.slice(-100).reverse().map(item => [item.track.id, item.track])).values()].slice(0, 4), [entries]);
+  const artists = React.useMemo(() => Object.values(statsFor(entries).artists).sort((a, b) => b.seconds - a.seconds).slice(0, 4), [entries]);
+  const label = (es: string, en: string, eu: string) => localized(language, es, en, eu);
+  const tile = "flex w-full min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-left text-xs font-medium text-white transition-colors hover:bg-white/5";
+  return <div className="desktop-home-history hidden gap-3 lg:grid">
+    {resume && <section className="rounded-2xl border border-white/5 p-3"><h3 className="mb-2 text-sm font-semibold">{label("Seguir escuchando", "Continue listening", "Jarraitu entzuten")}</h3><button className={tile} onContextMenu={event => onTrackContextMenu(event, resume.track)} onClick={onResume}><Play className="size-4" /><span className="truncate">{resume.track.title} · {formatQueueTime(resume.seconds)}</span></button></section>}
+    {latest.length > 0 && <section className="rounded-2xl border border-white/5 p-3"><h3 className="mb-2 text-sm font-semibold">{label("Escuchado recientemente", "Recently played", "Duela gutxi entzuna")}</h3>{latest.map(track => <button key={track.id} className={tile} onContextMenu={event => onTrackContextMenu(event, track)} onClick={() => onTrack(track)}><img alt="" src={track.thumbnail} loading="lazy" className="size-7 rounded-md object-cover" /><span className="truncate" title={track.title}>{track.title}</span></button>)}</section>}
+    {artists.length > 0 && <section className="rounded-2xl border border-white/5 p-3"><h3 className="mb-2 text-sm font-semibold">{label("Tus artistas más escuchados", "Top artists", "Gehien entzundako artistak")}</h3>{artists.map(artist => <button key={artist.name} className={tile} onClick={() => onArtist({ id: "artist-" + encodeURIComponent(artist.name), name: artist.name, thumbnail: artist.thumbnail })}><img alt="" src={artist.thumbnail} loading="lazy" className="size-7 rounded-full object-cover" /><span className="truncate" title={artist.name}>{artist.name}</span></button>)}</section>}
+    {recent.length > 0 && <section className="rounded-2xl border border-white/5 p-3"><h3 className="mb-2 text-sm font-semibold">{label("Playlists recientes", "Recent playlists", "Azken zerrendak")}</h3>{recent.slice(0, 4).map(item => <button key={item.id} className={tile} onClick={() => onList(item)}><ListMusic className="size-4" /><span className="truncate" title={item.name}>{item.name}</span></button>)}</section>}
+  </div>;
+}
+
+interface SavedPlaybackQueue {
+  track: Track;
+  seconds: number;
+  upcoming: Track[];
+  manual: Track[];
+  playlistId: string | null;
+}
+
+const savedQueueKey = "ibrastream_saved_playback_queue";
+
+function QueueSessionActions({ notify, saved, onSave }: {
+  notify: (message: string, type: "success" | "error" | "info") => void;
+  saved: SavedPlaybackQueue | null;
+  onSave: (snapshot: SavedPlaybackQueue) => void;
+}) {
+  const { currentTrack, queue, currentIndex, playingPlaylistId, restoreQueue, roomId } = useAudio();
+  const { currentTime } = useAudioProgress();
+  if (roomId || (!currentTrack && !saved)) return null;
+  return <ActionMenu label="Guardar o retomar cola" className={playlistHeaderButton} button={<><Clock className="size-3.5" /> Sesión</>}>
+    {close => <>
+      {currentTrack && <button className={menuAction} onClick={() => {
+        const next = queue.slice(currentIndex + 1);
+        const snapshot = { track: currentTrack, seconds: currentTime, upcoming: next.filter(track => !track.isUserAdded),
+          manual: next.filter(track => track.isUserAdded), playlistId: playingPlaylistId };
+        StorageService.setItemSync(savedQueueKey, snapshot);
+        onSave(snapshot);
+        close();
+        notify("Cola guardada para más tarde.", "success");
+      }}>{saved ? "Reemplazar cola guardada" : "Guardar cola para más tarde"}</button>}
+      {saved && <button className={menuAction} onClick={() => {
+        close();
+        restoreQueue(saved.track, saved.upcoming, saved.manual, saved.playlistId, saved.seconds);
+      }}><Play className="size-4 shrink-0" /><span className="min-w-0">Retomar cola<span className="block truncate text-gray-400">{saved.track.title} · {formatQueueTime(saved.seconds)}</span></span></button>}
+    </>}
+  </ActionMenu>;
+}
+
+function formatQueueTime(seconds: number) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return Math.floor(whole / 60) + ":" + String(whole % 60).padStart(2, "0");
+}
+
+function PlaybackShareMenu({ track, time, copy }: { track: Track; time: number; copy: (url: URL) => void }) {
+  return <ActionMenu label="Compartir canción" button={<Link className="size-4" />}
+    className="shrink-0 rounded-full p-2 text-gray-400 hover:bg-white/10 hover:text-white">
+    {close => <>
+      <button className={menuAction} onClick={() => { close(); copy(buildShareLink("track", track.id, track.title, track.artist)); }}><Link className="size-4" /> Desde el principio</button>
+      <button className={menuAction} onClick={() => { close(); copy(buildShareLink("track", track.id, track.title, track.artist, Math.floor(Math.max(0, time)))); }}><Clock className="size-4" /> Desde {formatQueueTime(time)}</button>
+    </>}
+  </ActionMenu>;
+}
+
 interface MobileMiniPlayerProps {
+  copyTrackLink: (url: URL) => void;
   favorites: Track[];
   handleToggleFavorite: (track: Track) => void;
   showMobilePlayer: boolean;
@@ -7505,6 +8083,7 @@ interface MobileMiniPlayerProps {
 }
 
 const MobileMiniPlayer: React.FC<MobileMiniPlayerProps> = React.memo(({
+  copyTrackLink,
   favorites,
   handleToggleFavorite,
   showMobilePlayer,
@@ -7561,7 +8140,8 @@ const MobileMiniPlayer: React.FC<MobileMiniPlayerProps> = React.memo(({
         </div>
 
         {/* Controls */}
-        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+          {!currentTrack.id.startsWith("local-") && <PlaybackShareMenu track={currentTrack} time={currentTime} copy={copyTrackLink} />}
           <button
             onClick={() => handleToggleFavorite(currentTrack)}
             className={`p-2 ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-500"}`}
@@ -7595,10 +8175,12 @@ const MobileMiniPlayer: React.FC<MobileMiniPlayerProps> = React.memo(({
 });
 
 interface DesktopPlaybackBarProps {
+  onTrackContextMenu: (event: React.MouseEvent, track: Track) => void;
+  copyTrackLink: (url: URL) => void;
   favorites: Track[];
   handleToggleFavorite: (track: Track) => void;
   handleOpenAlbum: (album: Album) => void;
-  handleOpenArtist: (artist: Artist) => void;
+  handleOpenArtist: (artist: Artist, seed?: Track) => void;
   showQueueOverlay: boolean;
   setShowQueueOverlay: React.Dispatch<React.SetStateAction<boolean>>;
   playlists: Playlist[];
@@ -7606,6 +8188,8 @@ interface DesktopPlaybackBarProps {
 }
 
 const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
+  onTrackContextMenu,
+  copyTrackLink,
   favorites,
   handleToggleFavorite,
   handleOpenAlbum,
@@ -7615,6 +8199,8 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
   playlists,
   onAddToPlaylist
 }) => {
+  const { language } = useLanguage();
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
   const {
     currentTrack,
     isPlaying,
@@ -7642,9 +8228,9 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
   if (!currentTrack) return null;
 
   return (
-    <footer className="hidden md:flex h-24 bg-brand-darkBg/95 border-t border-white/5 items-center justify-between px-6 fixed bottom-0 left-0 right-0 z-40 select-none backdrop-blur-md">
+    <footer className="desktop-playback-bar hidden md:flex h-[var(--desktop-playback-height)] border-t items-center justify-between px-6 fixed bottom-0 left-0 right-0 z-40 select-none">
       {/* Left: Track Info */}
-      <div className="flex items-center gap-4 w-1/3 min-w-[200px]">
+      <div className="flex items-center gap-4 w-1/3 min-w-[200px]" onContextMenu={event => onTrackContextMenu(event, currentTrack)}>
         <img
           src={currentTrack.thumbnail}
           alt={currentTrack.title}
@@ -7659,6 +8245,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
                 }
               }}
               className="text-sm font-semibold text-white truncate hover:underline cursor-pointer"
+              title={currentTrack.title}
             >
               {currentTrack.title}
             </h4>
@@ -7669,10 +8256,11 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
                   ? "text-emerald-500"
                   : "text-gray-400 hover:text-white"
               }`}
-              title="Add to playlist"
+              title={copy("Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
             </button>
+            {!currentTrack.id.startsWith("local-") && <PlaybackShareMenu track={currentTrack} time={currentTime} copy={copyTrackLink} />}
           </div>
           <div className="text-xs text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
             {(() => {
@@ -7682,7 +8270,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
                   <span
                     onClick={() => {
                       if (handleOpenArtist) {
-                        handleOpenArtist({ id: art.id, name: art.name, thumbnail: currentTrack.thumbnail });
+                        handleOpenArtist({ id: art.id, name: art.name, thumbnail: "" }, currentTrack);
                       }
                     }}
                     className="hover:underline cursor-pointer hover:text-brand-accent transition-colors"
@@ -7697,6 +8285,8 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
         </div>
         <button
           onClick={() => handleToggleFavorite(currentTrack)}
+          aria-label={copy("Favorito", "Favorite", "Gogokoa")}
+          aria-pressed={favorites.some(f => f.id === currentTrack.id)}
           className={`p-2 rounded-full hover:bg-white/5 transition-all ${favorites.some(f => f.id === currentTrack.id) ? "text-red-500" : "text-gray-400 hover:text-white"}`}
         >
           <Heart className="w-4.5 h-4.5" fill={favorites.some(f => f.id === currentTrack.id) ? "currentColor" : "none"} />
@@ -7710,7 +8300,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
             onClick={toggleShuffle}
             disabled={roomId !== null && !isHost}
             className={`p-1.5 transition-all ${isShuffle ? "aura-active-icon text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
-            title="Shuffle"
+            title={copy("Aleatorio", "Shuffle", "Ausaz")}
           >
             <Shuffle className="w-4 h-4" />
           </button>
@@ -7718,7 +8308,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
             onClick={prevTrack} 
             disabled={roomId !== null && !isHost}
             className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
-            title="Previous"
+            title={copy("Anterior", "Previous", "Aurrekoa")}
           >
             <SkipBack className="w-5 h-5 fill-current" />
           </button>
@@ -7726,7 +8316,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
             onClick={togglePlay}
             disabled={isLoading || (roomId !== null && !isHost)}
             className="aura-play-button w-10 h-10 rounded-full bg-white text-black transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
-            title={isPlaying ? "Pause" : "Play"}
+            title={isPlaying ? copy("Pausar", "Pause", "Pausatu") : copy("Reproducir", "Play", "Erreproduzitu")}
           >
             {isLoading ? (
               <div className="w-4.5 h-4.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
@@ -7740,7 +8330,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
             onClick={nextTrack} 
             disabled={roomId !== null && !isHost}
             className="p-1.5 text-gray-400 hover:text-white transition-all active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed" 
-            title="Next"
+            title={copy("Siguiente", "Next", "Hurrengoa")}
           >
             <SkipForward className="w-5 h-5 fill-current" />
           </button>
@@ -7748,7 +8338,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
             onClick={toggleRepeat}
             disabled={roomId !== null && !isHost}
             className={`p-1.5 relative transition-all ${isRepeat !== "none" ? "aura-active-icon text-white" : "text-gray-600 hover:text-white"} disabled:opacity-30 disabled:cursor-not-allowed`}
-            title="Repeat"
+            title={copy("Repetir", "Repeat", "Errepikatu")}
           >
             <Repeat className="w-4 h-4" />
             {isRepeat === "one" && (
@@ -7760,6 +8350,7 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
           <span>{Math.floor(currentTime / 60)}:{Math.floor(currentTime % 60).toString().padStart(2, "0")}</span>
           <input
             type="range" min={0} max={duration || 100} value={currentTime}
+            aria-label={copy("Posición de reproducción", "Playback position", "Erreprodukzio-posizioa")}
             onChange={(e) => seek(parseFloat(e.target.value))}
             disabled={roomId !== null && !isHost}
             className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer playback-range accent-white focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
@@ -7777,7 +8368,8 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
               ? "text-white bg-white/10 shadow-[0_0_10px_rgba(255,255,255,0.2)]" 
               : "text-gray-500 hover:text-gray-300 hover:bg-white/5"
           }`}
-          title={seamlessTransitions ? "Seamless Transitions activadas (Crossfade suave)" : "Activar Seamless Transitions"}
+          aria-pressed={seamlessTransitions}
+          title={copy("Transición fluida", "Crossfade", "Trantsizio leuna")}
         >
           <Waves className="w-4.5 h-4.5" />
           {seamlessTransitions && (
@@ -7787,17 +8379,18 @@ const DesktopPlaybackBar: React.FC<DesktopPlaybackBarProps> = React.memo(({
         <button
           onClick={() => setShowQueueOverlay(prev => !prev)}
           className={`p-2 rounded-full hover:bg-white/5 transition-all ${showQueueOverlay ? "text-white bg-white/5" : "text-gray-400 hover:text-white"}`}
-          title="Queue"
+          title={copy("Cola", "Queue", "Ilara")}
         >
           <ListMusic className="w-4.5 h-4.5" />
         </button>
         {true && (
           <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-3 py-1.5 rounded-xl">
-            <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
+            <button aria-label={isMuted ? copy("Activar sonido", "Unmute", "Aktibatu soinua") : copy("Silenciar", "Mute", "Isilarazi")} onClick={toggleMute} className="text-gray-400 hover:text-white transition-all">
               {isMuted || volume === 0 ? <VolumeX className="w-4.5 h-4.5" /> : <Volume2 className="w-4.5 h-4.5" />}
             </button>
             <input
               type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
+              aria-label={copy("Volumen", "Volume", "Bolumena")}
               onChange={(e) => changeVolume(parseFloat(e.target.value))}
               className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer playback-range accent-white"
             />

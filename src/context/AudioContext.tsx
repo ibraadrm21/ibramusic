@@ -1,3 +1,4 @@
+import { localized, useLanguage } from "./LanguageContext";
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
 import type { Track } from "../services/musicApi";
 import { getArtistsFromTrack, getYouTubeVideoId } from "../services/musicApi";
@@ -6,7 +7,8 @@ import { StorageService } from "../services/storageService";
 import { readTrackVersionPreference, trackVersionId } from "../services/explicitPreferences";
 import { downloadService } from "../services/downloadService";
 import { measure } from "../services/metrics";
-import { createLocalPlayback } from "../services/localPlayback";
+import { createLocalPlayback, equalizerPresets } from "../services/localPlayback";
+import { crossfadeVolumes } from "../services/crossfade";
 import type { ListeningStats } from "../services/librarySync";
 import { BACKLOG_LIMIT, LISTENING_HISTORY_KEY, type ListeningEntry } from "../services/listeningHistory";
 
@@ -166,6 +168,7 @@ interface AudioContextType {
   playingPlaylistId: string | null;
   setPlayingPlaylistId: (id: string | null) => void;
   playShuffledPlaylist: (tracks: Track[], playlistId: string) => void;
+  restoreQueue: (track: Track, upcoming: Track[], manual: Track[], playlistId: string | null, seconds: number) => void;
   playTrack: (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean, startAt?: number, forceOnline?: boolean) => void;
   togglePlay: () => void;
   playbackError: string | null;
@@ -176,6 +179,8 @@ interface AudioContextType {
   setAutoplay: (value: boolean) => void;
   normalizeLocalAudio: boolean;
   setNormalizeLocalAudio: (value: boolean) => void;
+  equalizer: number[];
+  setEqualizer: (values: number[]) => void;
   smartShuffle: boolean;
   setSmartShuffle: (value: boolean) => void;
   listeningEntries: ListeningEntry[];
@@ -196,6 +201,7 @@ interface AudioContextType {
   playNext: (track: Track) => void;
   removeFromQueue: (trackId: string) => void;
   clearQueue: () => void;
+  clearManualQueue: () => void;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   toast: { message: string; type: "info" | "success" | "error" } | null;
   showToast: (message: string, type?: "info" | "success" | "error") => void;
@@ -257,6 +263,7 @@ export const useAudioProgress = () => {
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { language } = useLanguage();
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => {
     const saved = localStorage.getItem("ibrastream_current_track");
     try { return saved ? JSON.parse(saved) : null; } catch { return null; }
@@ -644,7 +651,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const cancelSleepTimer = () => {
     setSleepTimerRemaining(null);
     changeVolume(originalVolumeRef.current);
-    showToast("Sleep timer cancelled", "info");
+    showToast(localized(language, "Temporizador cancelado", "Sleep timer cancelled", "Tenporizadorea bertan behera utzi da"), "info");
   };
 
   useEffect(() => {
@@ -662,7 +669,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       setSleepTimerRemaining(null);
       changeVolume(originalVolumeRef.current);
-      showToast("Sleep timer finished. Music paused.", "info");
+      showToast(localized(language, "El temporizador terminó. Música pausada.", "Sleep timer finished. Music paused.", "Tenporizadorea amaitu da. Musika pausatu da."), "info");
       return;
     }
 
@@ -689,12 +696,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [undoQueue, setUndoQueue] = useState<(() => void) | null>(null);
   const undoQueueTimer = useRef<number | undefined>(undefined);
   const [normalizeLocalAudio, setNormalizeLocalAudio] = useState(() => localStorage.getItem("ibrastream_normalize_local") === "true");
+  const [equalizer, setEqualizer] = useState(() => {
+    const stored = StorageService.getItemSync<number[]>("ibrastream_equalizer");
+    return Array.isArray(stored) && stored.length === equalizerPresets.flat.length
+      && stored.every(value => Number.isFinite(value) && Math.abs(value) <= 12) ? stored : equalizerPresets.flat;
+  });
+  const equalizerRef = useRef(equalizer);
   const [smartShuffle, setSmartShufflePreference] = useState(() => localStorage.getItem("ibrastream_balanced_shuffle") === "true");
   const localDeck = useRef<{ audio: HTMLAudioElement; url: string; player: ReturnType<typeof createLocalPlayback> } | null>(null);
   useEffect(() => {
     localStorage.setItem("ibrastream_normalize_local", String(normalizeLocalAudio));
     if (localDeck.current) void localDeck.current.player.setNormalization(normalizeLocalAudio);
   }, [normalizeLocalAudio]);
+  useEffect(() => {
+    equalizerRef.current = equalizer;
+    StorageService.setItemSync("ibrastream_equalizer", equalizer);
+    void localDeck.current?.player.setEqualizer(equalizer);
+  }, [equalizer]);
   useEffect(() => {
     localStorage.setItem("ibrastream_balanced_shuffle", String(smartShuffle));
   }, [smartShuffle]);
@@ -1194,7 +1212,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         if (candidate.source === 'user_queue') {
-          const nextUQ = userQueueRef.current.slice(1);
+          const index = userQueueRef.current.findIndex(track => track.id === candidate.track.id);
+          const nextUQ = userQueueRef.current.filter((_, position) => position !== index);
           userQueueRef.current = nextUQ;
           setUserQueue(nextUQ);
           currentTrackSourceRef.current = 'user_queue';
@@ -1232,7 +1251,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           videoId: nextVideoId,
           startSeconds: 0
         });
-        incomingPlayer.playVideo?.();
       }
 
       preCuedTrackIdRef.current = null;
@@ -1240,30 +1258,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       // Ramp outgoing down while ramping incoming up concurrently
       crossfadeIntervalRef.current = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(1, Math.max(0, elapsed / totalCrossfadeMs));
-
-        // Shallow crossfade:
-        //   Outgoing: sliderVol → sliderVol * (1 - FADE_DEPTH)
-        //   Incoming: sliderVol * (1 - FADE_DEPTH) → sliderVol
-        const FADE_DEPTH = 0.2;
-        const outFactor = 1 - FADE_DEPTH * progress;
-        const inFactor  = (1 - FADE_DEPTH) + FADE_DEPTH * progress;
-
-        const currentSliderVol = volumeRef.current;
-        const currentMuted = isMutedRef.current;
-
-        if (currentMuted) {
-          outgoingPlayer?.setVolume?.(0);
-          incomingPlayer?.setVolume?.(0);
-        } else {
-          if (outgoingPlayer && typeof outgoingPlayer.setVolume === "function") {
-            outgoingPlayer.setVolume(Math.round(currentSliderVol * outFactor * 100));
-          }
-          if (incomingPlayer && typeof incomingPlayer.setVolume === "function") {
-            incomingPlayer.setVolume(Math.round(currentSliderVol * inFactor * 100));
-          }
-        }
+        const { progress, incoming, outgoing } = crossfadeVolumes(
+          Date.now() - startTime, totalCrossfadeMs, volumeRef.current, isMutedRef.current,
+        );
+        outgoingPlayer?.setVolume?.(outgoing);
+        incomingPlayer?.setVolume?.(incoming);
 
         // Check if outgoing track has reached its end (or player ended)
         let outgoingEnded = false;
@@ -1443,9 +1442,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     preCuedReadyRef.current = false;
   };
 
-  const playTrack = async (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean, startAt = 0, forceOnline = false, startShuffled = false) => {
+  const playTrack = async (track: Track, newQueue?: Track[], playlistId?: string | null, isRemoteSync?: boolean, startAt = 0, forceOnline = false, startShuffled = false, savedUserQueue?: Track[]) => {
     if (roomIdRef.current && !isHostRef.current && !isRemoteSync) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
 
@@ -1463,7 +1462,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const savedCount = localStorage.getItem("ibrastream_guest_tracks_played");
       const playedCount = savedCount ? parseInt(savedCount, 10) : 0;
       if (playedCount >= 3) {
-        showToast("Please create an account to continue listening", "error");
+        showToast(localized(language, "Crea una cuenta para seguir escuchando", "Please create an account to continue listening", "Sortu kontu bat entzuten jarraitzeko"), "error");
         window.dispatchEvent(new Event("ibrastream_force_login"));
         return;
       }
@@ -1486,8 +1485,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setDuration(track.duration || 0);
 
     if (playlistId !== undefined && !isRemoteSync) {
-      if (playlistId !== playingPlaylistId) {
-        setUserQueue([]);
+      if (savedUserQueue || playlistId !== playingPlaylistId) {
+        const next = savedUserQueue ?? [];
+        userQueueRef.current = next;
+        setUserQueue(next);
       }
       setPlayingPlaylistId(playlistId);
       if (playlistId) {
@@ -1501,7 +1502,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const enrichedQueue = newQueue;
 
       setOriginalPlaylistQueue(enrichedQueue);
-      if (isShuffle || startShuffled) {
+      if (savedUserQueue) setIsShuffle(false);
+      if (!savedUserQueue && (isShuffle || startShuffled)) {
         if (startShuffled) setIsShuffle(true);
         const index = enrichedQueue.findIndex(item => item.id === track.id);
         const otherTracks = enrichedQueue.filter((_, position) => position !== index);
@@ -1659,7 +1661,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         loadedTrackId.current = track.id;
         try {
           await player.playVideo();
-          if (stillActive() && normalizeLocalAudio) void player.setNormalization(true);
+          if (stillActive()) {
+            void player.setNormalization(normalizeLocalAudio);
+            void player.setEqualizer(equalizerRef.current);
+          }
         } catch {
           if (stillActive()) {
             console.warn("[AudioContext] Local deck playVideo rejected, falling back to online streaming...");
@@ -1818,6 +1823,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (track) void playTrack(track, tracks, playlistId, false, 0, false, true);
   };
 
+  const restoreQueue = (track: Track, upcoming: Track[], manual: Track[], playlistId: string | null, seconds: number) => {
+    void playTrack(track, [track, ...upcoming], playlistId, false, seconds, false, false, manual);
+  };
+
   playTrackRef.current = playTrack;
 
   function retryPlayback() {
@@ -1897,7 +1906,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const togglePlay = () => {
     if (previewPauseRef.current) return;
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
 
@@ -1960,7 +1969,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const nextTrack = () => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     
@@ -2004,7 +2013,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const prevTrack = () => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     if (currentTime >= 3) {
@@ -2038,7 +2047,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const seek = (time: number, isRemoteSync?: boolean) => {
     if (roomIdRef.current && !isHostRef.current && !isRemoteSync) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     
@@ -2076,7 +2085,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const toggleShuffle = () => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     const nextShuffle = !isShuffle;
@@ -2103,7 +2112,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           playlistIndexRef.current = targetIdx;
         }
       }
-      showToast("Shuffle on", "info");
+      showToast(localized(language, "Aleatorio activado", "Shuffle on", "Ausazko modua aktibatuta"), "info");
     } else {
       if (originalPlaylistQueue.length > 0) {
         setPlaylistQueue(originalPlaylistQueue);
@@ -2115,7 +2124,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           playlistIndexRef.current = targetIdx;
         }
       }
-      showToast("Shuffle off", "info");
+      showToast(localized(language, "Aleatorio desactivado", "Shuffle off", "Ausazko modua desaktibatuta"), "info");
     }
     // Invalidate any pre-cued standby track so queue change is strictly respected
     preCuedTrackIdRef.current = null;
@@ -2125,7 +2134,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const toggleRepeat = () => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     setIsRepeat(prev => {
@@ -2137,21 +2146,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const addToQueue = (track: Track) => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     if (userQueue.some(t => t.id === track.id)) {
-      showToast(`"${track.title}" is already in the queue`, "info");
       return;
     }
-    showToast(`Added "${track.title}" to queue`, "success");
     const userTrack = { ...track, isUserAdded: true };
     setUserQueue(prev => [...prev, userTrack]);
   };
 
   const playNext = (track: Track) => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     const userTrack = { ...track, isUserAdded: true };
@@ -2183,7 +2190,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const removeFromQueue = (trackId: string) => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     rememberQueue();
@@ -2197,12 +2204,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return prev.filter(t => t.id !== trackId);
     });
     setHistory(prev => prev.filter(t => t.id !== trackId));
-    showToast("Removed track from queue", "info");
+    showToast(localized(language, "Canción quitada de la cola", "Removed track from queue", "Abestia ilaratik kendu da"), "info");
+  };
+
+  const clearManualQueue = () => {
+    if ((roomIdRef.current && !isHostRef.current) || !userQueueRef.current.length || isTransitioningRef.current) return;
+    rememberQueue();
+    userQueueRef.current = [];
+    setUserQueue([]);
+    preCuedTrackIdRef.current = null;
+    preCuedReadyRef.current = false;
+    showToast(localized(language, "Cola manual vaciada", "Manual queue cleared", "Eskuzko ilara hustu da"), "info");
   };
 
   const clearQueue = () => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     rememberQueue();
@@ -2212,12 +2229,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlaylistIndex(-1);
     setPlayingPlaylistId(null);
     localStorage.removeItem("ibrastream_playing_playlist_id");
-    showToast("Cleared queue", "info");
+    showToast(localized(language, "Cola vaciada", "Cleared queue", "Ilara hustu da"), "info");
   };
 
   const reorderQueue = (fromIndex: number, toIndex: number) => {
     if (roomIdRef.current && !isHostRef.current) {
-      showToast("Controls are disabled for listeners in Listen Together", "error");
+      showToast(localized(language, "Solo el anfitrión puede usar estos controles", "Controls are disabled for listeners in Listen Together", "Ostalariak bakarrik erabil ditzake kontrol hauek"), "error");
       return;
     }
     if (fromIndex < 0 || fromIndex >= queue.length || toIndex < 0 || toIndex >= queue.length) return;
@@ -2330,24 +2347,35 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const syncMediaSession = () => {
-    if (!currentTrack || !("mediaSession" in navigator)) return;
+    if (!("mediaSession" in navigator)) return;
+    const session = navigator.mediaSession;
+    if (!currentTrack) {
+      session.metadata = null;
+      session.playbackState = "none";
+      return;
+    }
     try {
-      navigator.mediaSession.metadata = new MediaMetadata({
+      session.metadata = new MediaMetadata({
         title: currentTrack.title,
         artist: currentTrack.artist,
         album: currentTrack.albumName || "",
-        artwork: [
-          { src: currentTrack.thumbnail, sizes: "96x96", type: "image/jpeg" },
-          { src: currentTrack.thumbnail, sizes: "256x256", type: "image/jpeg" },
-          { src: currentTrack.thumbnail, sizes: "512x512", type: "image/jpeg" },
-        ]
+        artwork: currentTrack.thumbnail ? [{ src: currentTrack.thumbnail }] : [],
       });
-      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-      navigator.mediaSession.setActionHandler("play", () => togglePlayRef.current());
-      navigator.mediaSession.setActionHandler("pause", () => togglePlayRef.current());
-      navigator.mediaSession.setActionHandler("nexttrack", () => nextTrackRef.current());
-      navigator.mediaSession.setActionHandler("previoustrack", () => prevTrackRef.current());
     } catch {}
+    session.playbackState = isPlaying ? "playing" : "paused";
+    const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ["play", () => { if (!isPlayingRef.current) togglePlayRef.current(); }],
+      ["pause", () => { if (isPlayingRef.current) togglePlayRef.current(); }],
+      ["nexttrack", () => nextTrackRef.current()],
+      ["previoustrack", () => prevTrackRef.current()],
+    ];
+    for (const [action, handler] of actions) {
+      try {
+        session.setActionHandler(action, handler);
+      } catch {
+        // Browser and operating-system support varies by action.
+      }
+    }
   };
 
   useEffect(() => {
@@ -2360,6 +2388,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     return () => {
       if ("mediaSession" in navigator) {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.playbackState = "none";
         try {
           navigator.mediaSession.setActionHandler("play", null);
           navigator.mediaSession.setActionHandler("pause", null);
@@ -2695,6 +2725,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlayingPlaylistId,
     playTrack,
     playShuffledPlaylist,
+    restoreQueue,
     togglePlay,
     nextTrack,
     prevTrack,
@@ -2707,6 +2738,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playNext,
     removeFromQueue,
     clearQueue,
+    clearManualQueue,
     playbackError,
     setPlaybackError,
     retryPlayback,
@@ -2719,6 +2751,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setAutoplay,
     normalizeLocalAudio,
     setNormalizeLocalAudio,
+    equalizer,
+    setEqualizer,
     smartShuffle,
     setSmartShuffle,
     listeningEntries,
@@ -2777,6 +2811,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playingPlaylistId,
     playTrack,
     playShuffledPlaylist,
+    restoreQueue,
     togglePlay,
     nextTrack,
     prevTrack,
@@ -2789,6 +2824,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     playNext,
     removeFromQueue,
     clearQueue,
+    clearManualQueue,
     playbackError,
     setPlaybackError,
     retryPlayback,
@@ -2801,6 +2837,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setAutoplay,
     normalizeLocalAudio,
     setNormalizeLocalAudio,
+    equalizer,
     smartShuffle,
     setSmartShuffle,
     listeningEntries,

@@ -1,12 +1,18 @@
 import type { Album, Artist, Track } from "./musicApi";
+import { trackTitleArtistKey } from "./catalog.ts";
+
+export type PlaylistCoverFit = "cover" | "contain" | "scale-down";
 
 export interface Playlist {
   id: string;
   name: string;
   tracks: Track[];
   coverUrl?: string;
+  coverFit?: PlaylistCoverFit;
   isPublic?: boolean;
   folder?: string;
+  createdAt?: string;
+  modifiedAt?: string;
 }
 
 export interface ThemeSettings {
@@ -24,12 +30,58 @@ export interface ListeningStats {
 
 export interface Library {
   favorites: Track[];
+  listenLater?: ListenLaterEntry[];
   playlists: Playlist[];
   savedAlbums?: Album[];
   deletedPlaylists?: Playlist[];
   followedArtists: Artist[];
   themeSettings: ThemeSettings;
   accumulatedStats: ListeningStats;
+}
+
+export interface ListenLaterEntry {
+  id: string;
+  savedAt: string;
+  track: Track;
+}
+
+function createTrackIndex() {
+  const ids = new Set<string>();
+  const recordings = new Map<string, Set<number>>();
+  const add = (track: Track) => {
+    const id = track.id.replace(/^yt-([\w-]{11})$/, "$1");
+    if (id) ids.add(id);
+    if (!track.title || !track.artist || !Number.isFinite(track.duration) || track.duration <= 0) return;
+    const key = trackTitleArtistKey(track);
+    const durations = recordings.get(key) ?? new Set<number>();
+    durations.add(Math.round(track.duration));
+    recordings.set(key, durations);
+  };
+  const has = (track: Track) => {
+    if (ids.has(track.id.replace(/^yt-([\w-]{11})$/, "$1"))) return true;
+    if (!track.title || !track.artist || !Number.isFinite(track.duration) || track.duration <= 0) return false;
+    const durations = recordings.get(trackTitleArtistKey(track));
+    const duration = Math.round(track.duration);
+    return Boolean(durations && [-2, -1, 0, 1, 2].some(offset => durations.has(duration + offset)));
+  };
+  return { add, has };
+}
+
+export function indexLibraryTracks(tracks: Iterable<Track>) {
+  const index = createTrackIndex();
+  for (const track of tracks) index.add(track);
+  return index.has;
+}
+
+export function pruneListenLater(entries: ListenLaterEntry[], isInLibrary: (track: Track) => boolean) {
+  if (!entries.length) return entries;
+  const seen = createTrackIndex();
+  const eligible = entries.filter(({ track }) => {
+    if (isInLibrary(track) || seen.has(track)) return false;
+    seen.add(track);
+    return true;
+  });
+  return eligible.length === entries.length ? entries : eligible;
 }
 
 export function equalLibraryData(a: unknown, b: unknown): boolean {
@@ -91,17 +143,22 @@ export function mergeLibrary(base: Partial<Library>, local: Library, remote: Par
   const mergeEntry = <T,>(previous: T | undefined, here: T, there: T) => pick(previous, here, there);
   const stats = remote.accumulatedStats;
   const previousStats = base.accumulatedStats;
-  return {
+  const merged: Library = {
     savedAlbums: remote.savedAlbums ? mergeList(base.savedAlbums ?? [], local.savedAlbums ?? [], remote.savedAlbums, mergeEntry) : local.savedAlbums,
     deletedPlaylists: remote.deletedPlaylists ? mergeList(base.deletedPlaylists ?? [], local.deletedPlaylists ?? [], remote.deletedPlaylists, mergeEntry) : local.deletedPlaylists,
     favorites: remote.favorites ? mergeList(base.favorites ?? [], local.favorites, remote.favorites, mergeEntry) : local.favorites,
+    listenLater: remote.listenLater
+      ? mergeList(base.listenLater ?? [], local.listenLater ?? [], remote.listenLater, mergeEntry) : local.listenLater,
     followedArtists: remote.followedArtists ? mergeList(base.followedArtists ?? [], local.followedArtists, remote.followedArtists, mergeEntry) : local.followedArtists,
     playlists: remote.playlists ? mergeList(base.playlists ?? [], local.playlists, remote.playlists, (before, here, there) => ({
       ...there,
       name: pick(before?.name, here.name, there.name),
       coverUrl: before ? pick(before.coverUrl ?? "", here.coverUrl ?? "", there.coverUrl ?? "") : there.coverUrl ?? here.coverUrl,
+      coverFit: before ? pick(before.coverFit ?? "contain", here.coverFit ?? "contain", there.coverFit) : there.coverFit ?? here.coverFit,
       folder: before ? pick(before.folder ?? "", here.folder ?? "", there.folder ?? "") : there.folder ?? here.folder,
       isPublic: before ? pick(!!before.isPublic, !!here.isPublic, !!there.isPublic) : there.isPublic,
+      createdAt: there.createdAt ?? here.createdAt,
+      modifiedAt: [here.modifiedAt, there.modifiedAt].filter(Boolean).sort().at(-1),
       tracks: mergeList(before?.tracks ?? [], here.tracks, there.tracks, mergeEntry),
     })) : local.playlists,
     themeSettings: remote.themeSettings ? pick(base.themeSettings, local.themeSettings, remote.themeSettings) : local.themeSettings,
@@ -113,4 +170,9 @@ export function mergeLibrary(base: Partial<Library>, local: Library, remote: Par
       artists: mergeRecords(previousStats?.artists ?? {}, local.accumulatedStats.artists ?? {}, stats.artists ?? {}),
     } : local.accumulatedStats,
   };
+  if (merged.listenLater?.length) {
+    merged.listenLater = pruneListenLater(merged.listenLater,
+      indexLibraryTracks([...merged.favorites, ...merged.playlists.flatMap(playlist => playlist.tracks)]));
+  }
+  return merged;
 }

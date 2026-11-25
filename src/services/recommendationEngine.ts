@@ -151,7 +151,7 @@ export async function getHomeRecommendations(recent: Track[], excluded: Readonly
     songSeeds.set(trackTitleArtistKey(track), track);
     if (songSeeds.size === 4) break;
   }
-  const relatedPools = Promise.all([...songSeeds.values()].map(track => getRelatedTracks(track).catch(() => [])));
+  const relatedPools = Promise.all([...songSeeds.values()].map(track => getRelatedTracks(track).then(items => items.map(item => ({ ...item, recommendationReason: "Porque escuchaste «" + track.title + "»" }))).catch(() => [])));
   const artistPools = Promise.all(seeds.map(async seed => {
     const [original, similar] = await Promise.all([
       searchTracks(seed.name).catch(() => []),
@@ -162,10 +162,12 @@ export async function getHomeRecommendations(recent: Track[], excluded: Readonly
     const related = nearby ? await searchTracks(nearby).catch(() => []) : [];
     const matches = (tracks: Track[], name: string) => tracks.filter(track =>
       normalizeSearch(leadArtist(track)) === normalizeSearch(name));
-    return [matches(original, seed.name), nearby ? matches(related, nearby) : []];
+    const reason = "Porque escuchaste a " + seed.name;
+    return [matches(original, seed.name), nearby ? matches(related, nearby) : []]
+      .map(items => items.map(item => ({ ...item, recommendationReason: reason })));
   }));
   const [songResults, artistResults] = await Promise.all([relatedPools, artistPools]);
-  const pools = [...songResults, ...artistResults.flat()];
+  const pools: Track[][] = [...songResults, ...artistResults.flat()];
   if (history.length === 0) pools.push(await fetchFallbackPool());
 
   const recommendations: Track[] = [];

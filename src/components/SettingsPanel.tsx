@@ -1,3 +1,5 @@
+import { localized, type Language } from "../context/LanguageContext";
+import { equalizerFrequencies, equalizerPresets } from "../services/localPlayback";
 import React, { useState, useEffect } from "react";
 import { 
   Eye, Clock, Trash2, ShieldAlert, Sparkles, HardDrive, Waves, ShieldOff, Mic,
@@ -9,16 +11,22 @@ import { METRICS_KEY, type Metric } from "../services/metrics";
 import { StorageService } from "../services/storageService";
 import type { Playlist } from "../services/librarySync";
 
+import type { AmbientMode } from "../services/coverArt";
+
 export interface SettingsPanelProps {
+  ambientMode: AmbientMode;
+  onAmbientModeChange: (mode: AmbientMode) => void;
+  liquidGlassEnabled?: boolean;
+  onToggleLiquidGlass?: () => void;
   themeSettings?: { theme: "dark" | "bright" | "noir"; [key: string]: any };
   setThemeSettings?: React.Dispatch<React.SetStateAction<any>>;
   filterExplicit?: boolean;
   onToggleFilterExplicit?: () => void;
   // Account & Sync
   userId?: string | null;
-  language?: "es" | "en";
-  onLanguageChange?: (lang: "es" | "en") => void;
-  syncState?: "saved" | "pending" | "error";
+  language?: Language;
+  onLanguageChange?: (lang: Language) => void;
+  syncState?: "saved" | "pending" | "syncing" | "offline" | "error";
   syncError?: string;
   onRetrySync?: () => void;
   rankingPreference?: "public" | "anonymous" | "off";
@@ -41,6 +49,10 @@ export interface SettingsPanelProps {
 }
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ 
+  ambientMode,
+  onAmbientModeChange,
+  liquidGlassEnabled = true,
+  onToggleLiquidGlass,
   themeSettings, 
   setThemeSettings,
   filterExplicit,
@@ -87,11 +99,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     lyricsProvider,
     setLyricsProvider,
     lyricsWordByWord,
-    setLyricsWordByWord
+    setLyricsWordByWord,
+    equalizer,
+    setEqualizer,
   } = useAudio();
 
   const currentTheme = themeSettings?.theme || (document.documentElement.getAttribute("data-theme") as "dark" | "bright" | "noir") || "dark";
-  const isNoir = currentTheme === "noir";
 
   const [customTimerMinutes, setCustomTimerMinutes] = useState<number>(30);
   const metrics = StorageService.getItemSync<Partial<Record<Metric, { count: number; mean: number }>>>(METRICS_KEY);
@@ -148,6 +161,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const toggleAccordion = (id: string) => {
     setOpenAccordion(prev => prev === id ? null : id);
   };
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
+  const syncLabel = {
+    saved: copy("Sincronizada", "Synced", "Sinkronizatuta"),
+    pending: copy("Guardada en este navegador", "Saved in this browser", "Nabigatzaile honetan gordeta"),
+    syncing: copy("Sincronizando…", "Syncing…", "Sinkronizatzen…"),
+    offline: copy("Sin conexión", "Offline", "Konexiorik gabe"),
+    error: copy("Error", "Error", "Errorea"),
+  }[syncState];
 
   return (
     <div className="w-full max-w-4xl mx-auto flex flex-col gap-6 p-4 sm:p-6 animate-fadeIn pb-28">
@@ -156,21 +177,21 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="flex flex-col gap-1.5">
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
             <Sparkles className="w-7 h-7 text-brand-accent animate-pulse" />
-            Ajustes
+            {copy("Ajustes", "Settings", "Ezarpenak")}
           </h1>
           <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
             <span>IbraMusic {__APP_VERSION__}</span>
             <span>•</span>
             <span className="flex items-center gap-1">
               <span className={`w-2 h-2 rounded-full ${navigator.onLine ? "bg-emerald-400" : "bg-amber-400"}`} />
-              {navigator.onLine ? "En línea" : "Modo sin conexión"}
+              {navigator.onLine ? copy("En línea", "Online", "Linean") : copy("Sin conexión", "Offline", "Konexiorik gabe")}
             </span>
             {userId && (
               <>
                 <span>•</span>
                 <span className="flex items-center gap-1">
-                  <span className={`w-2 h-2 rounded-full ${syncState === "saved" ? "bg-emerald-400" : syncState === "pending" ? "bg-amber-400 animate-pulse" : "bg-red-400"}`} />
-                  Sincronización: {{ saved: "Guardada", pending: "Pendiente", error: "Error" }[syncState]}
+                  <span className={`w-2 h-2 rounded-full ${syncState === "saved" ? "bg-emerald-400" : (syncState === "pending" || syncState === "syncing" || syncState === "offline") ? "bg-amber-400 animate-pulse" : "bg-red-400"}`} />
+                  {copy("Sincronización", "Sync", "Sinkronizazioa")}: {syncLabel}
                 </span>
               </>
             )}
@@ -183,7 +204,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             className="self-start sm:self-auto px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-lg"
           >
             <Smartphone className="w-4 h-4 text-brand-accent" />
-            Instalar App
+            {copy("Instalar App", "Install app", "Instalatu aplikazioa")}
           </button>
         )}
       </div>
@@ -196,18 +217,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       )}
 
       {/* Main Grid of Settings Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="desktop-settings grid grid-cols-1 md:grid-cols-2 gap-6">
 
         {/* 1. Visual Customization Card */}
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <Eye className="w-5 h-5 text-brand-accent" />
-            Personalización Visual
+            {copy("Apariencia", "Appearance", "Itxura")}
           </h2>
 
           {/* Theme Selector */}
           <div className="flex flex-col gap-2 border-b border-white/5 pb-4">
-            <span className="text-sm font-semibold text-white">Tema de la Interfaz</span>
+            <span className="text-sm font-semibold text-white">{copy("Tema de la Interfaz", "Interface theme", "Interfazearen gaia")}</span>
             <div className="grid grid-cols-3 gap-2">
               {(["dark", "bright", "noir"] as const).map((t) => (
                 <button
@@ -228,49 +249,61 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       : "bg-white/5 text-gray-400 border-white/5 hover:text-white hover:bg-white/10"
                   }`}
                 >
-                  {t === "dark" ? "Oscuro" : t === "bright" ? "Claro" : "Noir Puro"}
+                  {t === "dark" ? copy("Oscuro", "Dark", "Iluna") : t === "bright"
+                    ? copy("Claro", "Light", "Argia") : copy("Noir Puro", "Pure Noir", "Noir hutsa")}
                 </button>
               ))}
             </div>
           </div>
 
+          {onToggleLiquidGlass && <div className="hidden items-center justify-between gap-4 border-b border-white/5 pb-4 lg:flex">
+            <div><p className="text-sm font-semibold text-white">Liquid Glass</p>
+              <p className="mt-1 text-[11px] text-gray-400">{copy("Efecto de cristal en la tarjeta de bienvenida de Inicio.", "Glass effect on the Home welcome card.", "Kristal-efektua Hasierako ongietorri-txartelean.")}</p></div>
+            <button type="button" role="switch" aria-label="Liquid Glass" aria-checked={liquidGlassEnabled} onClick={onToggleLiquidGlass}
+              className={"h-6 w-11 shrink-0 rounded-full p-1 transition-colors " + (liquidGlassEnabled ? "bg-brand-accent" : "bg-white/10")}>
+              <span className={"block size-4 rounded-full transition-transform " + (liquidGlassEnabled ? "translate-x-5 bg-brand-darkBg" : "bg-gray-400")} />
+            </button>
+          </div>}
+
           {/* Ambient Glow */}
           <div className="flex items-center justify-between border-b border-white/5 pb-4">
             <div className="flex flex-col gap-0.5 max-w-[70%]">
-              <span className="text-sm font-semibold text-white">Aura Ambiental Dinámica</span>
+              <span className="text-sm font-semibold text-white">{copy("Aura Ambiental Dinámica", "Dynamic ambient theme", "Giro-gai dinamikoa")}</span>
               <span className="text-[11px] text-gray-400">
-                La portada de la canción elige el fondo y los colores de los controles.
+                {copy("La portada de la canción elige el fondo y los colores de los controles.", "The track artwork sets the background and control colors.", "Abestiaren azalak hondoa eta kontrolen koloreak zehazten ditu.")}
               </span>
-              {isNoir && (
-                <span className="text-[10px] text-amber-400 font-semibold mt-1">
-                  Desactivado en modo Noir (Negro absoluto)
-                </span>
-              )}
             </div>
             <button
               type="button"
               role="switch"
-              aria-label="Aura Ambiental Dinámica"
-              aria-checked={ambientGlowEnabled && !isNoir}
-              disabled={isNoir}
-              onClick={() => {
-                if (isNoir) {
-                  showToast("El aura está desactivada en modo Noir", "info");
-                  return;
-                }
-                setAmbientGlowEnabled(!ambientGlowEnabled);
-              }}
+              aria-label={copy("Aura Ambiental Dinámica", "Dynamic ambient theme", "Giro-gai dinamikoa")}
+              aria-checked={ambientGlowEnabled}
+              onClick={() => setAmbientGlowEnabled(!ambientGlowEnabled)}
               className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 focus:outline-none ${
-                isNoir ? "bg-white/5 cursor-not-allowed opacity-40" : ambientGlowEnabled ? "bg-white" : "bg-white/10"
+                ambientGlowEnabled ? "bg-white" : "bg-white/10"
               }`}
             >
               <div
                 className={`w-4 h-4 rounded-full transition-transform duration-300 ${
-                  ambientGlowEnabled && !isNoir ? "bg-black translate-x-5" : "bg-gray-400 translate-x-0"
+                  ambientGlowEnabled ? "bg-black translate-x-5" : "bg-gray-400 translate-x-0"
                 }`}
               />
             </button>
           </div>
+          {ambientGlowEnabled && (
+            <label className="flex flex-wrap items-center justify-between gap-3 text-sm font-semibold text-white">
+              {copy("Modo ambiental", "Ambient Theme Mode", "Giro-gaiaren modua")}
+              <select
+                className="rounded-full border border-white/10 bg-brand-cardBg px-3 py-2 text-xs text-white focus-visible:outline-2 focus-visible:outline-brand-accent"
+                value={ambientMode}
+                onChange={event => onAmbientModeChange(event.currentTarget.value as AmbientMode)}
+              >
+                <option value="classic">Classic</option>
+                <option value="cover">Cover Aura</option>
+                <option value="secondary">Secondary Palette</option>
+              </select>
+            </label>
+          )}
 
         </div>
 
@@ -278,19 +311,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <Waves className="w-5 h-5 text-brand-accent" />
-            Reproducción y Cola
+            {copy("Reproducción y cola", "Playback and queue", "Erreprodukzioa eta ilara")}
           </h2>
 
           {/* Autoplay Toggle */}
           <div className="flex items-center justify-between border-b border-white/5 pb-4">
             <div className="flex flex-col gap-0.5 max-w-[70%]">
-              <span className="text-sm font-semibold text-white">Reproducción Continua (Autoplay)</span>
+              <span className="text-sm font-semibold text-white">{copy("Reproducción Continua (Autoplay)", "Autoplay", "Erreprodukzio jarraitua")}</span>
               <span className="text-[11px] text-gray-400">
-                Continúa automáticamente con temas relacionados al terminar la cola de reproducción.
+                {copy("Continúa con canciones relacionadas cuando termina la cola.", "Keeps playing related tracks when the queue ends.", "Ilararen amaieran antzeko abestiak erreproduzitzen ditu.")}
               </span>
             </div>
             <button
               onClick={() => setAutoplay(!autoplay)}
+              role="switch" aria-checked={autoplay} aria-label={copy("Reproducción continua", "Autoplay", "Erreprodukzio jarraitua")}
               className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 focus:outline-none ${
                 autoplay ? "bg-white" : "bg-white/10"
               }`}
@@ -306,9 +340,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {/* Smart Shuffle */}
           <div className="flex items-center justify-between border-b border-white/5 pb-4">
             <div className="flex flex-col gap-0.5 max-w-[70%]">
-              <span className="text-sm font-semibold text-white">Reparto Inteligente de Artistas</span>
+              <span className="text-sm font-semibold text-white">{copy("Reparto Inteligente de Artistas", "Balanced artist shuffle", "Artisten ausazko banaketa orekatua")}</span>
               <span className="text-[11px] text-gray-400">
-                Al reproducir en aleatorio, alterna artistas siempre que haya temas de otros disponibles.
+                {copy("Alterna artistas cuando hay canciones de otros disponibles.", "Alternates artists when tracks by other artists are available.", "Artistak txandakatzen ditu beste artisten abestiak daudenean.")}
               </span>
             </div>
             <button
@@ -333,13 +367,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           <div className="flex flex-col gap-3 border-b border-white/5 pb-4">
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5 max-w-[70%]">
-                <span className="text-sm font-semibold text-white">Transición Fluida (Crossfade)</span>
+                <span className="text-sm font-semibold text-white">{copy("Transición Fluida (Crossfade)", "Crossfade", "Trantsizio leuna")}</span>
                 <span className="text-[11px] text-gray-400">
-                  Desvanece el final de cada pista mientras inicia suavemente la siguiente.
+                {copy("Desvanece el final de cada pista mientras empieza la siguiente.", "Fades out the current track as the next begins.", "Uneko pista pixkanaka itzaltzen du hurrengoa hasten denean.")}
                 </span>
               </div>
               <button
                 onClick={() => setSeamlessTransitions(!seamlessTransitions)}
+                role="switch" aria-checked={seamlessTransitions} aria-label={copy("Transición fluida", "Crossfade", "Trantsizio leuna")}
                 className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 focus:outline-none ${
                   seamlessTransitions ? "bg-white" : "bg-white/10"
                 }`}
@@ -355,8 +390,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             {seamlessTransitions && (
               <div className="flex flex-col gap-2 pt-2 animate-fadeIn">
                 <div className="flex justify-between text-xs font-semibold text-gray-300">
-                  <span className="text-gray-400">Duración del cruce:</span>
-                  <span className="text-white font-bold">{seamlessDuration} segundos</span>
+                  <span className="text-gray-400">{copy("Duración del cruce:", "Crossfade duration", "Trantsizioaren iraupena")}</span>
+                  <span className="text-white font-bold">{seamlessDuration} s</span>
                 </div>
                 <input
                   type="range"
@@ -364,13 +399,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   max={12}
                   step={1}
                   value={seamlessDuration}
+                  aria-label={copy("Duración del cruce", "Crossfade duration", "Trantsizioaren iraupena")}
                   onChange={(e) => setSeamlessDuration(parseInt(e.target.value, 10))}
                   className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-brand-accent"
                 />
                 <div className="flex justify-between text-[10px] text-gray-500 font-medium">
-                  <span>1s (Rápido)</span>
-                  <span>4s (Recomendado)</span>
-                  <span>12s (Largo)</span>
+                  <span>{copy("1 s (rápido)", "1 s (short)", "1 s (laburra)")}</span>
+                  <span>{copy("4 s (recomendado)", "4 s (recommended)", "4 s (gomendatua)")}</span>
+                  <span>{copy("12 s (largo)", "12 s (long)", "12 s (luzea)")}</span>
                 </div>
               </div>
             )}
@@ -379,13 +415,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {/* Private Session */}
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-0.5 max-w-[70%]">
-              <span className="text-sm font-semibold text-white">Sesión Privada</span>
+              <span className="text-sm font-semibold text-white">{copy("Sesión Privada", "Private session", "Saio pribatua")}</span>
               <span className="text-[11px] text-gray-400">
-                No guarda reproducciones en el historial ni afecta las recomendaciones durante esta pestaña.
+                {copy("Las reproducciones de esta sesión quedan fuera del historial y de las recomendaciones.", "Plays in this session stay out of your history and recommendations.", "Saio honetako erreprodukzioak historiatik eta gomendioetatik kanpo geratzen dira.")}
               </span>
             </div>
             <button
               onClick={() => setPrivateSession(!privateSession)}
+              role="switch" aria-checked={privateSession} aria-label={copy("Sesión privada", "Private session", "Saio pribatua")}
               className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 focus:outline-none ${
                 privateSession ? "bg-white" : "bg-white/10"
               }`}
@@ -399,17 +436,46 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </div>
         </div>
 
+        <section className="hidden flex-col gap-4 rounded-3xl border border-white/5 bg-white/5 p-6 lg:flex">
+          <h2 className="text-lg font-bold text-white">{localized(language, "Ecualizador", "Equalizer", "Ekualizadorea")}</h2>
+          <p className="text-xs text-gray-400">
+            {localized(language, "Se aplica al audio local. YouTube se reproduce con su propio audio.", "Applies to local audio. YouTube uses its own audio output.", "Audio lokalari aplikatzen zaio. YouTubek bere audio-irteera erabiltzen du.")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {([
+              ["flat", "Plano", "Flat", "Laua"],
+              ["bass", "Graves", "Bass", "Baxuak"],
+              ["voice", "Voces", "Vocals", "Ahotsak"],
+              ["electronic", "Electrónica", "Electronic", "Elektronikoa"],
+            ] as const).map(([key, es, en, eu]) => {
+              const active = equalizer.every((gain, index) => gain === equalizerPresets[key][index]);
+              return <button type="button" key={key} aria-pressed={active} onClick={() => setEqualizer(equalizerPresets[key])}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${active ? "border-brand-accent text-brand-accent" : "border-white/10 bg-white/5 text-gray-300"}`}>
+                {localized(language, es, en, eu)}
+              </button>;
+            })}
+          </div>
+          {equalizerFrequencies.map((frequency, index) => (
+            <label key={frequency} className="grid grid-cols-[4rem_1fr_3rem] items-center gap-3 text-xs">
+              <span>{frequency.toLocaleString(language)} Hz</span>
+              <input type="range" min={-12} max={12} value={equalizer[index]} className="min-w-0 accent-brand-accent"
+                onChange={event => setEqualizer(equalizer.map((gain, band) => band === index ? Number(event.target.value) : gain))} />
+              <span className="text-right tabular-nums">{equalizer[index]} dB</span>
+            </label>
+          ))}
+        </section>
+
         {/* 4. Lyrics Provider Card */}
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <Mic className="w-5 h-5 text-brand-accent" />
-            Fuente de Letras y Karaoke
+            {copy("Letras y karaoke", "Lyrics and karaoke", "Letrak eta karaokea")}
           </h2>
 
           <div className="flex flex-col gap-3">
-            <span className="text-sm font-semibold text-white">Motor de Letras Principal</span>
+            <span className="text-sm font-semibold text-white">{copy("Motor de Letras Principal", "Preferred lyrics provider", "Letren hornitzaile nagusia")}</span>
             <p className="text-[11px] text-gray-400">
-              Elige el proveedor prioritario. Si una canción no se encuentra, se consultarán las demás fuentes automáticamente.
+              {copy("Elige el primer proveedor. Si falta una letra, se consultan las demás fuentes.", "Choose which provider to check first. Other sources are tried when lyrics are missing.", "Aukeratu lehen hornitzailea. Letra falta bada, beste iturriak kontsultatuko dira.")}
             </p>
 
             <div className="grid grid-cols-3 gap-2 text-xs mt-1">
@@ -425,7 +491,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 }`}
               >
                 <span className="font-extrabold text-sm">Spicy</span>
-                <span className="text-[10px] opacity-70">Word-by-word</span>
+                <span className="text-[10px] opacity-70">{copy("Palabra por palabra", "Word by word", "Hitzez hitz")}</span>
               </button>
 
               <button
@@ -440,7 +506,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 }`}
               >
                 <span className="font-extrabold text-sm">LRC.RED</span>
-                <span className="text-[10px] opacity-70">Sincronizado</span>
+                <span className="text-[10px] opacity-70">{copy("Sincronizado", "Synced", "Sinkronizatua")}</span>
               </button>
 
               <button
@@ -455,7 +521,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 }`}
               >
                 <span className="font-extrabold text-sm">LRCLIB</span>
-                <span className="text-[10px] opacity-70">Comunitario</span>
+                <span className="text-[10px] opacity-70">{copy("Comunitario", "Community", "Komunitatea")}</span>
               </button>
             </div>
 
@@ -463,13 +529,13 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <div className="flex items-center justify-between pt-3 border-t border-white/5 mt-1">
               <div className="flex flex-col gap-0.5 max-w-[70%]">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white">Modo Karaoke (Palabra por palabra)</span>
+                  <span className="text-sm font-semibold text-white">{copy("Karaoke palabra por palabra", "Word-by-word karaoke", "Hitzez hitzeko karaokea")}</span>
                   <span className="text-[9px] font-black uppercase tracking-wider text-brand-accent bg-brand-accent/20 border border-brand-accent/30 px-2 py-0.5 rounded-full">
                     Karaoke
                   </span>
                 </div>
                 <span className="text-[11px] text-gray-400">
-                  Resalta de forma fluida cada sílaba y palabra en tiempo real mientras el artista canta.
+                  {copy("Resalta la letra a medida que canta el artista.", "Highlights the lyrics as the artist sings.", "Artistak abestu ahala hitzak nabarmentzen ditu.")}
                 </span>
               </div>
               <button
@@ -499,25 +565,26 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <Globe className="w-5 h-5 text-brand-accent" />
-            Cuenta y Preferencias
+            {copy("Cuenta y preferencias", "Account and preferences", "Kontua eta hobespenak")}
           </h2>
 
           {/* Navigation Language */}
           {onLanguageChange && (
             <div className="flex items-center justify-between border-b border-white/5 pb-4">
               <div className="flex flex-col gap-0.5 max-w-[65%]">
-                <span className="text-sm font-semibold text-white">Idioma de la Interfaz</span>
+                <span className="text-sm font-semibold text-white">{copy("Idioma de la interfaz", "Interface language", "Interfazearen hizkuntza")}</span>
                 <span className="text-[11px] text-gray-400">
-                  Selecciona el idioma principal de navegación.
+                  {copy("Selecciona el idioma de IbraMusic.", "Choose the language of IbraMusic.", "Aukeratu IbraMusic-en hizkuntza.")}
                 </span>
               </div>
               <select
                 value={language}
-                onChange={(e) => onLanguageChange(e.target.value === "en" ? "en" : "es")}
+                onChange={(e) => onLanguageChange(e.target.value === "en" || e.target.value === "eu" ? e.target.value : "es")}
                 className="bg-white/10 border border-white/10 text-white text-xs font-semibold rounded-xl px-3 py-2 outline-none focus:border-brand-accent cursor-pointer"
               >
                 <option value="es" className="bg-[#18181b] text-white">Español</option>
                 <option value="en" className="bg-[#18181b] text-white">English</option>
+                <option value="eu" className="bg-[#18181b] text-white">Euskara</option>
               </select>
             </div>
           )}
@@ -526,7 +593,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {userId && onChangeRanking && (
             <div className="flex items-center justify-between border-b border-white/5 pb-4">
               <div className="flex flex-col gap-0.5 max-w-[65%]">
-                <span className="text-sm font-semibold text-white">Clasificación Pública</span>
+                <span className="text-sm font-semibold text-white">{copy("Clasificación Pública", "Public ranking", "Sailkapen publikoa")}</span>
                 <span className="text-[11px] text-gray-400">
                   Elige cómo aparecer en el ranking comunitario de oyentes.
                 </span>
@@ -537,9 +604,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 onChange={(e) => onChangeRanking(e.target.value as "public" | "anonymous" | "off")}
                 className="bg-white/10 border border-white/10 text-white text-xs font-semibold rounded-xl px-3 py-2 outline-none focus:border-brand-accent cursor-pointer disabled:opacity-50"
               >
-                <option value="off" className="bg-[#18181b] text-white">No participar</option>
-                <option value="public" className="bg-[#18181b] text-white">Con mi nombre</option>
-                <option value="anonymous" className="bg-[#18181b] text-white">Anónima</option>
+                <option value="off" className="bg-[#18181b] text-white">{copy("No participar", "Opt out", "Ez parte hartu")}</option>
+                <option value="public" className="bg-[#18181b] text-white">{copy("Con mi nombre", "Show my name", "Erakutsi nire izena")}</option>
+                <option value="anonymous" className="bg-[#18181b] text-white">{copy("Anónima", "Anonymous", "Anonimoa")}</option>
               </select>
             </div>
           )}
@@ -548,20 +615,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {userId && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-4">
               <div className="flex flex-col gap-0.5">
-                <span className="text-sm font-semibold text-white">Sincronización en la Nube</span>
+                <span className="text-sm font-semibold text-white">{copy("Sincronización en la nube", "Cloud sync", "Hodeiko sinkronizazioa")}</span>
                 <span className="text-[11px] text-gray-400">
-                  {syncState === "error" && syncError ? syncError : "Las playlists, los favoritos y las estadísticas se sincronizan automáticamente."}
+                  {syncState === "error" && syncError ? syncError : copy("Las playlists, los favoritos y las estadísticas se sincronizan automáticamente.", "Playlists, favorites and stats sync automatically.", "Erreprodukzio-zerrendak, gogokoak eta estatistikak automatikoki sinkronizatzen dira.")}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
                   syncState === "saved"
                     ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
-                    : syncState === "pending"
+                    : (syncState === "pending" || syncState === "syncing" || syncState === "offline")
                       ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
                       : "bg-red-500/15 border-red-500/30 text-red-400"
                 }`}>
-                  {{ saved: "Guardada", pending: "Pendiente", error: "Error" }[syncState]}
+                  {syncLabel}
                 </span>
                 {onRetrySync && (
                   <button
@@ -570,7 +637,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-300 transition-colors hover:text-white"
                   >
                     <RefreshCw className="size-3.5" aria-hidden="true" />
-                    {syncState === "error" ? "Reintentar" : "Sincronizar ahora"}
+                    {syncState === "error" ? copy("Reintentar", "Retry", "Saiatu berriro") : copy("Sincronizar ahora", "Sync now", "Sinkronizatu orain")}
                   </button>
                 )}
               </div>
@@ -581,7 +648,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           {userId && onDeleteAccount && (
             <div className="flex items-center justify-between pt-1">
               <div className="flex flex-col gap-0.5">
-                <span className="text-sm font-semibold text-red-400">Eliminar Cuenta</span>
+                <span className="text-sm font-semibold text-red-400">{copy("Eliminar Cuenta", "Delete account", "Ezabatu kontua")}</span>
                 <span className="text-[11px] text-gray-500">
                   Borra todos tus datos y playlists sincronizados en la nube.
                 </span>
@@ -601,7 +668,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <HardDrive className="w-5 h-5 text-brand-accent" />
-            Almacenamiento y Biblioteca
+            {copy("Almacenamiento y biblioteca", "Storage and library", "Biltegia eta liburutegia")}
           </h2>
 
           <div className="flex flex-col gap-3.5 text-xs text-gray-400">
@@ -705,7 +772,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="rounded-3xl bg-white/5 border border-white/5 p-6 flex flex-col gap-5">
           <h2 className="text-lg font-bold text-white flex items-center gap-2.5 border-b border-white/5 pb-3">
             <Clock className="w-5 h-5 text-brand-accent" />
-            Temporizador de Apagado
+            {copy("Temporizador de apagado", "Sleep timer", "Itzaltzeko tenporizadorea")}
           </h2>
 
           {sleepTimerRemaining !== null ? (

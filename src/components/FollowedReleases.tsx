@@ -1,3 +1,4 @@
+import { LoadingSkeleton } from "./LoadingSkeleton";
 import { useEffect, useState } from "react";
 import { searchAlbums, type Album, type Artist } from "../services/musicApi";
 import { normalizeSearch } from "../services/catalog";
@@ -7,6 +8,8 @@ export default function FollowedReleases({ artists, onOpen }: { artists: Artist[
   const [albums, setAlbums] = useState<Album[]>([]);
   const [kind, setKind] = useState("all");
   const [loaded, setLoaded] = useState(false);
+  const [loadedArtists, setLoadedArtists] = useState<Artist[] | null>(null);
+  const loading = loaded && loadedArtists !== artists;
 
   useEffect(() => {
     if (!loaded) return;
@@ -18,6 +21,7 @@ export default function FollowedReleases({ artists, onOpen }: { artists: Artist[
       const rows = results.flatMap(result => result.status === "fulfilled" ? result.value : [])
         .filter(album => album.releaseDate && [...known].some(name => normalizeSearch(album.artist).includes(name)))
         .sort((a, b) => (b.releaseDate ?? "").localeCompare(a.releaseDate ?? ""));
+      setLoadedArtists(artists);
       setAlbums([...new Map(rows.map(album => [album.id, album])).values()].slice(0, 24));
     });
     return () => { active = false; };
@@ -40,7 +44,8 @@ export default function FollowedReleases({ artists, onOpen }: { artists: Artist[
         </select>
       </label>
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">{filtered.map(album => <AlbumCard key={album.id} album={album} onClick={onOpen} />)}</div>
-      {!filtered.length && <p className="mt-2 text-sm text-gray-300">No hay lanzamientos disponibles para este filtro.</p>}
+      {loading && <LoadingSkeleton layout="grid" count={4} label="Cargando lanzamientos…" />}
+      {loaded && !loading && !filtered.length && <p className="mt-2 text-sm text-gray-300">No hay lanzamientos disponibles para este filtro.</p>}
     </details>
   );
 }

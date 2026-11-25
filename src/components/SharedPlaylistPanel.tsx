@@ -1,3 +1,4 @@
+import { LoadingSkeleton } from "./LoadingSkeleton";
 import { useEffect, useState } from "react";
 import { Music2, Play, AlertCircle, Link2, Copy, Users, Shield, ExternalLink, RotateCw } from "lucide-react";
 import { Modal } from "./Modal";
@@ -73,7 +74,7 @@ export function SharePlaylistManager({ playlist, account, onClose }: { playlist:
           <p className="text-xs text-gray-400">Copia compartida de la playlist</p>
         </div>
       </div>
-      {loadState === "loading" && <p role="status" className="px-1 text-xs text-gray-400">Cargando permisos…</p>}
+      {loadState === "loading" && <LoadingSkeleton layout="text" count={3} label="Cargando permisos…" />}
       {(loadState === "error" || loadState === "unavailable") && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-3">
           <p role="status" className="mr-auto flex items-center gap-2 text-xs text-gray-300">
@@ -119,7 +120,7 @@ export function SharePlaylistManager({ playlist, account, onClose }: { playlist:
   </Modal>;
 }
 
-export function SharedPlaylistView({ token, account, onPlay, onLeave }: { token: string; account?: string; onPlay: (track: Track, queue?: Track[]) => void; onLeave: () => void }) {
+export function SharedPlaylistView({ token, account, onPlay, onLeave, onTrackContextMenu }: { token: string; account?: string; onPlay: (track: Track, queue?: Track[]) => void; onLeave: () => void; onTrackContextMenu: (event: React.MouseEvent, track: Track) => void }) {
   const [row, setRow] = useState<SharedPlaylist | null>(null);
   const [name, setName] = useState("");
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -132,6 +133,7 @@ export function SharedPlaylistView({ token, account, onPlay, onLeave }: { token:
 
   useEffect(() => {
     let active = true;
+    setMessage("");
     void loadSharedPlaylist(token).then(data => {
       if (!active) return;
       setRow(data);
@@ -143,7 +145,7 @@ export function SharedPlaylistView({ token, account, onPlay, onLeave }: { token:
   }, [token, account, attempt]);
 
   if (!row) return <section className="grid gap-3 text-white">
-    <p role="status">{message || "Cargando lista compartida…"}</p>
+    {message ? <p role="status">{message}</p> : <LoadingSkeleton layout="detail" label="Cargando lista compartida…" />}
     {message && <button className={action} onClick={() => setAttempt(value => value + 1)}>Reintentar</button>}
     <button className={action} onClick={onLeave}>Volver a mi biblioteca</button>
   </section>;
@@ -164,9 +166,9 @@ export function SharedPlaylistView({ token, account, onPlay, onLeave }: { token:
         void import("../services/musicApi").then(({ searchTracks }) => searchTracks(query)).then(found => setResults(found.slice(0, 8)))
           .catch(() => setMessage("No se pudo buscar.")).finally(() => setBusy(false));
       }}><input className={field} aria-label="Buscar una pista para la lista compartida" placeholder="Buscar canción" value={query} onChange={event => setQuery(event.target.value)} /><button className={action} disabled={busy}>Buscar</button></form>
-      {results.length > 0 && <ul>{results.map(track => <li key={track.id}><button className={action} disabled={tracks.some(item => item.id === track.id)} onClick={() => setTracks([...tracks, track])}>Añadir {track.title}</button></li>)}</ul>}
+      {results.length > 0 && <ul>{results.map(track => <li key={track.id} onContextMenu={event => onTrackContextMenu(event, track)}><button className={action} disabled={tracks.some(item => item.id === track.id)} onClick={() => setTracks([...tracks, track])}>Añadir {track.title}</button></li>)}</ul>}
     </>}
-    <ul className="space-y-1">{(editing ? tracks : row.tracks).map((track, index) => <li key={track.id + index} className="group flex items-center gap-2 rounded-2xl px-2.5 transition-colors hover:bg-white/5 focus-within:bg-white/5">
+    <ul className="space-y-1">{(editing ? tracks : row.tracks).map((track, index) => <li key={track.id + index} onContextMenu={event => onTrackContextMenu(event, track)} className="group flex items-center gap-2 rounded-2xl px-2.5 transition-colors hover:bg-white/5 focus-within:bg-white/5">
       <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-2.5 text-left" aria-label={"Reproducir " + track.title} onClick={() => onPlay(track, row.tracks)}>
         {track.thumbnail
           ? <img className="size-10 shrink-0 rounded-lg object-cover shadow-md shadow-black/30" src={track.thumbnail} alt="" loading="lazy" />

@@ -1,5 +1,5 @@
 import React from "react";
-import { useLanguage } from "../context/LanguageContext";
+import { localized, useLanguage } from "../context/LanguageContext";
 import {
   Home,
   Search,
@@ -94,7 +94,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
 }) => {
   const isDecember = new Date().getMonth() === 11;
-  const { labels } = useLanguage();
+  const { labels, language } = useLanguage();
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
   const menuItems = [
     { id: "home", label: labels.home, icon: Home },
     { id: "search", label: labels.search, icon: Search },
@@ -285,7 +286,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className={`hidden md:flex flex-col ${collapsed ? "w-20" : "w-72"} h-[calc(100vh-96px)] fixed left-0 top-0 glass-panel border-r border-gray-800 ${collapsed ? "p-3" : "p-4"} z-10 select-none justify-between transition-all duration-300`}>
+      <aside className={`ambient-chrome hidden md:flex flex-col ${collapsed ? "w-20" : "w-72"} fixed left-0 top-0 bottom-[var(--desktop-playback-height)] glass-panel border-r border-gray-800 ${collapsed ? "p-3" : "p-4"} z-10 select-none justify-between transition-all duration-300`}>
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {/* Logo */}
           <div className={`flex items-center ${collapsed ? "flex-col gap-3 justify-center" : "justify-between"} shrink-0`}>
@@ -321,7 +322,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={onToggleCollapse}
                 className="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-all"
-                title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={collapsed ? "Expand sidebar" : copy("Contraer barra lateral", "Collapse sidebar", "Tolestu alboko barra")}
               >
                 {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
               </button>
@@ -391,7 +392,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex flex-col gap-2 px-1">
                 <div className="flex items-center justify-between pl-2 pr-1">
                   <span className="text-[10px] font-semibold uppercase text-gray-500 tracking-wider">
-                    Your Library
+                    {copy("Tu biblioteca", "Your Library", "Zure liburutegia")}
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -402,7 +403,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       className={`p-1.5 rounded-lg hover:bg-white/10 transition-colors ${
                         isSearchOpen || librarySearchQuery ? "text-brand-accent bg-white/5" : "text-gray-400 hover:text-white"
                       }`}
-                      title="Search library"
+                      title={copy("Buscar en la biblioteca", "Search library", "Bilatu liburutegian")}
                     >
                       <Search className="w-3.5 h-3.5" />
                     </button>
@@ -410,7 +411,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         onClick={onCreatePlaylist}
                         className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                        title="Create Playlist"
+                        title={copy("Crear playlist", "Create Playlist", "Sortu zerrenda")}
                       >
                         <Plus className="w-3.5 h-3.5" />
                       </button>
@@ -425,7 +426,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <input
                       type="text"
                       ref={searchInputRef}
-                      placeholder="Search in library..."
+                      placeholder={copy("Buscar en la biblioteca…", "Search in library...", "Bilatu liburutegian…")}
                       value={librarySearchQuery}
                       onChange={(e) => setLibrarySearchQuery(e.target.value)}
                       autoFocus
@@ -453,7 +454,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
                       }`}
                     >
-                      All
+                      {copy("Todo", "All", "Guztiak")}
                     </button>
                     <button
                       onClick={() => setLibraryFilter("playlists")}
@@ -463,7 +464,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
                       }`}
                     >
-                      Playlists
+                      {copy("Playlists", "Playlists", "Zerrendak")}
                     </button>
                     <button
                       onClick={() => setLibraryFilter("artists")}
@@ -473,7 +474,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
                       }`}
                     >
-                      Artists
+                      {copy("Artistas", "Artists", "Artistak")}
                     </button>
                   </div>
 
@@ -484,7 +485,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
                         isSortMenuOpen ? "text-white bg-white/10" : "text-gray-400 hover:text-white hover:bg-white/5"
                       }`}
-                      title="Sort library"
+                      title={copy("Ordenar biblioteca", "Sort library", "Ordenatu liburutegia")}
                     >
                       <ArrowDownUp className="w-3 h-3 shrink-0" />
                       <span className="capitalize whitespace-nowrap">{librarySort === "recent" ? "Recents" : librarySort === "alphabetical" ? "A-Z" : "Custom"}</span>
@@ -533,7 +534,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button
                     onClick={onCreatePlaylist}
                     className="p-2 rounded-xl bg-white/5 border border-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-                    title="Create Playlist"
+                    title={copy("Crear playlist", "Create Playlist", "Sortu zerrenda")}
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -570,7 +571,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {isPlaylist ? (
                       <div className="w-8.5 h-8.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center shrink-0 overflow-hidden relative">
                         {item.coverUrl || (item.tracks && item.tracks.length > 0 && item.tracks[0].thumbnail) ? (
-                          <img src={item.coverUrl || item.tracks[0].thumbnail} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                          <img src={item.coverUrl || item.tracks[0].thumbnail} className={item.coverFit ? "w-full h-full" : "w-full h-full object-cover group-hover:scale-105 transition-transform"} style={{ objectFit: item.coverFit }} />
                         ) : (
                           <ListMusic className="w-4.5 h-4.5 text-brand-accent group-hover:scale-105 transition-transform" />
                         )}
@@ -613,7 +614,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ? `No results for "${librarySearchQuery}"`
                       : libraryFilter !== "all"
                       ? `No ${libraryFilter} found`
-                      : "Empty Library"}
+                      : copy("Biblioteca vacía", "Empty Library", "Liburutegia hutsik")}
                   </span>
                 </div>
               )}

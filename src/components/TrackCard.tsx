@@ -1,10 +1,13 @@
+import { CoverImage } from "./CoverImage";
 import { largeCoverUrl } from "../services/coverArt";
 import React, { useRef } from "react";
 import { Play, Pause, Heart, ListPlus, Plus, MoreVertical } from "lucide-react";
 import { motion } from "framer-motion";
-import type { Track } from "../services/musicApi";
+import type { Artist, Track } from "../services/musicApi";
+import { artistMatches } from "../services/catalog";
 import { getArtistsFromTrack } from "../services/musicApi";
 import { useAudio } from "../context/AudioContext";
+import { localized, useLanguage } from "../context/LanguageContext";
 
 interface TrackCardProps {
   track: Track;
@@ -13,6 +16,7 @@ interface TrackCardProps {
   onToggleFavorite?: (track: Track) => void;
   isFavorite?: boolean;
   onOpenArtist?: (artist: any) => void;
+  artistProfile?: Artist;
   onOpenAlbum?: (album: any) => void;
   onAddToPlaylist?: (track: Track, e: React.MouseEvent<HTMLButtonElement>) => void;
   trackIndex?: number;
@@ -29,6 +33,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
   onToggleFavorite,
   isFavorite = false,
   onOpenArtist,
+  artistProfile,
   onOpenAlbum,
   onAddToPlaylist,
   trackIndex,
@@ -36,12 +41,14 @@ export const TrackCard = React.memo<TrackCardProps>(({
   playlistId,
   isExplicit,
 }) => {
+  const { language } = useLanguage();
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
   const { currentTrack, isPlaying, isLoading, playTrack, togglePlay, addToQueue } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
 
   const showExplicitBadge = isExplicit || track.isExplicit;
-  const playLabel = (isCurrent && isPlaying ? "Pausar " : "Reproducir ") + track.title;
+  const playLabel = (isCurrent && isPlaying ? copy("Pausar", "Pause", "Pausatu") : copy("Reproducir", "Play", "Erreproduzitu")) + " " + track.title;
 
   const longPressTimeoutRef = useRef<number | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -106,6 +113,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
     const largeCover = largeCoverUrl(track.thumbnail);
     return (
       <motion.div
+        data-track-row=""
         onClick={handlePlayClick}
         onContextMenu={(e) => {
           if (onContextMenu) {
@@ -123,7 +131,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
       >
         {/* Cover Art Container */}
         <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
-          <img
+          <CoverImage
             src={largeCover || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
             alt={track.title}
             loading="lazy"
@@ -178,7 +186,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
             <div className="absolute top-2 left-2 z-10 pointer-events-none">
               <span
                 className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-black/75 backdrop-blur-sm text-[9px] font-bold text-gray-200 select-none shadow-sm"
-                title="Explicit"
+                title={copy("Contenido explícito", "Explicit", "Eduki esplizitua")}
               >
                 E
               </span>
@@ -201,7 +209,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
 
         {/* Metadata - Now below the image */}
         <div className="w-full px-0.5 min-w-0">
-          <h3 className="font-medium text-xs text-white truncate leading-tight">
+          <h3 className="font-medium text-xs text-white truncate leading-tight" title={track.title}>
             {track.title}
           </h3>
           <div className="text-[10px] text-gray-400 truncate mt-0.5 flex flex-wrap gap-x-1 select-none">
@@ -245,7 +253,10 @@ export const TrackCard = React.memo<TrackCardProps>(({
       onTouchEnd={handleTouchEnd}
       whileHover={{ x: 4 }}
       transition={{ type: "spring", stiffness: 300, damping: 25 }}
-      className={`group flex items-center justify-between md:grid md:grid-cols-12 gap-4 p-2.5 md:p-3 rounded-2xl transition-all duration-300 cursor-pointer ${
+      data-favorite-row={playlistId === "favorites" ? "" : undefined}
+      data-track-row=""
+      data-current-track={isCurrent ? "" : undefined}
+      className={`group flex items-center justify-between md:grid md:grid-cols-12 gap-4 p-2.5 md:p-3 rounded-2xl transition-colors duration-150 cursor-pointer ${
         isCurrent ? "bg-white/10 border-l-4 border-brand-accent" : "hover:bg-white/5 border-l-4 border-transparent"
       }`}
     >
@@ -281,7 +292,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
         </div>
 
         {/* Album Cover */}
-        <img
+        <CoverImage
           src={track.thumbnail || (track.id.startsWith("yt-") ? `https://i.ytimg.com/vi/${track.id.substring(3)}/hqdefault.jpg` : "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80")}
           alt={track.title}
           loading="lazy"
@@ -302,12 +313,13 @@ export const TrackCard = React.memo<TrackCardProps>(({
             {showExplicitBadge && (
               <span
                 className="inline-flex items-center justify-center w-4 h-4 rounded-[3px] bg-white/20 text-[9px] font-bold text-gray-300 shrink-0 select-none"
-                title="Explicit"
+                title={copy("Contenido explícito", "Explicit", "Eduki esplizitua")}
               >
                 E
               </span>
             )}
             <h4 
+              title={track.title}
               className={`font-semibold text-sm truncate ${isCurrent ? "text-brand-accent" : "text-white"}`}
             >
               {track.title}
@@ -316,22 +328,24 @@ export const TrackCard = React.memo<TrackCardProps>(({
           <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-1 select-none">
             {(() => {
               const artistList = getArtistsFromTrack(track);
-              return artistList.map((art, i) => (
-                <React.Fragment key={art.id || i}>
-                  <span
-                    onClick={(e) => {
-                      if (onOpenArtist) {
+              return artistList.map((art, i) => {
+                const isProfileArtist = artistProfile && artistMatches(art.name, art.id, artistProfile);
+                return (
+                  <React.Fragment key={art.id || i}>
+                    <span
+                      onClick={(e) => {
+                        if (!onOpenArtist || isProfileArtist) return;
                         e.stopPropagation();
                         onOpenArtist({ id: art.id, name: art.name, thumbnail: track.thumbnail });
-                      }
-                    }}
-                    className="hover:text-brand-accent hover:underline cursor-pointer transition-colors"
-                  >
-                    {art.name}
-                  </span>
-                  {i < artistList.length - 1 && <span>,</span>}
-                </React.Fragment>
-              ));
+                      }}
+                      className={isProfileArtist ? undefined : "hover:text-brand-accent hover:underline cursor-pointer transition-colors"}
+                    >
+                      {art.name}
+                    </span>
+                    {i < artistList.length - 1 && <span>,</span>}
+                  </React.Fragment>
+                );
+              });
             })()}
           </div>
         </div>
@@ -364,7 +378,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
 
       {/* Col 3: Date Added column (md:col-span-2, hidden on small screens) */}
       <div className="hidden md:flex md:col-span-2 items-center min-w-0 pr-2 text-xs text-gray-500 select-none">
-        <span className="truncate" title={track.dateAdded ? new Date(track.dateAdded).toLocaleDateString() : "—"}>
+        <span className="truncate" title={track.dateAdded ? new Date(track.dateAdded).toLocaleDateString(language) : "—"}>
           {(() => {
             if (!track.dateAdded) return "—";
             try {
@@ -373,8 +387,8 @@ export const TrackCard = React.memo<TrackCardProps>(({
               const now = new Date();
               const diffMs = now.getTime() - date.getTime();
               const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-              if (diffDays <= 0) return "Today";
-              if (diffDays === 1) return "Yesterday";
+              if (diffDays <= 0) return copy("Hoy", "Today", "Gaur");
+              if (diffDays === 1) return copy("Ayer", "Yesterday", "Atzo");
               if (diffDays < 7) return `${diffDays} days ago`;
               if (diffDays < 30) return `${Math.floor(diffDays / 7)} wk ago`;
               return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -395,7 +409,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
               onAddToPlaylist(track, e);
             }}
             className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors shrink-0"
-            title="Add to playlist"
+            title={copy("Añadir a playlist", "Add to playlist", "Gehitu zerrendara")}
           >
             <Plus className="w-4 h-4" />
           </button>
@@ -405,7 +419,7 @@ export const TrackCard = React.memo<TrackCardProps>(({
         <button
           onClick={() => addToQueue(track)}
           className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors shrink-0"
-          title="Add to queue"
+          title={copy("Añadir a la cola", "Add to queue", "Gehitu ilarara")}
         >
           <ListPlus className="w-4 h-4" />
         </button>
@@ -430,13 +444,13 @@ export const TrackCard = React.memo<TrackCardProps>(({
             }
           }}
           className="p-1.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors shrink-0"
-          title="More options"
+          title={copy("Más opciones", "More options", "Aukera gehiago")}
         >
           <MoreVertical className="w-4 h-4" />
         </button>
 
         <div className="hidden md:block text-[11px] text-gray-400 pr-1 select-none shrink-0 w-10 text-right ml-1">
-          {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, "0")}
+          <span className="tabular-nums">{Math.floor(track.duration / 60)}:{Math.floor(track.duration % 60).toString().padStart(2, "0")}</span>
         </div>
       </div>
     </motion.div>

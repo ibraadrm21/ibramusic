@@ -1,4 +1,5 @@
 import type { Innertube } from "youtubei.js";
+import { artistMatches, profileTracks } from "./catalog";
 
 export interface Track {
   id: string;
@@ -16,6 +17,7 @@ export interface Track {
   plays?: string;
   dateAdded?: string;
   isUserAdded?: boolean;
+  recommendationReason?: string;
   isExplicit?: boolean;
   hasDualVersions?: boolean;
 }
@@ -27,6 +29,8 @@ export interface Artist {
   popularity?: number;
   description?: string;
   monthlyListeners?: number;
+  provider?: "deezer" | "youtube" | "tidal";
+  portrait?: string;
 }
 
 /**
@@ -81,6 +85,73 @@ export interface Album {
   thumbnail: string;
   releaseDate?: string;
   numberOfTracks?: number;
+  releaseType?: "album" | "ep" | "single" | "compilation";
+  provider?: Artist["provider"];
+}
+
+function albumReleaseType(value: unknown): Album["releaseType"] {
+  const type = typeof value === "string" ? value.toLowerCase() : "";
+  if (type === "album" || type === "ep" || type === "single" || type === "compilation") return type;
+}
+
+function catalogRequest<T>(cache: Map<string, { expires: number; request: Promise<T> }>, key: string, load: () => Promise<T>, usable: (result: T) => boolean): Promise<T> {
+  const cached = cache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.request;
+  const request = load().then(result => {
+    if (!usable(result) && cache.get(key)?.request === request) cache.delete(key);
+    return result;
+  }, error => {
+    if (cache.get(key)?.request === request) cache.delete(key);
+    throw error;
+  });
+  if (cache.size >= 100) cache.delete(cache.keys().next().value!);
+  cache.set(key, { expires: Date.now() + 15 * 60_000, request });
+  return request;
+}
+
+type ReleasePage = { albums: Album[]; nextIndex?: number };
+const releasePages = new Map<string, { expires: number; request: Promise<ReleasePage> }>();
+
+export function getArtistReleasePage(artist: Artist, index = 0): Promise<ReleasePage> {
+  return catalogRequest(releasePages, JSON.stringify([artist.provider, artist.id, artist.name, index]), async () => {
+    if (artist.provider !== "deezer" || !/^\d+$/.test(artist.id)) {
+      return { albums: await searchAlbums(artist.name, artist) };
+    }
+    const page = await fetchDeezerApi(`https://api.deezer.com/artist/${artist.id}/albums?limit=24&index=${index}`);
+    if (page?.error || !Array.isArray(page?.data)) {
+      if (index === 0) {
+        const albums = await searchAlbums(artist.name, artist);
+        if (albums.length) return { albums };
+      }
+      throw new Error("Artist releases unavailable");
+    }
+    return {
+      albums: page.data.filter((item: any) => item.id && item.title && (!item.artist || String(item.artist.id) === artist.id)).map((item: any) => ({
+        id: String(item.id),
+        title: item.title,
+        artist: artist.name,
+        artistId: artist.id,
+        provider: "deezer",
+        thumbnail: item.cover_big || item.cover_medium || item.cover || "",
+        releaseDate: item.release_date,
+        releaseType: albumReleaseType(item.record_type),
+        numberOfTracks: item.nb_tracks,
+      })),
+      nextIndex: page.next && page.data.length ? index + page.data.length : undefined,
+    };
+  }, page => page.albums.length > 0);
+}
+
+const artistTopTracks = new Map<string, { expires: number; request: Promise<Track[]> }>();
+export function getArtistProfileTracks(artist: Artist): Promise<Track[]> {
+  return catalogRequest(artistTopTracks, JSON.stringify([artist.provider, artist.id, artist.name]),
+    async () => {
+      const tracks = await getArtistTracks(artist.id, artist.name, true, artist.provider);
+      const credited = artist.provider === "deezer"
+        ? tracks.filter(track => track.artists?.some(credit => credit.id === artist.id && artistMatches(credit.name, undefined, artist)))
+        : tracks;
+      return profileTracks(credited, artist);
+    }, tracks => tracks.length > 0);
 }
 
 // Empty library of mock tracks
@@ -544,7 +615,7 @@ export async function checkTrackDualVersions(track: Track): Promise<boolean> {
   }
 }
 
-export async function searchTracks(query: string): Promise<Track[]> {
+export async function searchTracks(query: string, deezerProfile?: Artist): Promise<Track[]> {
   if (!query.trim()) return MOCK_LIBRARY;
 
   const cleanQuery = query.trim();
@@ -681,9 +752,12 @@ export async function searchTracks(query: string): Promise<Track[]> {
   // Tier 1: Deezer API (Primary: 100% official HD studio cover art and metadata)
   try {
     const deezerData = await fetchDeezerApi(`https://api.deezer.com/search?q=${encodeURIComponent(cleanQuery)}&limit=30`);
+    if (deezerProfile && (deezerData?.error || !Array.isArray(deezerData?.data))) throw new Error("Artist search unavailable");
     const items = deezerData?.data || [];
     if (Array.isArray(items) && items.length > 0) {
-      const tracks: Track[] = items.map((item: any) => {
+      const matched = deezerProfile ? items.filter((item: any) => String(item.artist?.id) === deezerProfile.id
+        && typeof item.artist.name === "string" && artistMatches(item.artist.name, undefined, deezerProfile)) : items;
+      const tracks: Track[] = matched.map((item: any) => {
         const coverUrl = item.album?.cover_xl || item.album?.cover_big || item.album?.cover_medium || item.album?.cover || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
         const artistName = item.artist?.name || "Unknown Artist";
         const artistId = String(item.artist?.id || "");
@@ -704,8 +778,10 @@ export async function searchTracks(query: string): Promise<Track[]> {
       return tagDualVersionTracks(tracks);
     }
   } catch (err) {
+    if (deezerProfile) throw err;
     console.warn("[searchTracks] Deezer primary search failed, trying YouTube Music fallback:", err);
   }
+  if (deezerProfile) return [];
 
   // Tier 2: YouTube Music search via Innertube
   try {
@@ -849,31 +925,38 @@ export async function searchTracks(query: string): Promise<Track[]> {
   return [];
 }
 
-export async function searchAlbums(query: string): Promise<Album[]> {
+export async function searchAlbums(query: string, profileArtist?: Artist): Promise<Album[]> {
   if (!query.trim()) return [];
   const cleanQuery = query.trim();
+  const forArtist = (items: Album[]) => profileArtist
+    ? items.filter(item => item.artistId === profileArtist.id && artistMatches(item.artist, item.artistId, profileArtist))
+      .map(item => ({ ...item, provider: profileArtist.provider })) : items;
+  let finished = false;
 
   // Tier 1: Deezer API (100% HD album covers)
-  try {
+  if (!profileArtist || profileArtist.provider === "deezer") try {
     const data = await fetchDeezerApi(`https://api.deezer.com/search/album?q=${encodeURIComponent(cleanQuery)}&limit=25`);
     const items = data?.data || [];
     if (Array.isArray(items) && items.length > 0) {
-      return items.map((item: any) => ({
+      const albums = forArtist(items.map((item: any) => ({
         id: String(item.id),
         title: item.title || "Unknown Album",
         artist: item.artist?.name || "Unknown Artist",
         artistId: String(item.artist?.id || ""),
         thumbnail: item.cover_xl || item.cover_big || item.cover_medium || item.cover || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80",
         releaseDate: item.release_date,
-        numberOfTracks: item.nb_tracks
-      }));
+        numberOfTracks: item.nb_tracks,
+        releaseType: albumReleaseType(item.record_type),
+      })));
+      if (albums.length) return albums;
     }
+    finished = Boolean(data && !data.error);
   } catch (err) {
     console.warn("[searchAlbums] Deezer album search failed, trying Innertube fallback:", err);
   }
 
   // Tier 2: YouTube Music via Innertube
-  try {
+  if (!profileArtist || profileArtist.provider === "youtube") try {
     const yt = await getYoutubeClient();
     const searchRes = await yt.music.search(cleanQuery, { type: 'album' });
     const albums = searchRes.albums?.contents || [];
@@ -894,24 +977,29 @@ export async function searchAlbums(query: string): Promise<Album[]> {
         const artistName = al.author?.name || al.artists?.[0]?.name || al.artist?.name || (typeof al.author === 'string' ? al.author : "Unknown Artist");
         const artistId = al.author?.channel_id || al.artists?.[0]?.id || "";
         return {
-          id: al.id || al.browseId || `yt-album-${Date.now()}`,
+          id: al.id || al.browseId || (profileArtist ? "" : `yt-album-${Date.now()}`),
           title: al.title || "Unknown Album",
           artist: artistName,
           artistId,
           thumbnail: cover,
-          releaseDate: al.year || undefined
+          releaseDate: al.year || undefined,
+          releaseType: albumReleaseType(al.album_type ?? al.albumType),
         };
       }).filter((a: Album) => Boolean(a.id && a.title));
 
-      if (mappedAlbums.length > 0) {
-        return mappedAlbums;
-      }
+      const matches = forArtist(mappedAlbums);
+      if (matches.length) return matches;
     }
+    finished = true;
   } catch (err) {
     console.warn("[searchAlbums] Innertube album search failed, trying Monochrome fallback:", err);
   }
 
   // Tier 3: Monochrome fallback
+  if (profileArtist && profileArtist.provider !== "tidal") {
+    if (!finished) throw new Error("Artist releases unavailable");
+    return [];
+  }
   let retries = 2;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();
@@ -924,7 +1012,7 @@ export async function searchAlbums(query: string): Promise<Album[]> {
       const data = await response.json();
       const items = data.data?.albums?.items || data.albums?.items || [];
       
-      return items.map((item: any) => {
+      return forArtist(items.map((item: any) => {
         let coverUrl = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
         if (item.cover) {
           const pathUuid = item.cover.replace(/-/g, "/");
@@ -941,46 +1029,79 @@ export async function searchAlbums(query: string): Promise<Album[]> {
           artistId,
           thumbnail: coverUrl,
           releaseDate: item.releaseDate,
-          numberOfTracks: item.numberOfTracks
+          numberOfTracks: item.numberOfTracks,
+          releaseType: albumReleaseType(item.type),
         };
-      });
+      }));
     } catch (e) {
       console.warn(`Monochrome album search fallback failed for ${baseUrl}:`, e);
       switchToNextInstance();
       retries--;
     }
   }
+  if (profileArtist && !finished) throw new Error("Artist releases unavailable");
   return [];
 }
 
-export async function searchArtists(query: string): Promise<Artist[]> {
+export function artistProfilePortrait(artist: Artist): string | undefined {
+  if (!artist.provider || !artist.portrait) return undefined;
+  if (!artist.portrait.startsWith("https://")) return undefined;
+  if (artist.provider === "deezer" && artist.portrait.includes("/images/artist//")) return undefined;
+  // The catalog credits B10 correctly on tracks, but this portrait was reported as incorrect.
+  // Match the asset across sizes so a future corrected portrait can still be used.
+  if (artist.provider === "deezer" && artist.id === "54806862"
+    && artist.portrait.includes("/images/artist/9653315b1fba15847bb447031c5b38ec/")) return undefined;
+  return artist.portrait;
+}
+
+function deezerArtist(item: {
+  id: number;
+  name: string;
+  picture_xl?: string;
+  picture_big?: string;
+  picture_medium?: string;
+  picture?: string;
+  nb_fan?: number;
+}): Artist {
+  const artist: Artist = {
+    id: String(item.id),
+    name: item.name,
+    thumbnail: "",
+    provider: "deezer",
+    portrait: item.picture_xl || item.picture_big || item.picture_medium || item.picture,
+    popularity: item.nb_fan,
+  };
+  const portrait = artistProfilePortrait(artist);
+  return { ...artist, portrait, thumbnail: portrait ?? "" };
+}
+
+export async function searchArtists(query: string, exact = false, provider?: Artist["provider"]): Promise<Artist[]> {
   if (!query.trim()) return [];
   const cleanQuery = query.trim();
+  const exactResults = (artists: Artist[]) => exact
+    ? artists.filter(item => artistMatches(item.name, undefined, { id: "", name: cleanQuery, thumbnail: "" }))
+    : artists;
 
   // Tier 1: Deezer API (100% HD artist portraits)
-  try {
+  if (!provider || provider === "deezer") try {
     const data = await fetchDeezerApi(`https://api.deezer.com/search/artist?q=${encodeURIComponent(cleanQuery)}&limit=25`);
     const items = data?.data || [];
     if (Array.isArray(items) && items.length > 0) {
-      return items.map((item: any) => ({
-        id: String(item.id),
-        name: item.name || "Unknown Artist",
-        thumbnail: item.picture_xl || item.picture_big || item.picture_medium || item.picture || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80",
-        popularity: item.nb_fan
-      }));
+      const artists = exactResults(items.map(deezerArtist));
+      if (artists.length) return artists;
     }
   } catch (err) {
     console.warn("[searchArtists] Deezer artist search failed, trying Innertube fallback:", err);
   }
 
   // Tier 2: YouTube Music via Innertube
-  try {
+  if (!provider || provider === "youtube") try {
     const yt = await getYoutubeClient();
     const searchRes = await yt.music.search(cleanQuery, { type: 'artist' });
     const artists = searchRes.artists?.contents || [];
     if (Array.isArray(artists) && artists.length > 0) {
-      const mappedArtists: Artist[] = artists.map((ar: any) => {
-        let pic = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
+      const mappedArtists = artists.map((ar: any): Artist => {
+        let pic = "";
         const thumbs = ar.thumbnail?.contents || ar.thumbnails;
         if (Array.isArray(thumbs) && thumbs.length > 0) {
           const bestThumb = thumbs.reduce((prev: any, cur: any) => ((cur.width || 0) > (prev.width || 0) ? cur : prev), thumbs[0]);
@@ -994,21 +1115,23 @@ export async function searchArtists(query: string): Promise<Artist[]> {
         }
         const name = typeof ar.name === "string" ? ar.name : (ar.title?.text || ar.name?.text || "Unknown Artist");
         return {
-          id: ar.id || ar.browseId || `yt-artist-${Date.now()}`,
+          id: ar.id || ar.browseId || (exact ? "" : `yt-artist-${Date.now()}`),
           name,
-          thumbnail: pic
+          thumbnail: pic,
+          provider: "youtube",
+          portrait: pic || undefined,
         };
       }).filter((a: Artist) => Boolean(a.id && a.name));
 
-      if (mappedArtists.length > 0) {
-        return mappedArtists;
-      }
+      const artistsForQuery = exactResults(mappedArtists);
+      if (artistsForQuery.length) return artistsForQuery;
     }
   } catch (err) {
     console.warn("[searchArtists] Innertube artist search failed, trying Monochrome fallback:", err);
   }
 
   // Tier 3: Monochrome fallback
+  if (provider && provider !== "tidal") return [];
   let retries = 2;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();
@@ -1032,11 +1155,13 @@ export async function searchArtists(query: string): Promise<Artist[]> {
           id: String(item.id),
           name: item.name || "Unknown Artist",
           thumbnail: picUrl,
+          provider: "tidal" as const,
+          portrait: item.picture ? picUrl : undefined,
           popularity: item.popularity
         };
       });
 
-      return mapped;
+      return exactResults(mapped);
     } catch (e) {
       console.warn(`Monochrome artist search fallback failed for ${baseUrl}:`, e);
       switchToNextInstance();
@@ -1046,11 +1171,61 @@ export async function searchArtists(query: string): Promise<Artist[]> {
   return [];
 }
 
-export async function getAlbumTracks(albumId: string): Promise<Track[]> {
+const artistIdentities = new Map<string, { expires: number; request: Promise<Artist | undefined> }>();
+
+async function lookupArtistIdentity(artist: Artist, seed?: Track): Promise<Artist | undefined> {
+  if ((!artist.provider || artist.provider === "deezer") && /^\d+$/.test(artist.id)) {
+    try {
+      const entry = await fetchDeezerApi(`https://api.deezer.com/artist/${artist.id}`);
+      if (String(entry?.id) === artist.id && typeof entry.name === "string"
+        && artistMatches(entry.name, undefined, artist)) {
+        return deezerArtist(entry);
+      }
+    } catch {
+      // Keep name-based resolution available if the direct catalog request fails.
+    }
+  }
+
+  const matches = await searchArtists(artist.name, true, artist.provider ?? (artist.id.startsWith("UC") ? "youtube" : undefined));
+  const identities = [...new Map(matches.map(item => [item.provider + ":" + item.id, item])).values()];
+  const exact = artist.provider
+    ? identities.find(item => item.provider === artist.provider && item.id === artist.id)
+    : identities.find(item => item.id === artist.id) ?? (identities.length === 1 ? identities[0] : undefined);
+  if (exact || artist.provider || !seed) return exact;
+
+  // Legacy tracks can carry IDs from another provider. A matching recording
+  // and an explicit artist credit can disambiguate a catalog name collision.
+  const data = await fetchDeezerApi(`https://api.deezer.com/search?q=${encodeURIComponent(seed.title + " " + artist.name)}&limit=25`);
+  const ids = new Set<string>();
+  for (const item of Array.isArray(data?.data) ? data.data : []) {
+    if (typeof item.title !== "string" || !artistMatches(item.title, undefined, { ...artist, name: seed.title })
+      || !(seed.duration > 0 && Math.abs(item.duration - seed.duration) <= 2)
+      || !item.artist?.id || typeof item.artist.name !== "string"
+      || !artistMatches(item.artist.name, undefined, artist)) continue;
+    ids.add(String(item.artist.id));
+  }
+  if (ids.size !== 1) return undefined;
+  const [id] = ids;
+  const entry = await fetchDeezerApi(`https://api.deezer.com/artist/${id}`);
+  if (String(entry?.id) === id && typeof entry.name === "string" && artistMatches(entry.name, undefined, artist)) {
+    return deezerArtist(entry);
+  }
+}
+
+export function resolveArtistIdentity(artist: Artist, seed?: Track): Promise<Artist | undefined> {
+  if (artist.provider && artist.portrait) {
+    return Promise.resolve({ ...artist, portrait: artistProfilePortrait(artist) });
+  }
+  const key = JSON.stringify([artist.provider ?? "", artist.id, artist.name.normalize("NFKC").trim().toLowerCase(), artist.provider ? "" : seed?.title ?? ""]);
+  return catalogRequest(artistIdentities, key, () => lookupArtistIdentity(artist, seed), Boolean)
+    .catch(() => undefined).then(match => match ?? (artist.provider ? artist : undefined));
+}
+
+export async function getAlbumTracks(albumId: string, provider?: Album["provider"]): Promise<Track[]> {
   if (!albumId) return [];
 
   // Tier 1: If Deezer album (numeric ID)
-  if (/^\d+$/.test(albumId)) {
+  if ((!provider || provider === "deezer") && /^\d+$/.test(albumId)) {
     try {
       const albumData = await fetchDeezerApi(`https://api.deezer.com/album/${albumId}`);
       let items = albumData?.tracks?.data || [];
@@ -1109,7 +1284,7 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
   }
 
   // Tier 2: If YouTube Music album (MPREb... or OLAK5uy... or PL...)
-  if (albumId.startsWith("MPREb") || albumId.startsWith("OLAK5uy_") || albumId.startsWith("VL") || albumId.startsWith("PL")) {
+  if ((!provider || provider === "youtube") && /^(MPREb|OLAK5uy_|VL|PL)/.test(albumId)) {
     try {
       const yt = await getYoutubeClient();
       const albumData = await (yt.music as any).getAlbum(albumId);
@@ -1164,6 +1339,7 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
   }
 
   // Tier 3: Monochrome fallback
+  if (provider && provider !== "tidal") return [];
   let retries = 2;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();
@@ -1217,8 +1393,9 @@ export async function getAlbumTracks(albumId: string): Promise<Track[]> {
   return [];
 }
 
-export async function getArtistTracks(artistId: string, artistNameHint?: string): Promise<Track[]> {
+export async function getArtistTracks(artistId: string, artistNameHint?: string, reportFailure = false, provider?: Artist["provider"]): Promise<Track[]> {
   if (!artistId && !artistNameHint) return [];
+  let finished = false;
 
   // If artistId is not numeric and not a YouTube channel (e.g. "artist-el%20guincho" or artist name), resolve real ID first!
   let resolvedId = artistId;
@@ -1228,7 +1405,7 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
       try {
         const found = await searchArtists(searchName);
         if (found && found.length > 0) {
-          const exact = found.find(a => a.name.toLowerCase() === searchName.toLowerCase()) || found[0];
+          const exact = found.find(a => artistMatches(a.name, undefined, { id: "", name: searchName, thumbnail: "" }));
           if (exact && exact.id) {
             resolvedId = exact.id;
           }
@@ -1240,26 +1417,33 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
   }
 
   // Tier 1: If Deezer artist (numeric ID)
-  if (/^\d+$/.test(resolvedId)) {
+  if ((!provider || provider === "deezer") && /^\d+$/.test(resolvedId)) {
     try {
       const data = await fetchDeezerApi(`https://api.deezer.com/artist/${resolvedId}/top?limit=50`);
+      finished = Boolean(data && !data.error);
       const items = data?.data || [];
       if (Array.isArray(items) && items.length > 0) {
         return items.map((item: any) => {
           const coverUrl = item.album?.cover_xl || item.album?.cover_big || item.album?.cover_medium || item.album?.cover || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
           const trackArtist = item.artist?.name || "Unknown Artist";
-          const trackArtistId = String(item.artist?.id || resolvedId);
+          const trackArtistId = String(item.artist?.id || (reportFailure ? "" : resolvedId));
+          const credits = Array.isArray(item.contributors) ? item.contributors.filter((credit: any) => credit.id && typeof credit.name === "string") : [];
           return {
             id: String(item.id),
             title: item.title || item.title_short || "Unknown Title",
             artist: trackArtist,
             artistId: trackArtistId,
-            artists: getArtistsFromTrack({ artist: trackArtist, artistId: trackArtistId }),
+            artists: [
+              ...getArtistsFromTrack({ artist: trackArtist, artistId: trackArtistId }),
+              ...credits.filter((credit: any) => String(credit.id) !== trackArtistId)
+                .map((credit: any) => ({ id: String(credit.id), name: credit.name })),
+            ],
             albumName: item.album?.title || "",
             albumId: String(item.album?.id || ""),
-            duration: item.duration || 180,
+            duration: item.duration || (reportFailure ? 0 : 180),
             thumbnail: coverUrl,
-            audioUrl: item.preview || ""
+            audioUrl: item.preview || "",
+            ...(reportFailure ? { isExplicit: Boolean(item.explicit_lyrics || item.explicit_content_lyrics === 1) } : {}),
           };
         });
       }
@@ -1269,18 +1453,22 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
   }
 
   // Tier 2: If YouTube Channel (starts with UC...)
-  if (resolvedId.startsWith("UC")) {
+  if ((!provider || provider === "youtube") && resolvedId.startsWith("UC")) {
     try {
       const yt = await getYoutubeClient();
       const artistData = await (yt.music as any).getArtist(resolvedId);
-      const songSection = artistData.sections?.find((s: any) => s.type === "MusicShelf" || s.title?.text?.toLowerCase()?.includes("song") || s.title?.toLowerCase()?.includes("song"));
-      const items = songSection?.contents || [];
+      finished = true;
+      const items = (artistData.sections ?? []).filter((section: any) => section.type === "MusicShelf")
+        .flatMap((section: any) => section.contents ?? [])
+        .filter((item: any) => /^[\w-]{11}$/.test(item.video_id || item.id || ""));
       if (Array.isArray(items) && items.length > 0) {
         const artistName = artistData.header?.title?.text || artistData.name || "Unknown Artist";
-        return items.map((item: any) => {
-          const id = item.id || item.video_id || "";
+        return items.map((item: any): Track | null => {
+          const credits = Array.isArray(item.artists) ? item.artists.filter((credit: any) => typeof credit.name === "string") : [];
+          if (provider && !credits.length) return null;
+          const id = item.video_id || item.id || "";
           const title = typeof item.title === "string" ? item.title : (item.title?.text || "Unknown Title");
-          let duration = 180;
+          let duration = 0;
           if (typeof item.duration === "number") duration = item.duration;
           else if (item.duration?.seconds) duration = item.duration.seconds;
           else if (item.duration?.text) {
@@ -1302,7 +1490,8 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
           return {
             id,
             title,
-            artist: artistName,
+            artist: credits.length ? credits.map((credit: any) => credit.name).join(", ") : artistName,
+            artists: credits.map((credit: any) => ({ id: String(credit.id ?? ""), name: credit.name })),
             artistId,
             albumName: item.album?.name || "",
             duration,
@@ -1310,7 +1499,7 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
             audioUrl: "",
             youtubeUrl: id ? `https://www.youtube.com/watch?v=${id}` : undefined
           };
-        }).filter((t: Track) => Boolean(t.id && t.title));
+        }).filter((t: Track | null): t is Track => Boolean(t?.id && t.title));
       }
     } catch (e) {
       console.warn("[getArtistTracks] Innertube getArtist failed:", e);
@@ -1318,6 +1507,10 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
   }
 
   // Tier 3: Monochrome fallback
+  if (provider && provider !== "tidal") {
+    if (reportFailure && !finished) throw new Error("Artist tracks unavailable");
+    return [];
+  }
   let retries = 2;
   while (retries > 0) {
     const baseUrl = getApiBaseUrl();
@@ -1328,7 +1521,8 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
         throw new Error(`Monochrome artist tracks failed: ${response.status}`);
       }
       const data = await response.json();
-      const tracks = data.tracks || [];
+      const tracks = data.tracks?.items ?? data.data?.tracks?.items ?? data.data?.tracks ?? data.tracks;
+      if (!Array.isArray(tracks)) throw new Error("Invalid artist tracks response");
       
       return tracks.map((track: any) => {
         let coverUrl = "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80";
@@ -1358,7 +1552,8 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
           albumId,
           duration: track.duration || 180,
           thumbnail: coverUrl,
-          audioUrl: ""
+          audioUrl: "",
+          ...(reportFailure ? { isExplicit: track.explicit === true } : {}),
         };
       });
     } catch (e) {
@@ -1367,6 +1562,7 @@ export async function getArtistTracks(artistId: string, artistNameHint?: string)
       retries--;
     }
   }
+  if (reportFailure && !finished) throw new Error("Artist tracks unavailable");
   return [];
 }
 
@@ -1384,8 +1580,8 @@ const artistStatsCache: Record<string, SpotifyArtistStats> = {};
 const albumStatsCache: Record<string, any> = {};
 let rapidApiRateLimitedUntil = 0;
 
-export async function getSpotifyArtistStats(artistName: string): Promise<SpotifyArtistStats | null> {
-  const cacheKey = artistName.trim().toLowerCase();
+export async function getSpotifyArtistStats(artistName: string, exactMatch = false): Promise<SpotifyArtistStats | null> {
+  const cacheKey = (exactMatch ? "exact:" : "") + artistName.trim().toLowerCase();
   if (artistStatsCache[cacheKey]) {
     return artistStatsCache[cacheKey];
   }
@@ -1413,7 +1609,11 @@ export async function getSpotifyArtistStats(artistName: string): Promise<Spotify
 
     if (!searchRes.ok) return null;
     const searchData = await searchRes.json();
-    const artistItem = searchData.artists?.items?.[0] || searchData.topResults?.artists?.[0];
+    const candidates = [...(searchData.artists?.items ?? []), ...(searchData.topResults?.artists ?? [])];
+    const artistItem = exactMatch ? candidates.find(item => {
+      const name = item.name ?? item.profile?.name;
+      return typeof name === "string" && artistMatches(name, undefined, { id: "", name: artistName, thumbnail: "" });
+    }) : candidates[0];
     if (!artistItem || !artistItem.id) return null;
     
     const detailRes = await fetch(`https://spotify-statistics-and-stream-count.p.rapidapi.com/artist/${artistItem.id}`, {

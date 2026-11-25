@@ -1,3 +1,4 @@
+import { CoverImage } from "./CoverImage";
 import React from "react";
 import { Disc, Calendar } from "lucide-react";
 import type { Album } from "../services/musicApi";
@@ -15,7 +16,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({ album, onClick }) => {
     >
       {/* Cover Art Container */}
       <div className="relative w-full aspect-square rounded-xl overflow-hidden shadow-lg shadow-black/40">
-        <img
+        <CoverImage
           src={album.thumbnail || "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80"}
           alt={album.title}
           loading="lazy"

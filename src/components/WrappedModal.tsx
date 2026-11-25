@@ -2,10 +2,13 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { X, Play, Pause, Share2, Sparkles, Clock, Music, User, RefreshCw, ArrowLeft, ArrowRight } from "lucide-react";
 import type { Track } from "../services/musicApi";
 import type { ListeningEntry } from "../services/listeningHistory";
+import { localDate } from "../services/listeningHistory";
+import { localized, useLanguage } from "../context/LanguageContext";
 import { downloadFile } from "../services/libraryFiles";
 import { Modal } from "./Modal";
 
 interface WrappedModalProps {
+  onTrackContextMenu: (event: React.MouseEvent, track: Track) => void;
   isOpen: boolean;
   onClose: () => void;
   entries: ListeningEntry[];
@@ -36,25 +39,24 @@ const PERSONALITIES = [
   }
 ];
 
-// Mock data for Demo Mode
-const MOCK_HISTORY: Track[] = [
-  { id: "1", title: "Blinding Lights", artist: "The Weeknd", duration: 200, thumbnail: "https://i.scdn.co/image/ab67616d0000b273c51feee404fcf4143d2ef402", audioUrl: "" },
-  { id: "1", title: "Blinding Lights", artist: "The Weeknd", duration: 200, thumbnail: "https://i.scdn.co/image/ab67616d0000b273c51feee404fcf4143d2ef402", audioUrl: "" },
-  { id: "1", title: "Blinding Lights", artist: "The Weeknd", duration: 200, thumbnail: "https://i.scdn.co/image/ab67616d0000b273c51feee404fcf4143d2ef402", audioUrl: "" },
-  { id: "2", title: "Starboy", artist: "The Weeknd", duration: 230, thumbnail: "https://i.scdn.co/image/ab67616d0000b273b1c67e8af81e2e41de430489", audioUrl: "" },
-  { id: "2", title: "Starboy", artist: "The Weeknd", duration: 230, thumbnail: "https://i.scdn.co/image/ab67616d0000b273b1c67e8af81e2e41de430489", audioUrl: "" },
-  { id: "3", title: "As It Was", artist: "Harry Styles", duration: 167, thumbnail: "https://i.scdn.co/image/ab67616d0000b273b46b0112dbd83772aaab96b5", audioUrl: "" },
-  { id: "3", title: "As It Was", artist: "Harry Styles", duration: 167, thumbnail: "https://i.scdn.co/image/ab67616d0000b273b46b0112dbd83772aaab96b5", audioUrl: "" },
-  { id: "4", title: "Flowers", artist: "Miley Cyrus", duration: 200, thumbnail: "https://i.scdn.co/image/ab67616d0000b273f429549197cdad72750e68d0", audioUrl: "" },
-  { id: "5", title: "Levitating", artist: "Dua Lipa", duration: 203, thumbnail: "https://i.scdn.co/image/ab67616d0000b273bd6e48cf69cedb63e1cc64e2", audioUrl: "" },
-  { id: "6", title: "Sweater Weather", artist: "The Neighbourhood", duration: 240, thumbnail: "https://i.scdn.co/image/ab67616d0000b27382c40c11f753229b48f65750", audioUrl: "" }
-];
-
-export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, entries, onSavePlaylist }) => {
-  const [isDemo, setIsDemo] = useState(false);
+export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, entries, onSavePlaylist, onTrackContextMenu }) => {
+  const { language } = useLanguage();
+  const copy = (es: string, en: string, eu: string) => localized(language, es, en, eu);
+  const [month, setMonth] = useState("all");
   const [year, setYear] = useState(new Date().getFullYear());
   const years = [...new Set([new Date().getFullYear(), ...entries.map(item => new Date(item.at).getFullYear())])].sort((a, b) => b - a);
-  const period = useMemo(() => entries.filter(item => new Date(item.at).getFullYear() === year), [entries, year]);
+  const period = useMemo(() => entries.filter(item => {
+    const date = new Date(item.at);
+    return date.getFullYear() === year && (month === "all" || date.getMonth() === Number(month));
+  }), [entries, year, month]);
+  const periodLabel = month === "all" ? String(year) : new Intl.DateTimeFormat(document.documentElement.lang, { month: "long", year: "numeric" }).format(new Date(year, Number(month), 1));
+  const periodPicker = <div className="flex flex-wrap gap-2">
+    <select aria-label="Año" value={year} onChange={event => setYear(Number(event.target.value))} className="rounded-lg bg-brand-darkBg px-2 py-1 text-xs">{years.map(value => <option key={value}>{value}</option>)}</select>
+    <select aria-label="Mes" value={month} onChange={event => setMonth(event.target.value)} className="rounded-lg bg-brand-darkBg px-2 py-1 text-xs">
+      <option value="all">{copy("Año completo", "Full year", "Urte osoa")}</option>
+      {Array.from({ length: 12 }, (_, index) => <option key={index} value={index}>{new Intl.DateTimeFormat(document.documentElement.lang, { month: "long" }).format(new Date(year, index, 1))}</option>)}
+    </select>
+  </div>;
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -66,14 +68,14 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
   const startTimeRef = useRef<number>(Date.now());
   const pausedProgressRef = useRef<number>(0);
 
-  const activeHistory = useMemo(() => isDemo ? MOCK_HISTORY : period.map(item => item.track), [period, isDemo]);
+  const activeHistory = useMemo(() => period.map(item => item.track), [period]);
 
   // Compute Stats
   const stats = useMemo(() => {
     if (activeHistory.length === 0) return null;
 
     // Total counts
-    const totalSongs = isDemo ? activeHistory.length : period.filter(item => item.completed).length;
+    const totalSongs = period.filter(item => item.completed).length;
 
     // Track play counts
     const trackCounts: Record<string, { track: Track; count: number }> = {};
@@ -103,10 +105,16 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
-    // Total Minutes Listened
-    // If track has duration, sum it. Otherwise, assume average 3.2 minutes per song.
-    const totalSeconds = isDemo ? activeHistory.reduce((sum, track) => sum + track.duration, 0) : period.reduce((sum, entry) => sum + entry.seconds, 0);
+    const totalSeconds = period.reduce((sum, entry) => sum + entry.seconds, 0);
     const totalMinutes = Math.floor(totalSeconds / 60);
+    const days = new Map<string, number>();
+    const trend = new Map<string, number>();
+    for (const entry of period) {
+      const day = localDate(new Date(entry.at));
+      const bucket = month === "all" ? day.slice(0, 7) : day;
+      days.set(day, (days.get(day) ?? 0) + entry.seconds);
+      trend.set(bucket, (trend.get(bucket) ?? 0) + entry.seconds);
+    }
 
     // Personality classification
     const uniqueTracks = Object.keys(trackCounts).length;
@@ -129,9 +137,11 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
       topTracks,
       topArtists,
       personality,
-      uniqueTracks
+      uniqueTracks,
+      busiest: [...days].sort((a, b) => b[1] - a[1]).slice(0, 3),
+      trend: [...trend].sort(([a], [b]) => a.localeCompare(b)),
     };
-  }, [activeHistory, isDemo, period]);
+  }, [activeHistory, period, month]);
 
   // Handle slide progress
   useEffect(() => {
@@ -181,7 +191,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
       setIsPlaying(true);
       pausedProgressRef.current = 0;
     }
-  }, [isOpen, year, isDemo]);
+  }, [isOpen, year, month]);
 
   const handleNext = () => {
     if (currentSlide < totalSlides - 1) {
@@ -221,10 +231,9 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
 
   if (!isOpen) return null;
   if (!stats) return (
-    <Modal title={"Tu Wrapped " + year} onClose={onClose}>
-      <label className="flex gap-2">Año <select value={year} onChange={event => setYear(Number(event.target.value))} className="rounded-lg bg-brand-darkBg px-2">{years.map(value => <option key={value}>{value}</option>)}</select></label>
-      <p className="my-4 text-sm text-gray-300">Aún no hay escucha registrada para este año.</p>
-      <button className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black" onClick={() => setIsDemo(true)}>Ver demostración</button>
+    <Modal title={"Tu Wrapped · " + periodLabel} onClose={onClose}>
+      {periodPicker}
+      <p className="my-4 text-sm text-gray-300">{copy("Aún no hay escucha registrada para este periodo.", "There’s no listening history for this period yet.", "Ez dago entzunaldirik epe honetan.")}</p>
     </Modal>
   );
 
@@ -244,7 +253,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
     ctx.font = "bold 76px system-ui";
     ctx.fillText("IbraMusic", 64, 150);
     ctx.font = "bold 58px system-ui";
-    ctx.fillText((isDemo ? "Demo · " : "") + "Wrapped " + year, 64, 250, 832);
+    ctx.fillText("Wrapped · " + periodLabel, 64, 250, 832);
     ctx.font = "bold 112px system-ui";
     ctx.fillText(String(stats.totalMinutes), 64, 470);
     ctx.font = "38px system-ui";
@@ -253,7 +262,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
     ctx.fillText(stats.topTracks[0]?.track.title ?? "—", 64, 792, 832);
     ctx.fillText("Artista más escuchado", 64, 942);
     ctx.fillText(stats.topArtists[0]?.name ?? "—", 64, 1014, 832);
-    canvas.toBlob(blob => { if (blob) downloadFile("IbraMusic-Wrapped-" + year + ".png", blob, "image/png"); }, "image/png");
+    canvas.toBlob(blob => { if (blob) downloadFile("IbraMusic-Wrapped-" + year + (month === "all" ? "" : "-" + (Number(month) + 1)) + ".png", blob, "image/png"); }, "image/png");
   }
 
   // Background color classes matching slides
@@ -290,10 +299,9 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold tracking-widest uppercase bg-white/10 px-2 py-0.5 rounded-full border border-white/10 backdrop-blur-md flex items-center gap-1.5">
               <Sparkles className="w-3 h-3 text-brand-accent animate-spin" style={{ animationDuration: '4s' }} />
-              {isDemo ? "Demo" : "Wrapped"}
+              Wrapped
             </span>
-            <select aria-label="Año de Wrapped" value={year} onChange={event => { setYear(Number(event.target.value)); setIsDemo(false); }} className="rounded-lg bg-black/30 px-2 py-1 text-xs text-white">{years.map(value => <option key={value}>{value}</option>)}</select>
-            {isDemo && <button className="text-xs underline" onClick={() => setIsDemo(false)}>Mis datos</button>}
+            {periodPicker}
           </div>
           
           <div className="flex items-center gap-3">
@@ -331,7 +339,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
               </div>
               <div className="flex flex-col gap-2">
                 <h3 className="text-[10px] tracking-[0.25em] font-extrabold text-brand-accent uppercase">ibramusic wrapped</h3>
-                <h1 className="text-3xl font-extrabold tracking-tight leading-tight">Your Journey In Sound</h1>
+                <h1 className="text-3xl font-extrabold tracking-tight leading-tight">{copy("Tu año en música", "Your Journey In Sound", "Zure urtea musikan")}</h1>
                 <p className="text-xs text-gray-300 max-w-[280px] mx-auto mt-2">
                   Let's explore your listening profile, minutes, top tracks, and your unique personality.
                 </p>
@@ -344,11 +352,11 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
             <div className="flex flex-col items-center justify-center gap-6 animate-[fadeIn_0.5s_ease-out]">
               <Clock className="w-14 h-14 text-cyan-400 animate-pulse" />
               <div className="flex flex-col gap-1">
-                <span className="text-xs uppercase tracking-widest text-cyan-400 font-bold">Total Listening Time</span>
+                <span className="text-xs uppercase tracking-widest text-cyan-400 font-bold">{copy("Tiempo total de escucha", "Total Listening Time", "Entzunaldi-denbora guztira")}</span>
                 <h2 className="text-5xl font-black text-white tracking-tight my-2 animate-[scaleUp_0.4s_ease-out]">
                   {stats.totalMinutes.toLocaleString()}
                 </h2>
-                <span className="text-lg font-bold text-gray-200">minutes listened</span>
+                <span className="text-lg font-bold text-gray-200">{copy("minutos de escucha", "minutes listened", "entzundako minutuak")}</span>
               </div>
               <div className="glass-panel p-4 rounded-2xl border border-white/15 max-w-[280px] text-xs text-gray-300">
                 🚀 That's about <strong className="text-white">{Math.round(stats.totalMinutes / 60)} hours</strong> spent inside your musical world!
@@ -361,13 +369,13 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
             <div className="w-full flex flex-col gap-5 animate-[fadeIn_0.5s_ease-out]">
               <div className="flex flex-col gap-1 items-center">
                 <Music className="w-8 h-8 text-fuchsia-400 mb-1" />
-                <span className="text-[10px] uppercase tracking-widest text-fuchsia-400 font-bold">Your Soundtrack</span>
-                <h2 className="text-2xl font-extrabold">Top Tracks</h2>
+                <span className="text-[10px] uppercase tracking-widest text-fuchsia-400 font-bold">{copy("Tu banda sonora", "Your Soundtrack", "Zure soinu-banda")}</span>
+                <h2 className="text-2xl font-extrabold">{copy("Canciones más escuchadas", "Top Tracks", "Abesti entzunenak")}</h2>
               </div>
               
               <div className="flex flex-col gap-2.5 w-full text-left">
                 {stats.topTracks.map((item, idx) => (
-                  <div key={item.track.id} className="flex items-center gap-3 glass-panel p-2.5 rounded-2xl border border-white/10 hover:bg-white/5 transition-all">
+                  <div key={item.track.id} onContextMenu={event => onTrackContextMenu(event, item.track)} className="flex items-center gap-3 glass-panel p-2.5 rounded-2xl border border-white/10 hover:bg-white/5 transition-all">
                     <span className="w-6 text-center font-black text-fuchsia-400 text-sm">{idx + 1}</span>
                     <img src={item.track.thumbnail || "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=100&auto=format&fit=crop&q=60"} className="w-10 h-10 object-cover rounded-lg bg-neutral-800" alt="" />
                     <div className="flex-1 min-w-0">
@@ -388,8 +396,8 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
             <div className="w-full flex flex-col gap-5 animate-[fadeIn_0.5s_ease-out]">
               <div className="flex flex-col gap-1 items-center">
                 <User className="w-8 h-8 text-amber-400 mb-1" />
-                <span className="text-[10px] uppercase tracking-widest text-amber-400 font-bold">Your Icons</span>
-                <h2 className="text-2xl font-extrabold">Top Artists</h2>
+                <span className="text-[10px] uppercase tracking-widest text-amber-400 font-bold">{copy("Tus referentes", "Your Icons", "Zure erreferenteak")}</span>
+                <h2 className="text-2xl font-extrabold">{copy("Artistas más escuchados", "Top Artists", "Artista entzunenak")}</h2>
               </div>
               
               <div className="flex flex-col gap-3 w-full text-left">
@@ -416,7 +424,7 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
             <div className="flex flex-col items-center justify-center gap-5 animate-[scaleUp_0.5s_ease-out]">
               <Sparkles className="w-12 h-12 text-brand-accent animate-[bounce_3s_infinite]" />
               <div className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-widest text-brand-accent font-bold">Your Musical Personality</span>
+                <span className="text-[10px] uppercase tracking-widest text-brand-accent font-bold">{copy("Tu personalidad musical", "Your Musical Personality", "Zure musika-nortasuna")}</span>
                 <h2 className="text-3xl font-black text-white leading-tight mt-1">{stats.personality.name}</h2>
               </div>
               
@@ -449,13 +457,13 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
                 <div className="flex flex-col gap-3 relative z-10">
                   <div className="flex justify-between items-center">
                     <div>
-                      <span className="text-[9px] uppercase text-gray-400 block font-bold">top artist</span>
+                      <span className="text-[9px] uppercase text-gray-400 block font-bold">{copy("Artista más escuchado", "top artist", "Artista entzunena")}</span>
                       <span className="text-sm font-extrabold text-white truncate max-w-[150px] block mt-0.5">
                         {stats.topArtists[0]?.name || "N/A"}
                       </span>
                     </div>
                     <div className="text-right">
-                      <span className="text-[9px] uppercase text-gray-400 block font-bold">listening time</span>
+                      <span className="text-[9px] uppercase text-gray-400 block font-bold">{copy("Tiempo de escucha", "listening time", "Entzunaldi-denbora")}</span>
                       <span className="text-sm font-extrabold text-brand-accent block mt-0.5">
                         {stats.totalMinutes.toLocaleString()} min
                       </span>
@@ -464,13 +472,13 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
 
                   <div className="flex justify-between items-center">
                     <div>
-                      <span className="text-[9px] uppercase text-gray-400 block font-bold">personality</span>
+                      <span className="text-[9px] uppercase text-gray-400 block font-bold">{copy("Personalidad", "personality", "Nortasuna")}</span>
                       <span className="text-sm font-extrabold text-white block mt-0.5">
                         {stats.personality.name}
                       </span>
                     </div>
                     <div className="text-right">
-                      <span className="text-[9px] uppercase text-gray-400 block font-bold">tracks played</span>
+                      <span className="text-[9px] uppercase text-gray-400 block font-bold">{copy("Canciones reproducidas", "tracks played", "Erreproduzitutako abestiak")}</span>
                       <span className="text-sm font-extrabold text-white block mt-0.5">
                         {stats.totalSongs}
                       </span>
@@ -480,9 +488,9 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
 
                 {/* Top tracks bullet list */}
                 <div className="flex flex-col gap-1.5 mt-1 border-t border-white/10 pt-3 relative z-10">
-                  <span className="text-[9px] uppercase text-gray-400 font-bold block mb-1">Top Tracks</span>
+                  <span className="text-[9px] uppercase text-gray-400 font-bold block mb-1">{copy("Canciones más escuchadas", "Top Tracks", "Abesti entzunenak")}</span>
                   {stats.topTracks.slice(0, 3).map((item, idx) => (
-                    <div key={item.track.id} className="flex justify-between items-center text-xs">
+                    <div key={item.track.id} onContextMenu={event => onTrackContextMenu(event, item.track)} className="flex justify-between items-center text-xs">
                       <span className="font-bold text-gray-400 text-[10px] shrink-0 mr-1.5">{idx + 1}</span>
                       <span className="font-semibold text-white truncate flex-1 pr-4">{item.track.title}</span>
                       <span className="text-[10px] text-gray-400 truncate shrink-0 max-w-[90px]">{item.track.artist}</span>
@@ -490,6 +498,19 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
                   ))}
                 </div>
               </div>
+
+              <section className="w-full rounded-2xl border border-white/15 p-3 text-left text-xs">
+                <h3 className="mb-2 font-bold">{localized(language, "Días de mayor actividad", "Busiest days", "Jarduera handieneko egunak")}</h3>
+                {stats.busiest.map(([day, seconds]) => (
+                  <p key={day}>{new Intl.DateTimeFormat(language, { dateStyle: "medium" }).format(new Date(day + "T12:00:00"))} · {Math.round(seconds / 60)} min</p>
+                ))}
+                {stats.trend.length > 1 && <details className="mt-2">
+                  <summary className="cursor-pointer">{localized(language, "Evolución de la escucha", "Listening over time", "Entzunaldiaren bilakaera")}</summary>
+                  <ul className="mt-2 max-h-28 space-y-1 overflow-auto">{stats.trend.map(([bucket, seconds]) => (
+                    <li key={bucket} className="flex justify-between gap-2"><span>{bucket}</span><span>{Math.round(seconds / 60)} min</span></li>
+                  ))}</ul>
+                </details>}
+              </section>
 
               {/* Action buttons */}
               <div className="flex flex-wrap gap-2 mt-2 w-full">
@@ -500,8 +521,8 @@ export const WrappedModal: React.FC<WrappedModalProps> = ({ isOpen, onClose, ent
                   <Share2 className="w-3.5 h-3.5" />
                   {copied ? "Copiado" : "Compartir"}
                 </button>
-                <button onClick={saveImage} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">Imagen</button>
-                {!isDemo && <button onClick={() => onSavePlaylist("Wrapped " + year, stats.topTracks.map(item => item.track))} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">Guardar lista</button>}
+                <button onClick={saveImage} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">{copy("Imagen", "Image", "Irudia")}</button>
+                {<button onClick={() => onSavePlaylist("Wrapped " + periodLabel, stats.topTracks.map(item => item.track))} className="rounded-xl border border-white/15 px-3 py-2 text-xs font-semibold">{copy("Guardar lista", "Save playlist", "Gorde zerrenda")}</button>}
                 
                 <button
                   onClick={() => {

@@ -18,6 +18,17 @@ interface Source {
 }
 
 const copy = {
+  eu: {
+    title: "Aukeratu audio-iturria",
+    search: "Bilatu YouTuben",
+    searchButton: "Bilatu",
+    loading: "YouTuben bilatzen…",
+    error: "YouTubeko bilaketak huts egin du. Saiatu berriro.",
+    empty: "Ez da beste iturririk aurkitu. Saiatu beste bilaketa batekin.",
+    preview: "Entzun lagina",
+    stop: "Gelditu lagina",
+    select: "Erabili hau",
+  },
   en: {
     title: "Choose an audio source",
     search: "Search YouTube",

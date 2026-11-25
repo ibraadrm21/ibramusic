@@ -26,3 +26,7 @@ npm run lint:regression
 La migración de `supabase/migrations` presupone que existen las tablas de la versión anterior de IbraMusic. Aplícala primero en un entorno de pruebas con cuentas distintas para propietario, colaborador y visitante. Ahí se definen la propiedad de los datos, la colaboración en playlists y el borrado de cuenta. La administración de destacados requiere el atributo booleano `ibramusic_admin` en `app_metadata` del usuario autorizado. Los enlaces de recuperación de contraseña deben dirigir a una URL permitida en la configuración de autenticación.
 
 Vercel publica la carpeta `web-build`. La configuración de Vite ofrece proxies adicionales para desarrollo. Prueba reproducción, letras, búsqueda, importación y salas en la URL de previsualización antes de publicar.
+
+## Audio en el navegador
+
+Web Audio puede procesar archivos locales y fuentes que permiten su uso desde el origen de la aplicación. El audio del reproductor de YouTube se reproduce dentro de su iframe, fuera del alcance del ecualizador de IbraMusic. Las teclas multimedia dependen del soporte de Media Session del navegador y del sistema.
